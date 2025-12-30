@@ -1,6 +1,7 @@
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -173,6 +174,17 @@ pub struct Message {
 
     /// Tool calls made by assistant
     pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.role {
+            Role::System => write!(f, "System: {}", self.content),
+            Role::User => write!(f, "User: {}", self.content),
+            Role::Assistant => write!(f, "Assistant: {}", self.content),
+            Role::Tool => write!(f, "Tool: {}", self.content),
+        }
+    }
 }
 
 /// Tool call made by the LLM

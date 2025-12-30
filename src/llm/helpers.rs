@@ -4,6 +4,7 @@
 //! like chat loops with tool execution.
 
 use super::{LLMProvider, LoopStep, Message, Tool, ToolCall, ToolResult};
+use crate::log;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -185,18 +186,10 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
     config: ChatLoopConfig,
 ) -> Result<ChatLoopResponse, super::ProviderError> {
     // Log loop start and input messages
-    crate::logger::log(format!(
-        "[start] messages={} tools={}",
-        messages.len(),
-        tools.len()
-    ));
+    log("Start chat_loop_with_tools");
+
     for (idx, msg) in messages.iter().enumerate() {
-        crate::logger::log(format!(
-            "  [input:{}] {:?}: {}",
-            idx + 1,
-            msg.role,
-            truncate_for_log(&msg.content)
-        ));
+        log(format!("  [input:{}]  {}", idx + 1, msg));
     }
 
     let mut handle = provider.chat_loop(messages, Some(tools)).await?;
@@ -210,13 +203,13 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
 
         match event {
             LoopStep::Thinking(thought) => {
-                crate::logger::log(format!("[thinking] {}", truncate_for_log(&thought)));
+                log(format!("[thinking] {}", truncate_for_log(&thought)));
                 if let Some(ref callback) = config.on_thinking {
                     callback(&thought);
                 }
             }
             LoopStep::Content(text) => {
-                crate::logger::log(format!("[content] {}", truncate_for_log(&text)));
+                log(format!("[content] {}", truncate_for_log(&text)));
                 full_content.push_str(&text);
                 if let Some(ref callback) = config.on_content {
                     callback(&text);
@@ -227,17 +220,17 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                 content,
             } => {
                 rounds += 1;
-                crate::logger::log(format!(
+                log(format!(
                     "[tool_calls] round={} content={}",
                     rounds,
                     truncate_for_log(&content)
                 ));
                 for call in &tool_calls {
-                    crate::logger::log(format!("  [call] {} -> {}", call.id, call.name));
+                    log(format!("  [call] {} -> {}", call.id, call.name));
                 }
 
                 if rounds > config.max_rounds {
-                    crate::logger::log(format!(
+                    log(format!(
                         "[error] max rounds exceeded ({})",
                         config.max_rounds
                     ));
@@ -263,7 +256,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                     all_tool_calls.push(call.clone());
 
                     let result = if let Some(executor) = config.tool_executors.get(&call.name) {
-                        crate::logger::log(format!("[exec] {} ({})", call.id, call.name));
+                        log(format!("[exec] {} ({})", call.id, call.name));
                         match executor(call.clone()).await {
                             Ok(output) => ToolResult {
                                 tool_call_id: call.id.clone(),
@@ -277,7 +270,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                             },
                         }
                     } else {
-                        crate::logger::log(format!(
+                        log(format!(
                             "[error] missing executor: {} ({})",
                             call.id, call.name
                         ));
@@ -302,7 +295,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                     } else {
                         "[result]"
                     };
-                    crate::logger::log(format!(
+                    log(format!(
                         "{} {} {}",
                         tag,
                         result.tool_call_id,
@@ -314,7 +307,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                 handle.submit_tool_results(results)?;
             }
             LoopStep::ToolResultsReceived { .. } => {
-                crate::logger::log("[results_received]");
+                log("[results_received]");
                 // Just continue
             }
             LoopStep::Done {
@@ -323,7 +316,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                 finish_reason,
                 ..
             } => {
-                crate::logger::log(format!(
+                log(format!(
                     "[done] reason={:?} in={} out={}",
                     finish_reason, total_usage.input_tokens, total_usage.output_tokens
                 ));
@@ -342,7 +335,7 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
         }
     }
 
-    crate::logger::log("[error] chat_loop ended unexpectedly");
+    log("[error] chat_loop ended unexpectedly");
     Err(super::ProviderError::ApiError(
         "Chat loop ended unexpectedly".to_string(),
     ))
