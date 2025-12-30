@@ -199,21 +199,38 @@ pub fn generate_map(
 }
 
 /// Format the directory map as markdown for LLM consumption
-pub fn format_map_as_markdown(dirs: &[DirectoryInfo]) -> String {
+pub fn format_map_as_markdown(dirs: &[DirectoryInfo], root_path: &Path) -> String {
     let mut output = String::new();
 
     output.push_str("# Project Structure Map\n\n");
-    output.push_str("A hierarchical view of the project directory structure.\n\n");
+
+    // Get absolute root path for display
+    let abs_root = if let Ok(abs_path) = root_path.canonicalize() {
+        abs_path.to_string_lossy().to_string()
+    } else {
+        root_path.to_string_lossy().to_string()
+    };
 
     for dir_info in dirs {
-        // Create tree-like prefix based on depth
-        let prefix = if dir_info.depth == 0 {
-            "".to_string()
-        } else {
-            format!("{}", "  ".repeat(dir_info.depth - 1))
-        };
+        // For root directory (depth 0), show absolute path
+        if dir_info.depth == 0 {
+            output.push_str(&format!("`{}`", abs_root));
 
-        let tree_char = if dir_info.depth == 0 { "" } else { "├─ " };
+            if let Some(yaml) = &dir_info.yaml_matter {
+                if let Some(desc) = yaml.get("description").and_then(|v| match v {
+                    serde_yaml::Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                }) {
+                    output.push_str(&format!(" - {}", desc));
+                }
+            }
+            output.push_str("\n");
+            continue;
+        }
+
+        // Create tree-like prefix based on depth
+        let prefix = format!("{}", "  ".repeat(dir_info.depth - 1));
+        let tree_char = "├─ ";
 
         // Extract folder name from path
         let folder_name = std::path::Path::new(&dir_info.path)

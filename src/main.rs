@@ -110,7 +110,7 @@ fn main() {
                         println!("{}", serde_json::to_string_pretty(&map).unwrap());
                     } else {
                         // Output as markdown for LLM consumption
-                        let markdown = format_map_as_markdown(&map);
+                        let markdown = format_map_as_markdown(&map, dir);
                         println!("{}", markdown);
                     }
                 }
