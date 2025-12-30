@@ -5,12 +5,6 @@ use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-// LLM module
-pub mod llm;
-
-// Tools module
-pub mod tools;
-
 // check specific file exist in the input path, if not return path name
 //
 pub fn check_file_exist(file_name: &str, path: &Path) -> io::Result<Option<PathBuf>> {

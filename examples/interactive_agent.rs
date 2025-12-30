@@ -60,10 +60,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdout().flush()?;
 
         let mut user_input = String::new();
-        io::stdin().read_line(&mut user_input)?;
+        let bytes_read = io::stdin().read_line(&mut user_input)?;
         let user_input = user_input.trim();
 
-        // Check for exit commands
+        // Check for EOF (piped input ended) or exit commands
+        if bytes_read == 0 {
+            println!("\n👋 Goodbye!");
+            break;
+        }
         if user_input.is_empty() {
             continue;
         }
@@ -86,7 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tool_calls: None,
         });
 
-        println!("\n🤖 Assistant:");
+        print!("\n🤖 Assistant: ");
+        let _ = io::stdout().flush();
 
         // Configure the chat loop with detailed logging
         let config = ChatLoopConfig::new()
@@ -98,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             })
             .on_content(|text| {
+                // Print each chunk as it arrives for visible streaming effect
                 print!("{}", text);
                 let _ = io::stdout().flush();
             })
@@ -122,15 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if results.len() == 1 { "" } else { "s" }
                 );
                 for (i, result) in results.iter().enumerate() {
-                    let preview = if result.content.len() > 200 {
-                        format!(
-                            "{}... ({} chars)",
-                            &result.content[..200],
-                            result.content.len()
-                        )
-                    } else {
-                        result.content.clone()
-                    };
+                    let preview = truncate_preview(&result.content, 200);
 
                     if result.is_error {
                         println!("   {}. ❌ Error:", i + 1);
@@ -231,11 +229,7 @@ fn display_history(provider: &ActiveProvider) {
             }
             Role::Tool => {
                 println!("{}. 🔧 Result:", i + 1);
-                let preview = if msg.content.len() > 150 {
-                    format!("{}...", &msg.content[..150])
-                } else {
-                    msg.content.clone()
-                };
+                let preview = truncate_preview(&msg.content, 150);
                 for (j, line) in preview.lines().enumerate() {
                     if j < 3 {
                         println!("   {}", line);
@@ -375,4 +369,18 @@ fn init_provider(kind: ProviderKind) -> Result<ProviderInfo, ProviderError> {
             }
         }
     }
+}
+
+fn truncate_preview(text: &str, limit: usize) -> String {
+    let mut result = String::new();
+    let mut char_count = 0;
+    for ch in text.chars() {
+        if char_count >= limit {
+            result.push_str(&format!("... ({} chars)", text.chars().count()));
+            return result;
+        }
+        result.push(ch);
+        char_count += 1;
+    }
+    result
 }
