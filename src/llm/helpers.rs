@@ -146,20 +146,30 @@ pub struct ChatLoopResponse {
 /// ```no_run
 /// use km_tools::llm::*;
 /// use km_tools::tools::BashTool;
+/// use std::sync::Arc;
 ///
 /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
-///     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), api_key)?;
-///     let bash_tool = BashTool::new();
+///     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), "demo-key".to_string())?;
+///     let bash_tool = Arc::new(BashTool::new());
 ///
 ///     let config = ChatLoopConfig::new()
-///         .with_tool("bash", |call| async move {
-///             bash_tool.execute(&call).await
+///         .with_tool("bash", {
+///             let tool = bash_tool.clone();
+///             move |call| {
+///                 let tool = tool.clone();
+///                 async move { tool.execute(&call).await }
+///             }
 ///         })
 ///         .on_content(|text| print!("{}", text));
 ///
 ///     let response = chat_loop_with_tools(
 ///         &provider,
-///         vec![Message::user("List files in current directory")],
+///         vec![Message {
+///             role: Role::User,
+///             content: "List files in current directory".to_string(),
+///             tool_call_id: None,
+///             tool_calls: None,
+///         }],
 ///         vec![bash_tool.as_tool()],
 ///         config
 ///     ).await?;

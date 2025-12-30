@@ -6,18 +6,26 @@
 // - History tracking across multiple turns
 // - User can continue or exit
 //
-// Run with: cargo run --example interactive_agent --features openai
+// Run with:
+//   cargo run --example interactive_agent --features openai
+//   cargo run --example interactive_agent --features "openai gemini" -- --provider=gemini
 
 use km_tools::llm::*;
 use km_tools::tools::BashTool;
+use std::env;
 use std::io::{self, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key =
-        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
-
-    let provider = OpenAIProvider::create("gpt-5-nano".to_string(), api_key)?;
+    let provider_info = init_provider(parse_provider_kind())
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    let ProviderInfo {
+        label: provider_label,
+        model: provider_model,
+        provider,
+    } = provider_info;
+    let provider_name = format!("{} ({})", provider_label, provider_model);
+    let provider = provider;
 
     // Configure to keep last 5 tool turns
     provider.update_config(|cfg| {
@@ -27,7 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bash_tool = BashTool::new().with_timeout(30);
 
     println!("╔════════════════════════════════════════════════════════════╗");
-    println!("║     Interactive AI Agent with Tool Calling (gpt-5-nano)   ║");
+    println!(
+        "║     Interactive AI Agent with Tool Calling ({})   ║",
+        provider_name
+    );
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
     println!("Features:");
@@ -141,13 +152,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_max_rounds(10);
 
         // Run the chat loop
-        match chat_loop_with_tools(
-            &provider,
-            conversation_history.clone(),
-            vec![bash_tool.as_tool()],
-            config,
-        )
-        .await
+        match provider
+            .run_chat_loop(
+                conversation_history.clone(),
+                vec![bash_tool.as_tool()],
+                config,
+            )
+            .await
         {
             Ok(_response) => {
                 // Update conversation history from provider
@@ -177,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn display_history(provider: &OpenAIProvider) {
+fn display_history(provider: &ActiveProvider) {
     let history = provider.get_history();
 
     println!(
@@ -247,4 +258,121 @@ fn display_history(provider: &OpenAIProvider) {
     }
 
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+enum ActiveProvider {
+    OpenAI(OpenAIProvider),
+    #[cfg(feature = "gemini")]
+    Gemini(GeminiProvider),
+}
+
+impl ActiveProvider {
+    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig)) {
+        match self {
+            ActiveProvider::OpenAI(p) => p.update_config(f),
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.update_config(f),
+        }
+    }
+
+    fn get_history(&self) -> Vec<Message> {
+        match self {
+            ActiveProvider::OpenAI(p) => p.get_history(),
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.get_history(),
+        }
+    }
+
+    fn state(&self) -> ProviderState {
+        match self {
+            ActiveProvider::OpenAI(p) => p.state(),
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.state(),
+        }
+    }
+
+    async fn run_chat_loop(
+        &self,
+        history: Vec<Message>,
+        tools: Vec<Tool>,
+        config: ChatLoopConfig,
+    ) -> Result<ChatLoopResponse, ProviderError> {
+        match self {
+            ActiveProvider::OpenAI(p) => chat_loop_with_tools(p, history, tools, config).await,
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => chat_loop_with_tools(p, history, tools, config).await,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderKind {
+    OpenAI,
+    Gemini,
+}
+
+fn parse_provider_kind() -> ProviderKind {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--provider=") {
+            return provider_kind_from_str(value);
+        } else if arg == "--provider" {
+            if let Some(value) = args.next() {
+                return provider_kind_from_str(&value);
+            }
+        }
+    }
+    ProviderKind::OpenAI
+}
+
+fn provider_kind_from_str(value: &str) -> ProviderKind {
+    match value.to_lowercase().as_str() {
+        "gemini" => ProviderKind::Gemini,
+        "openai" => ProviderKind::OpenAI,
+        _ => ProviderKind::OpenAI,
+    }
+}
+
+struct ProviderInfo {
+    label: &'static str,
+    model: String,
+    provider: ActiveProvider,
+}
+
+fn init_provider(kind: ProviderKind) -> Result<ProviderInfo, ProviderError> {
+    match kind {
+        ProviderKind::OpenAI => {
+            let api_key =
+                env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
+            let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5-nano".to_string());
+            let provider = OpenAIProvider::create(model.clone(), api_key)?;
+            Ok(ProviderInfo {
+                label: "OpenAI",
+                model,
+                provider: ActiveProvider::OpenAI(provider),
+            })
+        }
+        ProviderKind::Gemini => {
+            #[cfg(feature = "gemini")]
+            {
+                let api_key = env::var("GEMINI_API_KEY")
+                    .expect("GEMINI_API_KEY environment variable not set");
+                let model = env::var("GEMINI_MODEL")
+                    .unwrap_or_else(|_| "gemini-3-flash-preview".to_string());
+                let provider = GeminiProvider::create(model.clone(), api_key)?;
+                Ok(ProviderInfo {
+                    label: "Gemini",
+                    model,
+                    provider: ActiveProvider::Gemini(provider),
+                })
+            }
+            #[cfg(not(feature = "gemini"))]
+            {
+                Err(ProviderError::ConfigError(
+                    "Gemini provider requested but the 'gemini' feature is not enabled."
+                        .to_string(),
+                ))
+            }
+        }
+    }
 }

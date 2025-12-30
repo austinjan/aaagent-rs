@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🤖 OpenAI Conversation Compaction Example\n");
 
     // Simulate a long conversation history
-    let mut history = vec![
+    let history = vec![
         Message {
             role: Role::System,
             content: "You are a helpful assistant.".to_string(),

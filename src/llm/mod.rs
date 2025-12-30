@@ -7,6 +7,9 @@ pub mod provider;
 #[cfg(feature = "openai")]
 pub mod openai;
 
+#[cfg(feature = "gemini")]
+pub mod gemini;
+
 #[cfg(test)]
 mod tests;
 
@@ -16,3 +19,6 @@ pub use provider::*;
 
 #[cfg(feature = "openai")]
 pub use openai::OpenAIProvider;
+
+#[cfg(feature = "gemini")]
+pub use gemini::GeminiProvider;
