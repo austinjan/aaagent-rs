@@ -2,12 +2,15 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::Path;
 
-use km_tools::find_missing_readme;
+use km_tools::{find_missing_readme, format_map_as_markdown, generate_map};
 
-const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*"];
+const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*", "node_modules"];
 
 fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
-    let mut patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS.iter().map(|s| s.to_string()).collect();
+    let mut patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     let gitignore_path = dir.join(".gitignore");
     if let Ok(content) = fs::read_to_string(&gitignore_path) {
@@ -50,15 +53,19 @@ enum Commands {
         #[arg(long, conflicts_with = "json")]
         mk: bool,
     },
-    /// Generate a map of the project structure
+    /// Generate a hierarchical map of directories and their contents, enabling LLMs to progressively focus on relevant areas.
     GenerateMap {
         /// The root directory to map
         #[arg(short, long, default_value = ".")]
         path: String,
 
-        /// Output format (text, json, tree)
-        #[arg(short, long, default_value = "tree")]
-        format: String,
+        /// Maximum depth to traverse (0 = unlimited)
+        #[arg(short, long, default_value = "3")]
+        depth: usize,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -92,9 +99,23 @@ fn main() {
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
-        Commands::GenerateMap { path, format } => {
-            println!("Generating map for: {} (format: {})", path, format);
-            // TODO: Implement map generation logic
+        Commands::GenerateMap { path, depth, json } => {
+            let dir = Path::new(&path);
+            let patterns = read_gitignore_patterns(dir);
+            let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
+
+            match generate_map(dir, &pattern_refs, depth) {
+                Ok(map) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&map).unwrap());
+                    } else {
+                        // Output as markdown for LLM consumption
+                        let markdown = format_map_as_markdown(&map);
+                        println!("{}", markdown);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
         }
     }
 }
