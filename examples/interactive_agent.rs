@@ -11,12 +11,23 @@
 //   cargo run --example interactive_agent --features "openai gemini" -- --provider=gemini
 
 use km_tools::llm::*;
-use km_tools::tools::BashTool;
+use simplelog::*;
 use std::env;
+use std::fs::File;
 use std::io::{self, Write};
+use std::sync::{Arc, RwLock};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logger to write to app.log
+    WriteLogger::init(
+        LevelFilter::Debug,
+        Config::default(),
+        File::create("app.log")?,
+    )?;
+
+    log::debug!("=== Interactive Agent Starting ===");
+
     let provider_info = init_provider(parse_provider_kind())
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     let ProviderInfo {
@@ -32,16 +43,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.max_tool_turns = Some(5);
     });
 
-    let bash_tool = BashTool::new().with_timeout(30);
+    // Create registry with all built-in tools
+    // Wrapped in Arc<RwLock<>> to share mutable state across turns
+    let registry = Arc::new(RwLock::new(ToolRegistry::new().register_all_builtin()));
 
     println!("╔════════════════════════════════════════════════════════════╗");
     println!(
-        "║     Interactive AI Agent with Tool Calling ({})   ║",
+        "║     Interactive AI Agent with Tool Registry ({})  ║",
         provider_name
     );
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
     println!("Features:");
+    println!("  - Dynamic tool loading via ToolRegistry");
+    println!("  - LLM can pick tools as needed with pick_tools");
     println!("  - Detailed tool call/result logging");
     println!("  - History tracking across turns");
     println!("  - Type 'exit' or 'quit' to stop");
@@ -93,15 +108,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         print!("\n🤖 Assistant: ");
         let _ = io::stdout().flush();
 
-        // Configure the chat loop with detailed logging
+        // Configure the chat loop with registry and detailed logging
         let config = ChatLoopConfig::new()
-            .with_tool("bash", {
-                let bash_tool = bash_tool.clone();
-                move |call| {
-                    let bash_tool = bash_tool.clone();
-                    async move { bash_tool.execute(&call).await }
-                }
-            })
+            .with_registry(Arc::clone(&registry))
             .on_content(|text| {
                 // Print each chunk as it arrives for visible streaming effect
                 print!("{}", text);
@@ -147,15 +156,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 println!();
             })
-            .with_max_rounds(10);
+            .with_max_rounds(30);
 
         // Run the chat loop
+        // Get initial tools from registry (includes pick_tools meta-tool)
+        let tools = {
+            let reg = registry.read().unwrap();
+            reg.get_tools_for_llm()
+        };
         match provider
-            .run_chat_loop(
-                conversation_history.clone(),
-                vec![bash_tool.as_tool()],
-                config,
-            )
+            .run_chat_loop(conversation_history.clone(), tools, config)
             .await
         {
             Ok(_response) => {

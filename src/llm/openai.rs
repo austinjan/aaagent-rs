@@ -558,8 +558,8 @@ impl LLMProvider for OpenAIProvider {
         history: Vec<Message>,
         tools: Option<Vec<Tool>>,
     ) -> Result<ChatLoopHandle, ProviderError> {
-        let (tool_result_tx, mut tool_result_rx) =
-            tokio::sync::mpsc::unbounded_channel::<ToolResultSubmission>();
+        let (command_tx, mut command_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ChatLoopCommand>();
         let (event_tx, event_rx) =
             tokio::sync::mpsc::unbounded_channel::<Result<LoopStep, ProviderError>>();
 
@@ -572,7 +572,7 @@ impl LLMProvider for OpenAIProvider {
 
         // Convert messages and tools
         let mut messages: Vec<ChatMessage> = history.iter().map(Self::convert_message).collect();
-        let openai_tools = tools.as_ref().map(|t| Self::convert_tools(t));
+        let mut openai_tools = tools.as_ref().map(|t| Self::convert_tools(t));
 
         // Track history as our Message types (not ChatMessage)
         let mut current_history = history.clone();
@@ -757,9 +757,9 @@ impl LLMProvider for OpenAIProvider {
 
                 // Check if we need to wait for tool results
                 if current_finish_reason.as_deref() == Some("tool_calls") {
-                    // Wait for tool results from user
-                    match tool_result_rx.recv().await {
-                        Some(submission) => {
+                    // Wait for commands from user (tool results or tool updates)
+                    match command_rx.recv().await {
+                        Some(ChatLoopCommand::SubmitToolResults(results)) => {
                             // Get the saved tool calls from earlier
                             let tool_calls = completed_tool_calls.take().unwrap_or_default();
 
@@ -795,13 +795,13 @@ impl LLMProvider for OpenAIProvider {
                             });
 
                             // Signal that we received tool results
-                            let result_count = submission.results.len();
+                            let result_count = results.len();
                             let _ = event_tx.send(Ok(LoopStep::ToolResultsReceived {
                                 count: result_count,
                             }));
 
                             // Add tool results to history
-                            for result in submission.results.clone() {
+                            for result in results.clone() {
                                 messages.push(ChatMessage::Tool {
                                     content: result.content.clone(),
                                     tool_call_id: result.tool_call_id.clone(),
@@ -834,6 +834,15 @@ impl LLMProvider for OpenAIProvider {
                             // Continue the loop to make another request with tool results
                             continue;
                         }
+                        Some(ChatLoopCommand::UpdateTools(new_tools)) => {
+                            // Update tools for next API call
+                            openai_tools = Some(Self::convert_tools(&new_tools));
+
+                            // Note: Tools are updated, but we still need to wait for
+                            // SubmitToolResults before making the next API call.
+                            // The updated tools will be used in the next request.
+                            continue;
+                        }
                         None => {
                             // Channel closed, exit loop
                             break;
@@ -851,7 +860,7 @@ impl LLMProvider for OpenAIProvider {
             }
         });
 
-        Ok(ChatLoopHandle::new(event_rx, tool_result_tx))
+        Ok(ChatLoopHandle::new(event_rx, command_tx))
     }
 
     fn prompt_cache(&mut self, _cache_prompt: String) -> Result<(), ProviderError> {

@@ -27,6 +27,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 eventsource-stream = "0.2"
 bytes = "1.0"
 
+# Logging
+log = "0.4"
+
+[dev-dependencies]
+simplelog = "0.12"
+
 [features]
 default = ["openai", "anthropic", "gemini"]
 openai = []

@@ -262,10 +262,13 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Internal: submission of tool results via channel
+/// Internal: commands sent to the chat loop background task
 #[derive(Debug)]
-pub(crate) struct ToolResultSubmission {
-    pub(crate) results: Vec<ToolResult>,
+pub(crate) enum ChatLoopCommand {
+    /// Submit tool execution results to continue the loop
+    SubmitToolResults(Vec<ToolResult>),
+    /// Update the tools available to the LLM for the next API call
+    UpdateTools(Vec<Tool>),
 }
 
 // ============================================================================
@@ -416,8 +419,8 @@ pub struct ChatLoopHandle {
     /// Stream of events from the LLM
     events: Pin<Box<dyn Stream<Item = Result<LoopStep, ProviderError>> + Send>>,
 
-    /// Channel to send tool results back to the loop
-    tool_result_tx: mpsc::UnboundedSender<ToolResultSubmission>,
+    /// Channel to send commands to the background task
+    command_tx: mpsc::UnboundedSender<ChatLoopCommand>,
 }
 
 impl ChatLoopHandle {
@@ -425,11 +428,11 @@ impl ChatLoopHandle {
     #[allow(dead_code)]
     pub(crate) fn new(
         event_rx: mpsc::UnboundedReceiver<Result<LoopStep, ProviderError>>,
-        tool_result_tx: mpsc::UnboundedSender<ToolResultSubmission>,
+        command_tx: mpsc::UnboundedSender<ChatLoopCommand>,
     ) -> Self {
         Self {
             events: Box::pin(UnboundedReceiverStream::new(event_rx)),
-            tool_result_tx,
+            command_tx,
         }
     }
 
@@ -444,8 +447,43 @@ impl ChatLoopHandle {
     /// This should be called after receiving `LoopStep::ToolCallsRequested`
     /// The background task will receive these results and continue the conversation
     pub fn submit_tool_results(&self, results: Vec<ToolResult>) -> Result<(), ProviderError> {
-        self.tool_result_tx
-            .send(ToolResultSubmission { results })
+        self.command_tx
+            .send(ChatLoopCommand::SubmitToolResults(results))
+            .map_err(|_| ProviderError::ChatLoopClosed)?;
+        Ok(())
+    }
+
+    /// Update the tools available to the LLM for the next API call
+    ///
+    /// This is useful when using a tool registry that dynamically provides tools.
+    /// After the LLM calls a "pick_tools" meta-tool, you can update the available
+    /// tools so the next API call includes full specifications for the selected tools.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use km_tools::llm::*;
+    /// # async fn example(mut handle: ChatLoopHandle, registry: ToolRegistry) -> Result<(), ProviderError> {
+    /// while let Some(event) = handle.next().await {
+    ///     match event? {
+    ///         LoopStep::ToolCallsRequested { tool_calls, .. } => {
+    ///             for call in &tool_calls {
+    ///                 if call.name == "pick_tools" {
+    ///                     // After LLM picks tools, update for next call
+    ///                     let new_tools = registry.get_tools_for_llm();
+    ///                     handle.update_tools(new_tools)?;
+    ///                 }
+    ///             }
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn update_tools(&self, tools: Vec<Tool>) -> Result<(), ProviderError> {
+        self.command_tx
+            .send(ChatLoopCommand::UpdateTools(tools))
             .map_err(|_| ProviderError::ChatLoopClosed)?;
         Ok(())
     }
@@ -454,7 +492,7 @@ impl ChatLoopHandle {
     ///
     /// Returns false if the background task has finished or the channel is closed
     pub fn is_active(&self) -> bool {
-        !self.tool_result_tx.is_closed()
+        !self.command_tx.is_closed()
     }
 
     /// Cancel the chat loop

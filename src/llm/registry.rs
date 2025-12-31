@@ -98,6 +98,10 @@ impl ToolRegistry {
     /// - Brief descriptions of unpicked tools
     /// - pick_tool meta-tool (so LLM can pick more tools anytime)
     pub fn get_tools_for_llm(&self) -> Vec<Tool> {
+        log::debug!(
+            "get_tools_for_llm called: picked_tools = {:?}",
+            self.picked_tools
+        );
         let mut tools = Vec::new();
 
         // Add full definitions for picked tools
@@ -144,23 +148,56 @@ impl ToolRegistry {
     /// Handles both regular tools and the pick_tool meta-tool.
     pub async fn execute(&mut self, call: &ToolCall) -> ToolResult {
         // Handle pick_tool meta-tool
-        if call.name == "pick_tool" {
+        if call.name == "pick_tool" || call.name == "pick_tools" {
             return self.handle_pick_tools(call);
         }
 
-        // Execute regular tool
+        // Check if tool exists
         if let Some(tool) = self.tools.get(&call.name) {
+            log::debug!(
+                "Executing tool '{}', picked_tools = {:?}",
+                call.name,
+                self.picked_tools
+            );
+
+            // Try to execute the tool directly
             match tool.execute(call).await {
-                Ok(output) => ToolResult {
-                    tool_call_id: call.id.clone(),
-                    content: output,
-                    is_error: false,
-                },
-                Err(error) => ToolResult {
-                    tool_call_id: call.id.clone(),
-                    content: error,
-                    is_error: true,
-                },
+                Ok(output) => {
+                    // Success - automatically mark as picked for future use
+                    if !self.picked_tools.contains(&call.name) {
+                        log::debug!(
+                            "Auto-picking tool '{}' after successful execution",
+                            call.name
+                        );
+                        self.picked_tools.insert(call.name.clone());
+                    }
+                    ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: output,
+                        is_error: false,
+                    }
+                }
+                Err(error) => {
+                    // Execution failed - check if tool was picked
+                    let is_picked = self.picked_tools.contains(&call.name);
+
+                    // Add hint about pick_tools if not picked (might help with usage)
+                    let hint = if !is_picked {
+                        format!(
+                            "\n\n💡 Hint: If you need detailed usage instructions for '{}', \
+                             call pick_tools({{\"tools\": [\"{}\"]}})",
+                            call.name, call.name
+                        )
+                    } else {
+                        String::new()
+                    };
+
+                    ToolResult {
+                        tool_call_id: call.id.clone(),
+                        content: format!("{}{}", error, hint),
+                        is_error: true,
+                    }
+                }
             }
         } else {
             let available = self.tool_names().join(", ");
@@ -204,19 +241,48 @@ impl ToolRegistry {
             if self.tools.contains_key(name) {
                 self.picked_tools.insert(name.clone());
                 picked.push(name.as_str());
+                log::debug!("Picked tool: {}", name);
             } else {
                 not_found.push(name.as_str());
             }
         }
+        log::debug!(
+            "Total picked_tools after pick_tools: {:?}",
+            self.picked_tools
+        );
 
-        let mut content = format!("Selected tools: {}", picked.join(", "));
+        let mut content = format!("✅ Selected tools: {}", picked.join(", "));
         if !not_found.is_empty() {
             content.push_str(&format!(
-                "\nWarning: tools not found: {}",
+                "\n⚠️ Warning: tools not found: {}",
                 not_found.join(", ")
             ));
         }
-        content.push_str("\n\nYou can now use these tools in the next turn.");
+
+        // Include brief usage info for picked tools
+        content.push_str("\n\n📋 Tool specifications:");
+        for name in &picked {
+            if let Some(provider) = self.tools.get(*name) {
+                content.push_str(&format!(
+                    "\n\n• {} - {}\n  Parameters: {}",
+                    provider.name(),
+                    provider.brief(),
+                    serde_json::to_string(&provider.parameters()).unwrap_or_default()
+                ));
+            }
+        }
+
+        let tool_instruction = if picked.len() == 1 {
+            format!("the '{}' tool", picked[0])
+        } else {
+            "these tools".to_string()
+        };
+
+        content.push_str(&format!(
+            "\n\n✅ Tools are now ready. IMPORTANT: You MUST now call {} to complete the user's request. \
+             Do not just acknowledge - actually execute the tool call in this same response.",
+            tool_instruction
+        ));
 
         ToolResult {
             tool_call_id: call.id.clone(),
@@ -237,20 +303,17 @@ Pick tools provides a tool set helping LLM choose tools for a task.
 
 ## Description
 A meta-tool that returns relevant tool specifications based on the current task context.
+Instead of loading all available tools upfront (which consumes tokens and may confuse the LLM), use this tool to pick the tools needed for the current task.
+This tool acts as a "tool router" - describe what you want to accomplish, and it returns the appropriate tool descriptions in the next API call.
 
-Instead of loading all available tools upfront (which consumes tokens and may confuse the LLM), use this tool to dynamically discover and load only the tools needed for the current task.
-
-This tool acts as a "tool router" - describe what you want to accomplish, and it returns the appropriate tool specifications.
+## Available Tools
+The Pick tools provides following toools:
+{}
 
 ## Usage Notes
 - Call this tool FIRST when you need capabilities not available in your current toolset
-- Describe your intent clearly in natural language for best matching results
-- You can request multiple tool categories in one call
-- Returns complete tool specifications including parameters and usage examples
-- Returned tools become available for subsequent calls in the same session
-- If no matching tools are found, suggestions for rephrasing will be provided
-
-                 Available tools: {}"#####,
+- You can request multiple tools in one call
+"#####,
                 tools_list
             ),
             parameters: serde_json::json!({

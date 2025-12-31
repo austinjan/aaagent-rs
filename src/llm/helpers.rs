@@ -42,7 +42,8 @@ pub struct ChatLoopConfig {
     /// Tool executors by tool name (legacy, used when registry is None)
     pub tool_executors: HashMap<String, ToolExecutor>,
     /// Tool registry for lazy loading (preferred over tool_executors)
-    pub registry: Option<super::registry::ToolRegistry>,
+    /// Wrapped in Arc<RwLock<>> to allow shared mutable access across turns
+    pub registry: Option<std::sync::Arc<std::sync::RwLock<super::registry::ToolRegistry>>>,
     /// Optional callback for streaming content
     pub on_content: Option<ContentCallback>,
     /// Optional callback when tool calls are requested
@@ -132,7 +133,10 @@ impl ChatLoopConfig {
     }
 
     /// Set tool registry
-    pub fn with_registry(mut self, registry: super::registry::ToolRegistry) -> Self {
+    pub fn with_registry(
+        mut self,
+        registry: std::sync::Arc<std::sync::RwLock<super::registry::ToolRegistry>>,
+    ) -> Self {
         self.registry = Some(registry);
         self
     }
@@ -227,11 +231,11 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
     tools: Vec<Tool>,
     config: ChatLoopConfig,
 ) -> Result<ChatLoopResponse, super::ProviderError> {
-    let mut handle = provider.chat_loop(messages, Some(tools)).await?;
-
+    let mut current_messages = messages;
+    let mut current_tools = tools;
     let mut full_content = String::new();
     let mut all_tool_calls = Vec::new();
-    let mut rounds = 0;
+    let mut total_rounds = 0;
 
     // Initialize loop detector if enabled
     let mut loop_detector = config
@@ -239,51 +243,66 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
         .as_ref()
         .map(|cfg| super::LoopDetector::with_config(cfg.clone()));
 
-    while let Some(event_result) = handle.next().await {
-        let event = event_result?;
+    // Outer loop: restart when tools are picked
+    loop {
+        log::debug!(
+            "Starting chat loop iteration (total_rounds: {}, tools_count: {})",
+            total_rounds,
+            current_tools.len()
+        );
 
-        match event {
-            LoopStep::Thinking(thought) => {
-                if let Some(ref callback) = config.on_thinking {
-                    callback(&thought);
-                }
-            }
-            LoopStep::Content(text) => {
-                full_content.push_str(&text);
-                if let Some(ref callback) = config.on_content {
-                    callback(&text);
-                }
-            }
-            LoopStep::ToolCallsRequested {
-                tool_calls,
-                content,
-            } => {
-                rounds += 1;
+        let mut handle = provider
+            .chat_loop(current_messages.clone(), Some(current_tools.clone()))
+            .await?;
+        let mut rounds = 0;
+        let mut tools_picked = false;
 
-                if rounds > config.max_rounds {
-                    return Err(super::ProviderError::ApiError(format!(
-                        "Maximum rounds ({}) exceeded",
-                        config.max_rounds
-                    )));
-                }
+        while let Some(event_result) = handle.next().await {
+            let event = event_result?;
 
-                // Add any content before tool calls
-                if !content.is_empty() {
-                    full_content.push_str(&content);
+            match event {
+                LoopStep::Thinking(thought) => {
+                    if let Some(ref callback) = config.on_thinking {
+                        callback(&thought);
+                    }
                 }
-
-                // Notify callback
-                if let Some(ref callback) = config.on_tool_calls {
-                    callback(&tool_calls);
+                LoopStep::Content(text) => {
+                    full_content.push_str(&text);
+                    if let Some(ref callback) = config.on_content {
+                        callback(&text);
+                    }
                 }
+                LoopStep::ToolCallsRequested {
+                    tool_calls,
+                    content,
+                } => {
+                    rounds += 1;
 
-                // Check for loops before executing tools
-                if let Some(ref mut detector) = loop_detector {
-                    for call in &tool_calls {
-                        if let Some(detection) = detector.check(call) {
-                            // Call user callback if provided
-                            let should_continue =
-                                if let Some(ref callback) = config.on_loop_detected {
+                    if rounds > config.max_rounds {
+                        return Err(super::ProviderError::ApiError(format!(
+                            "Maximum rounds ({}) exceeded",
+                            config.max_rounds
+                        )));
+                    }
+
+                    // Add any content before tool calls
+                    if !content.is_empty() {
+                        full_content.push_str(&content);
+                    }
+
+                    // Notify callback
+                    if let Some(ref callback) = config.on_tool_calls {
+                        callback(&tool_calls);
+                    }
+
+                    // Check for loops before executing tools
+                    if let Some(ref mut detector) = loop_detector {
+                        for call in &tool_calls {
+                            if let Some(detection) = detector.check(call) {
+                                // Call user callback if provided
+                                let should_continue = if let Some(ref callback) =
+                                    config.on_loop_detected
+                                {
                                     callback(&detection)
                                 } else {
                                     // Default behavior based on action
@@ -304,81 +323,139 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                                     }
                                 };
 
-                            if !should_continue {
-                                // Clear detector state and return error
-                                detector.clear();
-                                return Err(super::ProviderError::ApiError(format!(
-                                    "Loop detected: {}",
-                                    detection.suggestion
-                                )));
+                                if !should_continue {
+                                    // Clear detector state and return error
+                                    detector.clear();
+                                    return Err(super::ProviderError::ApiError(format!(
+                                        "Loop detected: {}",
+                                        detection.suggestion
+                                    )));
+                                }
                             }
                         }
                     }
-                }
 
-                // Execute tools
-                let mut results = Vec::new();
-                for call in &tool_calls {
-                    all_tool_calls.push(call.clone());
+                    // Execute tools
+                    let mut results = Vec::new();
 
-                    let result = if let Some(executor) = config.tool_executors.get(&call.name) {
-                        match executor(call.clone()).await {
-                            Ok(output) => ToolResult {
+                    for call in &tool_calls {
+                        all_tool_calls.push(call.clone());
+
+                        // Prefer registry if available, fallback to executors
+                        let result = if let Some(ref registry) = config.registry {
+                            // Use registry.execute() which handles pick_tools meta-tool
+                            let tool_result = {
+                                let mut reg = registry.write().unwrap();
+                                reg.execute(call).await
+                            };
+
+                            // Check if this was a pick_tools call
+                            if (call.name == "pick_tools" || call.name == "pick_tool")
+                                && !tool_result.is_error
+                            {
+                                log::debug!(
+                                    "pick_tools detected! Will restart loop after this turn."
+                                );
+                                tools_picked = true;
+                            }
+
+                            tool_result
+                        } else if let Some(executor) = config.tool_executors.get(&call.name) {
+                            // Fallback to legacy executor
+                            match executor(call.clone()).await {
+                                Ok(output) => ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    content: output,
+                                    is_error: false,
+                                },
+                                Err(error) => ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    content: error,
+                                    is_error: true,
+                                },
+                            }
+                        } else {
+                            ToolResult {
                                 tool_call_id: call.id.clone(),
-                                content: output,
-                                is_error: false,
-                            },
-                            Err(error) => ToolResult {
-                                tool_call_id: call.id.clone(),
-                                content: error,
+                                content: format!("Tool '{}' not registered", call.name),
                                 is_error: true,
-                            },
+                            }
+                        };
+
+                        results.push(result);
+                    }
+
+                    // Notify callback with results
+                    if let Some(ref callback) = config.on_tool_results {
+                        callback(&results);
+                    }
+
+                    // If tools were picked, update the handle with new tools
+                    if tools_picked {
+                        if let Some(ref registry) = config.registry {
+                            let new_tools = {
+                                let reg = registry.read().unwrap();
+                                reg.get_tools_for_llm()
+                            };
+                            handle.update_tools(new_tools)?;
                         }
-                    } else {
-                        ToolResult {
-                            tool_call_id: call.id.clone(),
-                            content: format!("Tool '{}' not registered", call.name),
-                            is_error: true,
+                    }
+
+                    // Submit results
+                    handle.submit_tool_results(results)?;
+                }
+                LoopStep::ToolResultsReceived { .. } => {
+                    // Just continue
+                }
+                LoopStep::Done {
+                    content,
+                    total_usage,
+                    ..
+                } => {
+                    // Update final content if provided
+                    if !content.is_empty() && content != full_content {
+                        full_content = content;
+                    }
+
+                    total_rounds += rounds;
+
+                    // If tools were picked, restart with updated tools
+                    if tools_picked {
+                        log::debug!("Restarting loop with updated tools...");
+                        // Get updated tools from registry
+                        if let Some(ref registry) = config.registry {
+                            current_tools = {
+                                let reg = registry.read().unwrap();
+                                reg.get_tools_for_llm()
+                            };
                         }
-                    };
+                        // Update messages with current history from provider
+                        current_messages = provider.get_history();
 
-                    results.push(result);
+                        // Reset flag and restart outer loop
+                        break; // Break inner loop, continue outer loop
+                    }
+
+                    // No tools picked, conversation is complete
+                    // Clear picked tools from registry for next conversation
+                    if let Some(ref registry) = config.registry {
+                        let mut reg = registry.write().unwrap();
+                        reg.clear_picked();
+                    }
+
+                    return Ok(ChatLoopResponse {
+                        content: full_content,
+                        usage: total_usage,
+                        all_tool_calls,
+                        rounds: total_rounds,
+                    });
                 }
-
-                // Notify callback with results
-                if let Some(ref callback) = config.on_tool_results {
-                    callback(&results);
-                }
-
-                // Submit results
-                handle.submit_tool_results(results)?;
             }
-            LoopStep::ToolResultsReceived { .. } => {
-                // Just continue
-            }
-            LoopStep::Done {
-                content,
-                total_usage,
-                ..
-            } => {
-                // Update final content if provided
-                if !content.is_empty() && content != full_content {
-                    full_content = content;
-                }
+        } // End of inner while loop
+    } // End of outer loop
 
-                return Ok(ChatLoopResponse {
-                    content: full_content,
-                    usage: total_usage,
-                    all_tool_calls,
-                    rounds,
-                });
-            }
-        }
-    }
-
-    Err(super::ProviderError::ApiError(
-        "Chat loop ended unexpectedly".to_string(),
-    ))
+    // This code is unreachable but kept for clarity - the outer loop always returns
+    // Either on LoopStep::Done (no tools_picked) or continues forever on restarts
 }
 
 #[cfg(test)]
