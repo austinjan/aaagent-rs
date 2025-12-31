@@ -1,2 +1,0 @@
-check current folder
-exit

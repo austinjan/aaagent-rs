@@ -81,6 +81,12 @@ fn main() {
             let dir = Path::new(&path);
             let patterns = read_gitignore_patterns(dir);
             let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
+            km_tools::logger::log(format!(
+                "missing-readme path={} json={} mk={}",
+                dir.display(),
+                json,
+                mk
+            ));
             match find_missing_readme(dir, &pattern_refs) {
                 Ok(missing) => {
                     if json {
@@ -96,13 +102,22 @@ fn main() {
                         }
                     }
                 }
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => {
+                    km_tools::logger::log(format!("missing-readme failed: {}", e));
+                    eprintln!("Error: {}", e);
+                }
             }
         }
         Commands::GenerateMap { path, depth, json } => {
             let dir = Path::new(&path);
             let patterns = read_gitignore_patterns(dir);
             let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
+            km_tools::logger::log(format!(
+                "generate-map path={} depth={} json={}",
+                dir.display(),
+                depth,
+                json
+            ));
 
             match generate_map(dir, &pattern_refs, depth) {
                 Ok(map) => {
@@ -114,7 +129,10 @@ fn main() {
                         println!("{}", markdown);
                     }
                 }
-                Err(e) => eprintln!("Error: {}", e),
+                Err(e) => {
+                    km_tools::logger::log(format!("generate-map failed: {}", e));
+                    eprintln!("Error: {}", e);
+                }
             }
         }
     }

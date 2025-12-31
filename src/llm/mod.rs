@@ -4,9 +4,13 @@
 pub mod helpers;
 pub mod loop_detector;
 pub mod provider;
+pub mod registry;
 
 #[cfg(feature = "openai")]
 pub mod openai;
+
+#[cfg(feature = "gemini")]
+pub mod gemini;
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +19,10 @@ mod tests;
 pub use helpers::*;
 pub use loop_detector::{LoopAction, LoopDetection, LoopDetector, LoopDetectorConfig, LoopType};
 pub use provider::*;
+pub use registry::ToolRegistry;
 
 #[cfg(feature = "openai")]
 pub use openai::OpenAIProvider;
+
+#[cfg(feature = "gemini")]
+pub use gemini::GeminiProvider;

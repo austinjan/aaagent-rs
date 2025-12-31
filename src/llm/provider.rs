@@ -1,6 +1,7 @@
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -175,6 +176,17 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.role {
+            Role::System => write!(f, "System: {}", self.content),
+            Role::User => write!(f, "User: {}", self.content),
+            Role::Assistant => write!(f, "Assistant: {}", self.content),
+            Role::Tool => write!(f, "Tool: {}", self.content),
+        }
+    }
+}
+
 /// Tool call made by the LLM
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
@@ -193,6 +205,48 @@ pub struct Tool {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value, // JSON Schema
+
+    /// Full detailed description (not serialized to LLM)
+    ///
+    /// When set, `description` is used as the brief description,
+    /// and this field contains the full usage details.
+    /// Use `get_full_description()` to retrieve the appropriate description.
+    #[serde(skip_serializing, default)]
+    pub full_description: Option<String>,
+}
+
+impl Tool {
+    /// Create a new tool with brief and full descriptions
+    pub fn new(
+        name: impl Into<String>,
+        brief: impl Into<String>,
+        full_description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: brief.into(),
+            parameters,
+            full_description: Some(full_description.into()),
+        }
+    }
+
+    /// Get the full description (falls back to brief if not set)
+    pub fn get_full_description(&self) -> &str {
+        self.full_description
+            .as_deref()
+            .unwrap_or(&self.description)
+    }
+
+    /// Create a brief version for sending to LLM (strips full_description)
+    pub fn as_brief(&self) -> Tool {
+        Tool {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.parameters.clone(),
+            full_description: None,
+        }
+    }
 }
 
 /// Tool execution result

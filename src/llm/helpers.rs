@@ -39,8 +39,10 @@ pub type LoopDetectionCallback = Box<dyn Fn(&super::LoopDetection) -> bool + Sen
 
 /// Configuration for chat_loop_with_tools
 pub struct ChatLoopConfig {
-    /// Tool executors by tool name
+    /// Tool executors by tool name (legacy, used when registry is None)
     pub tool_executors: HashMap<String, ToolExecutor>,
+    /// Tool registry for lazy loading (preferred over tool_executors)
+    pub registry: Option<super::registry::ToolRegistry>,
     /// Optional callback for streaming content
     pub on_content: Option<ContentCallback>,
     /// Optional callback when tool calls are requested
@@ -62,6 +64,7 @@ impl ChatLoopConfig {
     pub fn new() -> Self {
         Self {
             tool_executors: HashMap::new(),
+            registry: None,
             on_content: None,
             on_tool_calls: None,
             on_tool_results: None,
@@ -125,6 +128,12 @@ impl ChatLoopConfig {
         F: Fn(&super::LoopDetection) -> bool + Send + 'static,
     {
         self.on_loop_detected = Some(Box::new(callback));
+        self
+    }
+
+    /// Set tool registry
+    pub fn with_registry(mut self, registry: super::registry::ToolRegistry) -> Self {
+        self.registry = Some(registry);
         self
     }
 

@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             "required": ["location"]
         }),
+        full_description: None,
     };
 
     // Create conversation history
