@@ -571,6 +571,7 @@ impl LLMProvider for GeminiProvider {
                                     }
                                 }
                                 Err(err) => {
+                                    log::error!("❌ Gemini parse error: {}", err);
                                     let _ = event_tx.send(Err(ProviderError::ApiError(format!(
                                         "Gemini parse error: {}",
                                         err
@@ -580,6 +581,7 @@ impl LLMProvider for GeminiProvider {
                             }
                         }
                         Err(err) => {
+                            log::error!("❌ Gemini stream error: {}", err);
                             let _ = event_tx.send(Err(ProviderError::ApiError(format!(
                                 "Gemini stream error: {}",
                                 err

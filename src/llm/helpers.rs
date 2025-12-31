@@ -3,7 +3,7 @@
 //! This module provides high-level helpers that wrap common patterns
 //! like chat loops with tool execution.
 
-use super::{LLMProvider, LoopStep, Message, Tool, ToolCall, ToolResult};
+use super::{LLMProvider, LoopStep, Message, Role, Tool, ToolCall, ToolResult};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -245,12 +245,6 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
 
     // Outer loop: restart when tools are picked
     loop {
-        log::debug!(
-            "Starting chat loop iteration (total_rounds: {}, tools_count: {})",
-            total_rounds,
-            current_tools.len()
-        );
-
         let mut handle = provider
             .chat_loop(current_messages.clone(), Some(current_tools.clone()))
             .await?;
@@ -353,9 +347,6 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                             if (call.name == "pick_tools" || call.name == "pick_tool")
                                 && !tool_result.is_error
                             {
-                                log::debug!(
-                                    "pick_tools detected! Will restart loop after this turn."
-                                );
                                 tools_picked = true;
                             }
 
@@ -421,7 +412,6 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
 
                     // If tools were picked, restart with updated tools
                     if tools_picked {
-                        log::debug!("Restarting loop with updated tools...");
                         // Get updated tools from registry
                         if let Some(ref registry) = config.registry {
                             current_tools = {
@@ -431,6 +421,16 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                         }
                         // Update messages with current history from provider
                         current_messages = provider.get_history();
+
+                        // Add a system message to prompt the LLM to continue with the original task
+                        current_messages.push(Message {
+                            role: Role::User,
+                            content:
+                                "Tools have been loaded. Please continue with the original task."
+                                    .to_string(),
+                            tool_call_id: None,
+                            tool_calls: None,
+                        });
 
                         // Reset flag and restart outer loop
                         break; // Break inner loop, continue outer loop

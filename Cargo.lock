@@ -899,6 +899,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "simplelog",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",

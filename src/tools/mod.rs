@@ -3,8 +3,10 @@
 //! This module provides ready-to-use tools that can be used with any LLM provider.
 
 pub mod bash;
+pub mod editor_edit;
 
 pub use bash::BashTool;
+pub use editor_edit::EditorEditTool;
 
 use crate::llm::ToolCall;
 use std::future::Future;
@@ -51,6 +53,7 @@ pub trait ToolProvider: Send + Sync {
 pub fn all_tools() -> Vec<Arc<dyn ToolProvider>> {
     vec![
         Arc::new(BashTool::new()),
+        Arc::new(EditorEditTool::new()),
         // Add new built-in tools here
     ]
 }

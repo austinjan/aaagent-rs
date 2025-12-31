@@ -313,6 +313,11 @@ The Pick tools provides following toools:
 ## Usage Notes
 - Call this tool FIRST when you need capabilities not available in your current toolset
 - You can request multiple tools in one call
+
+## Next Steps
+- After picking tools, call the selected tools.
+- Monitor the output of each tool and adjust your strategy as needed.
+
 "#####,
                 tools_list
             ),
