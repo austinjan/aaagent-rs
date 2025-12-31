@@ -3,7 +3,8 @@
 //! This module provides high-level helpers that wrap common patterns
 //! like chat loops with tool execution.
 
-use super::{LLMProvider, LoopStep, Message, Tool, ToolCall, ToolResult};
+use super::registry::ToolRegistry;
+use super::{LLMProvider, LoopStep, Message, Role, Tool, ToolCall, ToolResult};
 use crate::log;
 use std::collections::HashMap;
 use std::future::Future;
@@ -34,8 +35,10 @@ pub type ToolResultCallback = Box<dyn Fn(&[ToolResult]) + Send>;
 
 /// Configuration for chat_loop_with_tools
 pub struct ChatLoopConfig {
-    /// Tool executors by tool name
+    /// Tool executors by tool name (legacy, used when registry is None)
     pub tool_executors: HashMap<String, ToolExecutor>,
+    /// Tool registry for lazy loading (preferred over tool_executors)
+    pub registry: Option<ToolRegistry>,
     /// Optional callback for streaming content
     pub on_content: Option<ContentCallback>,
     /// Optional callback when tool calls are requested
@@ -53,6 +56,7 @@ impl ChatLoopConfig {
     pub fn new() -> Self {
         Self {
             tool_executors: HashMap::new(),
+            registry: None,
             on_content: None,
             on_tool_calls: None,
             on_tool_results: None,
@@ -61,7 +65,18 @@ impl ChatLoopConfig {
         }
     }
 
-    /// Register a tool executor
+    /// Use a ToolRegistry for lazy tool loading
+    ///
+    /// When set, the registry handles all tool execution automatically.
+    /// LLM first sees brief descriptions + pick_tool, then full definitions after picking.
+    pub fn with_registry(mut self, registry: ToolRegistry) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
+    /// Register a tool executor (legacy method)
+    ///
+    /// Prefer `with_registry()` for new code.
     pub fn with_tool<F, Fut>(mut self, name: impl Into<String>, executor: F) -> Self
     where
         F: Fn(ToolCall) -> Fut + Send + 'static,
@@ -138,32 +153,24 @@ pub struct ChatLoopResponse {
 ///
 /// This function handles the entire chat loop lifecycle:
 /// - Streams content to callbacks
-/// - Automatically executes tools using registered executors
+/// - Automatically executes tools using registered executors or registry
 /// - Handles multiple rounds of tool calling
 /// - Returns the final result
 ///
-/// # Example
+/// # Example (with registry - recommended)
 ///
 /// ```no_run
 /// use km_tools::llm::*;
-/// use km_tools::tools::BashTool;
-/// use std::sync::Arc;
 ///
 /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
-///     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), "demo-key".to_string())?;
-///     let bash_tool = Arc::new(BashTool::new());
+///     let provider = OpenAIProvider::create("gpt-4".to_string(), "key".to_string())?;
+///     let registry = ToolRegistry::new().register_all_builtin();
 ///
 ///     let config = ChatLoopConfig::new()
-///         .with_tool("bash", {
-///             let tool = bash_tool.clone();
-///             move |call| {
-///                 let tool = tool.clone();
-///                 async move { tool.execute(&call).await }
-///             }
-///         })
+///         .with_registry(registry)
 ///         .on_content(|text| print!("{}", text));
 ///
-///     let response = chat_loop_with_tools(
+///     let response = chat_with_registry(
 ///         &provider,
 ///         vec![Message {
 ///             role: Role::User,
@@ -171,7 +178,6 @@ pub struct ChatLoopResponse {
 ///             tool_call_id: None,
 ///             tool_calls: None,
 ///         }],
-///         vec![bash_tool.as_tool()],
 ///         config
 ///     ).await?;
 ///
@@ -183,23 +189,44 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
     provider: &P,
     messages: Vec<Message>,
     tools: Vec<Tool>,
-    config: ChatLoopConfig,
+    mut config: ChatLoopConfig,
 ) -> Result<ChatLoopResponse, super::ProviderError> {
-    // Log loop start and input messages
     log("Start chat_loop_with_tools");
 
     for (idx, msg) in messages.iter().enumerate() {
         log(format!("  [input:{}]  {}", idx + 1, msg));
     }
 
-    let mut handle = provider.chat_loop(messages, Some(tools)).await?;
+    // Determine which tools to send to LLM
+    let tools_for_llm = if let Some(ref registry) = config.registry {
+        registry.get_tools_for_llm()
+    } else {
+        tools.clone()
+    };
+
+    let mut current_messages = messages;
+    let mut handle = provider
+        .chat_loop(current_messages.clone(), Some(tools_for_llm))
+        .await?;
 
     let mut full_content = String::new();
     let mut all_tool_calls = Vec::new();
     let mut rounds = 0;
+    let mut total_usage = super::TokenUsage::default();
 
-    while let Some(event_result) = handle.next().await {
-        let event = event_result?;
+    loop {
+        let event_result = handle.next().await;
+
+        let event = match event_result {
+            Some(Ok(e)) => e,
+            Some(Err(e)) => return Err(e),
+            None => {
+                log("[error] chat_loop ended unexpectedly");
+                return Err(super::ProviderError::ApiError(
+                    "Chat loop ended unexpectedly".to_string(),
+                ));
+            }
+        };
 
         match event {
             LoopStep::Thinking(thought) => {
@@ -240,22 +267,26 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                     )));
                 }
 
-                // Add any content before tool calls
                 if !content.is_empty() {
                     full_content.push_str(&content);
                 }
 
-                // Notify callback
                 if let Some(ref callback) = config.on_tool_calls {
                     callback(&tool_calls);
                 }
+
+                // Check if pick_tool was called
+                let has_pick_tool = tool_calls.iter().any(|c| c.name == "pick_tool");
 
                 // Execute tools
                 let mut results = Vec::new();
                 for call in &tool_calls {
                     all_tool_calls.push(call.clone());
 
-                    let result = if let Some(executor) = config.tool_executors.get(&call.name) {
+                    let result = if let Some(ref mut registry) = config.registry {
+                        log(format!("[exec:registry] {} ({})", call.id, call.name));
+                        registry.execute(call).await
+                    } else if let Some(executor) = config.tool_executors.get(&call.name) {
                         log(format!("[exec] {} ({})", call.id, call.name));
                         match executor(call.clone()).await {
                             Ok(output) => ToolResult {
@@ -284,7 +315,6 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                     results.push(result);
                 }
 
-                // Notify callback with results
                 if let Some(ref callback) = config.on_tool_results {
                     callback(&results);
                 }
@@ -303,24 +333,64 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                     ));
                 }
 
-                // Submit results
+                // If pick_tool was called, restart chat_loop with new tools
+                if has_pick_tool && config.registry.is_some() {
+                    log("[pick_tool] restarting chat_loop with picked tools");
+
+                    // Build updated message history
+                    // Add assistant message with tool calls
+                    current_messages.push(Message {
+                        role: Role::Assistant,
+                        content: content.clone(),
+                        tool_call_id: None,
+                        tool_calls: Some(tool_calls.clone()),
+                    });
+
+                    // Add tool results
+                    for result in &results {
+                        current_messages.push(Message {
+                            role: Role::Tool,
+                            content: result.content.clone(),
+                            tool_call_id: Some(result.tool_call_id.clone()),
+                            tool_calls: None,
+                        });
+                    }
+
+                    // Get new tools (now with full definitions for picked tools)
+                    let new_tools = config.registry.as_ref().unwrap().get_tools_for_llm();
+                    log(format!(
+                        "[pick_tool] new tools: {:?}",
+                        new_tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+                    ));
+
+                    // Start new chat_loop with updated history and tools
+                    handle = provider
+                        .chat_loop(current_messages.clone(), Some(new_tools))
+                        .await?;
+                    continue;
+                }
+
+                // Normal flow: submit results and continue
                 handle.submit_tool_results(results)?;
             }
             LoopStep::ToolResultsReceived { .. } => {
                 log("[results_received]");
-                // Just continue
             }
             LoopStep::Done {
                 content,
-                total_usage,
+                total_usage: usage,
                 finish_reason,
                 ..
             } => {
                 log(format!(
                     "[done] reason={:?} in={} out={}",
-                    finish_reason, total_usage.input_tokens, total_usage.output_tokens
+                    finish_reason, usage.input_tokens, usage.output_tokens
                 ));
-                // Update final content if provided
+
+                total_usage.input_tokens += usage.input_tokens;
+                total_usage.output_tokens += usage.output_tokens;
+                total_usage.cached_tokens += usage.cached_tokens;
+
                 if !content.is_empty() && content != full_content {
                     full_content = content;
                 }
@@ -334,11 +404,57 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
             }
         }
     }
+}
 
-    log("[error] chat_loop ended unexpectedly");
-    Err(super::ProviderError::ApiError(
-        "Chat loop ended unexpectedly".to_string(),
-    ))
+/// Convenience function for chat loop with ToolRegistry
+///
+/// This is the recommended way to use the chat loop with lazy tool loading.
+/// Tools are registered once, and the registry handles both description
+/// serving and execution.
+///
+/// # Workflow
+///
+/// 1. LLM sees brief tool descriptions + `pick_tool`
+/// 2. LLM calls `pick_tool` to select needed tools
+/// 3. Chat restarts with full definitions of picked tools
+/// 4. LLM can now use the actual tools
+///
+/// # Example
+///
+/// ```no_run
+/// use km_tools::llm::*;
+///
+/// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+///     let provider = OpenAIProvider::create("gpt-4".to_string(), "key".to_string())?;
+///
+///     // Register all built-in tools
+///     let registry = ToolRegistry::new().register_all_builtin();
+///
+///     let config = ChatLoopConfig::new()
+///         .with_registry(registry)
+///         .on_content(|text| print!("{}", text));
+///
+///     let messages = vec![Message {
+///         role: Role::User,
+///         content: "List files".to_string(),
+///         tool_call_id: None,
+///         tool_calls: None,
+///     }];
+///     let response = chat_with_registry(&provider, messages, config).await?;
+///     Ok(())
+/// }
+/// ```
+pub async fn chat_with_registry<P: LLMProvider>(
+    provider: &P,
+    messages: Vec<Message>,
+    config: ChatLoopConfig,
+) -> Result<ChatLoopResponse, super::ProviderError> {
+    if config.registry.is_none() {
+        return Err(super::ProviderError::ConfigError(
+            "chat_with_registry requires config.with_registry() to be set".to_string(),
+        ));
+    }
+    chat_loop_with_tools(provider, messages, vec![], config).await
 }
 
 fn truncate_for_log(text: &str) -> String {

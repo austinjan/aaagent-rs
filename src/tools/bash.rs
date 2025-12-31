@@ -2,6 +2,7 @@
 //!
 //! Provides a tool that allows LLMs to execute bash/shell commands safely.
 
+use super::ToolProvider;
 use crate::llm::{Tool, ToolCall};
 use serde_json::json;
 use std::time::Duration;
@@ -110,22 +111,14 @@ WHEN NOT TO USE:
 ✗ Commands requiring user interaction (stdin not supported)
 ✗ Operations needing elevated permissions (no sudo/admin elevation)
 ✗ Long-running services (use background execution tools instead)
-
-CONSTRAINTS:
-- Timeout: {timeout} seconds maximum
-- No stdin support (interactive commands will hang or fail)
-- Runs with current user permissions only
-- Working directory: current process directory (unless configured otherwise)
-- Output size: unlimited (but consider LLM context limits)
 "#,
             os = os,
             shell_name = shell_name,
             platform_note = platform_note,
-            timeout = self.timeout_secs,
         );
 
         Tool {
-            name: "bash".to_string(), // keep stable name for LLM
+            name: "bash".to_string(),
             description,
             parameters: json!({
                 "type": "object",
@@ -137,6 +130,7 @@ CONSTRAINTS:
                 },
                 "required": ["command"]
             }),
+            full_description: None,
         }
     }
 
@@ -337,6 +331,82 @@ CONSTRAINTS:
 impl Default for BashTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ToolProvider for BashTool {
+    fn name(&self) -> &str {
+        "bash"
+    }
+
+    fn brief(&self) -> &str {
+        "Execute shell commands and return output."
+    }
+
+    fn full_description(&self) -> String {
+        // Reuse the description generation from as_tool()
+        let os = std::env::consts::OS;
+        let (shell_name, platform_note) = match os {
+            "windows" => ("PowerShell", "Use standard PowerShell cmdlets and syntax."),
+            _ => ("bash", "Use standard bash/POSIX commands and syntax."),
+        };
+
+        format!(
+            r#"Execute a shell command and return the output.
+
+PLATFORM INFORMATION:
+Current OS: {os}
+Shell: {shell_name}
+{platform_note}
+
+USAGE NOTES:
+- Commands execute in the current working directory
+- Both stdout and stderr are captured and returned combined
+- Stderr is separated with "---STDERR---" marker if present
+- Empty output returns: "(Command completed successfully with no output)"
+- Successfully executed commands (exit code 0) return Ok(output)
+- Failed commands return Err(message) with exit code and context
+
+WHEN TO USE:
+✓ Execute system commands
+✓ Run scripts or CLI tools
+✓ Check system state (files, processes, environment)
+✓ Automate shell operations
+✓ Run build/test commands
+
+WHEN NOT TO USE:
+✗ Simple file reading (use file I/O instead for better performance)
+✗ Commands requiring user interaction (stdin not supported)
+✗ Operations needing elevated permissions (no sudo/admin elevation)
+✗ Long-running services (use background execution tools instead)
+
+CONSTRAINTS:
+- Timeout: {timeout} seconds maximum
+- No stdin support (interactive commands will hang or fail)
+- Runs with current user permissions only
+"#,
+            os = os,
+            shell_name = shell_name,
+            platform_note = platform_note,
+            timeout = self.timeout_secs,
+        )
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute."
+                }
+            },
+            "required": ["command"]
+        })
+    }
+
+    fn execute<'a>(&'a self, call: &'a ToolCall) -> super::BoxFuture<'a, Result<String, String>> {
+        Box::pin(async move { BashTool::execute(self, call).await })
     }
 }
 

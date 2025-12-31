@@ -3,6 +3,7 @@
 
 pub mod helpers;
 pub mod provider;
+pub mod registry;
 
 #[cfg(feature = "openai")]
 pub mod openai;
@@ -16,6 +17,7 @@ mod tests;
 // Re-export main types
 pub use helpers::*;
 pub use provider::*;
+pub use registry::ToolRegistry;
 
 #[cfg(feature = "openai")]
 pub use openai::OpenAIProvider;
