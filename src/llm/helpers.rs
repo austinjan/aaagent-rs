@@ -180,26 +180,37 @@ pub struct ChatLoopResponse {
 /// use km_tools::llm::*;
 /// use km_tools::tools::BashTool;
 ///
-/// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// #     let api_key = std::env::var("OPENAI_API_KEY")?;
 ///     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), api_key)?;
 ///     let bash_tool = BashTool::new();
+///     let tool_def = bash_tool.as_tool();
 ///
 ///     let config = ChatLoopConfig::new()
-///         .with_tool("bash", |call| async move {
-///             bash_tool.execute(&call).await
+///         .with_tool("bash", {
+///             let bash_tool = bash_tool.clone();
+///             move |call| {
+///                 let bash_tool = bash_tool.clone();
+///                 async move { bash_tool.execute(&call).await }
+///             }
 ///         })
 ///         .on_content(|text| print!("{}", text));
 ///
 ///     let response = chat_loop_with_tools(
 ///         &provider,
-///         vec![Message::user("List files in current directory")],
-///         vec![bash_tool.as_tool()],
+///         vec![Message {
+///             role: Role::User,
+///             content: "List files in current directory".to_string(),
+///             tool_call_id: None,
+///             tool_calls: None,
+///         }],
+///         vec![tool_def],
 ///         config
 ///     ).await?;
 ///
 ///     println!("Done! Used {} tokens", response.usage.total());
-///     Ok(())
-/// }
+/// #     Ok(())
+/// # }
 /// ```
 pub async fn chat_loop_with_tools<P: LLMProvider>(
     provider: &P,
