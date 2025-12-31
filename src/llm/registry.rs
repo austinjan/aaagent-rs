@@ -309,8 +309,8 @@ mod tests {
         let registry = ToolRegistry::new().register_all_builtin();
         let tools = registry.get_tools_for_llm();
 
-        let has_pick_tool = tools.iter().any(|t| t.name == "pick_tool");
-        assert!(has_pick_tool);
+        let has_pick_tool = tools.iter().any(|t| t.name == "pick_tools");
+        assert!(has_pick_tool, "Expected pick_tools in tools list");
     }
 
     #[test]
@@ -355,9 +355,9 @@ mod tests {
             .register(BashTool::new().with_timeout(60)); // Same tool, different config
 
         // This won't work well since both have same name "bash"
-        // Let's just verify the pick_tool is included when there are unpicked tools
+        // Let's just verify the pick_tools is included when there are unpicked tools
         let tools = registry.get_tools_for_llm();
-        let has_pick_tool = tools.iter().any(|t| t.name == "pick_tool");
+        let has_pick_tool = tools.iter().any(|t| t.name == "pick_tools");
         assert!(has_pick_tool);
     }
 }
