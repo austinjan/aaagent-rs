@@ -176,7 +176,7 @@ pub struct Message {
 }
 
 /// Tool call made by the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,

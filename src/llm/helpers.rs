@@ -31,6 +31,12 @@ pub type ToolCallCallback = Box<dyn Fn(&[ToolCall]) + Send>;
 /// Called after tool execution, before submitting to LLM
 pub type ToolResultCallback = Box<dyn Fn(&[ToolResult]) + Send>;
 
+/// Callback for when a loop is detected
+///
+/// Called when the loop detector identifies a loop
+/// Return true to continue, false to terminate
+pub type LoopDetectionCallback = Box<dyn Fn(&super::LoopDetection) -> bool + Send>;
+
 /// Configuration for chat_loop_with_tools
 pub struct ChatLoopConfig {
     /// Tool executors by tool name
@@ -43,8 +49,12 @@ pub struct ChatLoopConfig {
     pub on_tool_results: Option<ToolResultCallback>,
     /// Optional callback for thinking content (Claude, o1, etc.)
     pub on_thinking: Option<ContentCallback>,
+    /// Optional callback when a loop is detected
+    pub on_loop_detected: Option<LoopDetectionCallback>,
     /// Maximum number of tool call rounds (default: 10)
     pub max_rounds: usize,
+    /// Loop detection configuration (None to disable)
+    pub loop_detection: Option<super::LoopDetectorConfig>,
 }
 
 impl ChatLoopConfig {
@@ -56,7 +66,9 @@ impl ChatLoopConfig {
             on_tool_calls: None,
             on_tool_results: None,
             on_thinking: None,
+            on_loop_detected: None,
             max_rounds: 10,
+            loop_detection: Some(super::LoopDetectorConfig::default()),
         }
     }
 
@@ -107,9 +119,30 @@ impl ChatLoopConfig {
         self
     }
 
+    /// Set loop detection callback
+    pub fn on_loop_detected<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&super::LoopDetection) -> bool + Send + 'static,
+    {
+        self.on_loop_detected = Some(Box::new(callback));
+        self
+    }
+
     /// Set maximum rounds
     pub fn with_max_rounds(mut self, max_rounds: usize) -> Self {
         self.max_rounds = max_rounds;
+        self
+    }
+
+    /// Set loop detection configuration
+    pub fn with_loop_detection(mut self, config: super::LoopDetectorConfig) -> Self {
+        self.loop_detection = Some(config);
+        self
+    }
+
+    /// Disable loop detection
+    pub fn without_loop_detection(mut self) -> Self {
+        self.loop_detection = None;
         self
     }
 }
@@ -180,6 +213,12 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
     let mut all_tool_calls = Vec::new();
     let mut rounds = 0;
 
+    // Initialize loop detector if enabled
+    let mut loop_detector = config
+        .loop_detection
+        .as_ref()
+        .map(|cfg| super::LoopDetector::with_config(cfg.clone()));
+
     while let Some(event_result) = handle.next().await {
         let event = event_result?;
 
@@ -216,6 +255,45 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                 // Notify callback
                 if let Some(ref callback) = config.on_tool_calls {
                     callback(&tool_calls);
+                }
+
+                // Check for loops before executing tools
+                if let Some(ref mut detector) = loop_detector {
+                    for call in &tool_calls {
+                        if let Some(detection) = detector.check(call) {
+                            // Call user callback if provided
+                            let should_continue =
+                                if let Some(ref callback) = config.on_loop_detected {
+                                    callback(&detection)
+                                } else {
+                                    // Default behavior based on action
+                                    match detection.action {
+                                        super::LoopAction::Continue => true,
+                                        super::LoopAction::Warn => {
+                                            // Inject warning message
+                                            if let Some(warning) = detection.warning_message {
+                                                handle.submit_tool_results(vec![ToolResult {
+                                                    tool_call_id: call.id.clone(),
+                                                    content: warning,
+                                                    is_error: false,
+                                                }])?;
+                                            }
+                                            true
+                                        }
+                                        super::LoopAction::Terminate => false,
+                                    }
+                                };
+
+                            if !should_continue {
+                                // Clear detector state and return error
+                                detector.clear();
+                                return Err(super::ProviderError::ApiError(format!(
+                                    "Loop detected: {}",
+                                    detection.suggestion
+                                )));
+                            }
+                        }
+                    }
                 }
 
                 // Execute tools
