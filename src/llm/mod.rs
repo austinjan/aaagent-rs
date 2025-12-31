@@ -12,6 +12,9 @@ pub mod openai;
 #[cfg(feature = "gemini")]
 pub mod gemini;
 
+#[cfg(feature = "anthropic")]
+pub mod anthropic;
+
 #[cfg(test)]
 mod tests;
 
@@ -26,3 +29,6 @@ pub use openai::OpenAIProvider;
 
 #[cfg(feature = "gemini")]
 pub use gemini::GeminiProvider;
+
+#[cfg(feature = "anthropic")]
+pub use anthropic::AnthropicProvider;
