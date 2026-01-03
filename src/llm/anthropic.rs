@@ -62,8 +62,8 @@ impl AnthropicProvider {
     fn build_request_body(
         &self,
         history: &[Message],
-        cfg: &ProviderConfig,
-        tools: Option<&[Tool]>,
+        _cfg: &ProviderConfig,
+        _tools: Option<&[Tool]>,
     ) -> (Vec<AnthropicMessage>, Option<AnthropicSystemPrompt>) {
         let mut messages = Vec::new();
         let mut system_prompt: Option<AnthropicSystemPrompt> = None;
@@ -821,6 +821,7 @@ struct AnthropicThinking {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct CreateMessageResponse {
     id: String,
     #[serde(rename = "type")]
@@ -849,18 +850,21 @@ struct MessageStart {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct MessageStartContent {
     id: String,
     usage: AnthropicUsage,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ContentBlockStart {
     index: usize,
     content_block: AnthropicContentBlock,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ContentBlockDelta {
     index: usize,
     delta: ContentDelta,
@@ -885,6 +889,7 @@ struct MessageDelta {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct MessageDeltaContent {
     stop_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

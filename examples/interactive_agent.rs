@@ -15,7 +15,7 @@ use simplelog::*;
 use std::env;
 use std::fs::File;
 use std::io::{self, Write};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,8 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Create registry with all built-in tools
-    // Wrapped in Arc<RwLock<>> to share mutable state across turns
-    let registry = Arc::new(RwLock::new(ToolRegistry::new().register_all_builtin()));
+    let registry = Arc::new(ToolRegistry::new().register_all_builtin());
 
     println!("╔════════════════════════════════════════════════════════════╗");
     println!(
@@ -159,11 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_max_rounds(30);
 
         // Run the chat loop
-        // Get initial tools from registry (includes pick_tools meta-tool)
-        let tools = {
-            let reg = registry.read().unwrap();
-            reg.get_tools_for_llm()
-        };
+        // Get tools from registry
+        let tools = registry.get_tools_for_llm();
         match provider
             .run_chat_loop(conversation_history.clone(), tools, config)
             .await

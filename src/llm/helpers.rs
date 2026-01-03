@@ -3,7 +3,7 @@
 //! This module provides high-level helpers that wrap common patterns
 //! like chat loops with tool execution.
 
-use super::{LLMProvider, LoopStep, Message, Role, Tool, ToolCall, ToolResult};
+use super::{LLMProvider, LoopStep, Message, Tool, ToolCall, ToolResult};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -39,11 +39,10 @@ pub type LoopDetectionCallback = Box<dyn Fn(&super::LoopDetection) -> bool + Sen
 
 /// Configuration for chat_loop_with_tools
 pub struct ChatLoopConfig {
-    /// Tool executors by tool name (legacy, used when registry is None)
+    /// Tool executors by tool name (used as fallback when tool not in registry)
     pub tool_executors: HashMap<String, ToolExecutor>,
-    /// Tool registry for lazy loading (preferred over tool_executors)
-    /// Wrapped in Arc<RwLock<>> to allow shared mutable access across turns
-    pub registry: Option<std::sync::Arc<std::sync::RwLock<super::registry::ToolRegistry>>>,
+    /// Tool registry for registered tools
+    pub registry: Option<std::sync::Arc<super::registry::ToolRegistry>>,
     /// Optional callback for streaming content
     pub on_content: Option<ContentCallback>,
     /// Optional callback when tool calls are requested
@@ -135,7 +134,7 @@ impl ChatLoopConfig {
     /// Set tool registry
     pub fn with_registry(
         mut self,
-        registry: std::sync::Arc<std::sync::RwLock<super::registry::ToolRegistry>>,
+        registry: std::sync::Arc<super::registry::ToolRegistry>,
     ) -> Self {
         self.registry = Some(registry);
         self
@@ -231,11 +230,8 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
     tools: Vec<Tool>,
     config: ChatLoopConfig,
 ) -> Result<ChatLoopResponse, super::ProviderError> {
-    let mut current_messages = messages;
-    let mut current_tools = tools;
     let mut full_content = String::new();
     let mut all_tool_calls = Vec::new();
-    let mut total_rounds = 0;
 
     // Initialize loop detector if enabled
     let mut loop_detector = config
@@ -243,73 +239,64 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
         .as_ref()
         .map(|cfg| super::LoopDetector::with_config(cfg.clone()));
 
-    // Outer loop: restart when tools are picked
-    loop {
-        let mut handle = provider
-            .chat_loop(current_messages.clone(), Some(current_tools.clone()))
-            .await?;
-        let mut rounds = 0;
-        let mut tools_picked = false;
+    let mut handle = provider.chat_loop(messages, Some(tools)).await?;
+    let mut rounds = 0;
 
-        while let Some(event_result) = handle.next().await {
-            let event = event_result?;
+    while let Some(event_result) = handle.next().await {
+        let event = event_result?;
 
-            match event {
-                LoopStep::Thinking(thought) => {
-                    if let Some(ref callback) = config.on_thinking {
-                        callback(&thought);
-                    }
+        match event {
+            LoopStep::Thinking(thought) => {
+                if let Some(ref callback) = config.on_thinking {
+                    callback(&thought);
                 }
-                LoopStep::Content(text) => {
-                    full_content.push_str(&text);
-                    if let Some(ref callback) = config.on_content {
-                        callback(&text);
-                    }
+            }
+            LoopStep::Content(text) => {
+                full_content.push_str(&text);
+                if let Some(ref callback) = config.on_content {
+                    callback(&text);
                 }
-                LoopStep::ToolCallsRequested {
-                    tool_calls,
-                    content,
-                } => {
-                    rounds += 1;
+            }
+            LoopStep::ToolCallsRequested {
+                tool_calls,
+                content,
+            } => {
+                rounds += 1;
 
-                    if rounds > config.max_rounds {
-                        return Err(super::ProviderError::ApiError(format!(
-                            "Maximum rounds ({}) exceeded",
-                            config.max_rounds
-                        )));
-                    }
+                if rounds > config.max_rounds {
+                    return Err(super::ProviderError::ApiError(format!(
+                        "Maximum rounds ({}) exceeded",
+                        config.max_rounds
+                    )));
+                }
 
-                    // Add any content before tool calls
-                    if !content.is_empty() {
-                        full_content.push_str(&content);
-                    }
+                // Add any content before tool calls
+                if !content.is_empty() {
+                    full_content.push_str(&content);
+                }
 
-                    // Notify callback
-                    if let Some(ref callback) = config.on_tool_calls {
-                        callback(&tool_calls);
-                    }
+                // Notify callback
+                if let Some(ref callback) = config.on_tool_calls {
+                    callback(&tool_calls);
+                }
 
-                    // Check for loops before executing tools
-                    if let Some(ref mut detector) = loop_detector {
-                        for call in &tool_calls {
-                            if let Some(detection) = detector.check(call) {
-                                // Call user callback if provided
-                                let should_continue = if let Some(ref callback) =
-                                    config.on_loop_detected
-                                {
+                // Check for loops and collect warnings
+                let mut loop_warnings: HashMap<String, String> = HashMap::new();
+                if let Some(ref mut detector) = loop_detector {
+                    for call in &tool_calls {
+                        if let Some(detection) = detector.check(call) {
+                            // Call user callback if provided
+                            let should_continue =
+                                if let Some(ref callback) = config.on_loop_detected {
                                     callback(&detection)
                                 } else {
                                     // Default behavior based on action
                                     match detection.action {
                                         super::LoopAction::Continue => true,
                                         super::LoopAction::Warn => {
-                                            // Inject warning message
+                                            // Collect warning to prepend to tool result
                                             if let Some(warning) = detection.warning_message {
-                                                handle.submit_tool_results(vec![ToolResult {
-                                                    tool_call_id: call.id.clone(),
-                                                    content: warning,
-                                                    is_error: false,
-                                                }])?;
+                                                loop_warnings.insert(call.id.clone(), warning);
                                             }
                                             true
                                         }
@@ -317,42 +304,30 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                                     }
                                 };
 
-                                if !should_continue {
-                                    // Clear detector state and return error
-                                    detector.clear();
-                                    return Err(super::ProviderError::ApiError(format!(
-                                        "Loop detected: {}",
-                                        detection.suggestion
-                                    )));
-                                }
+                            if !should_continue {
+                                // Clear detector state and return error
+                                detector.clear();
+                                return Err(super::ProviderError::ApiError(format!(
+                                    "Loop detected: {}",
+                                    detection.suggestion
+                                )));
                             }
                         }
                     }
+                }
 
-                    // Execute tools
-                    let mut results = Vec::new();
+                // Execute tools
+                let mut results = Vec::new();
 
-                    for call in &tool_calls {
-                        all_tool_calls.push(call.clone());
+                for call in &tool_calls {
+                    all_tool_calls.push(call.clone());
 
-                        // Prefer registry if available, fallback to executors
-                        let result = if let Some(ref registry) = config.registry {
-                            // Use registry.execute() which handles pick_tools meta-tool
-                            let tool_result = {
-                                let mut reg = registry.write().unwrap();
-                                reg.execute(call).await
-                            };
-
-                            // Check if this was a pick_tools call
-                            if (call.name == "pick_tools" || call.name == "pick_tool")
-                                && !tool_result.is_error
-                            {
-                                tools_picked = true;
-                            }
-
-                            tool_result
+                    // Try registry first, then fallback to executors
+                    let result = if let Some(ref registry) = config.registry {
+                        if let Some(result) = registry.execute(call).await {
+                            result
                         } else if let Some(executor) = config.tool_executors.get(&call.name) {
-                            // Fallback to legacy executor
+                            // Tool not in registry, try executor
                             match executor(call.clone()).await {
                                 Ok(output) => ToolResult {
                                     tool_call_id: call.id.clone(),
@@ -371,91 +346,75 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                                 content: format!("Tool '{}' not registered", call.name),
                                 is_error: true,
                             }
-                        };
-
-                        results.push(result);
-                    }
-
-                    // Notify callback with results
-                    if let Some(ref callback) = config.on_tool_results {
-                        callback(&results);
-                    }
-
-                    // If tools were picked, update the handle with new tools
-                    if tools_picked {
-                        if let Some(ref registry) = config.registry {
-                            let new_tools = {
-                                let reg = registry.read().unwrap();
-                                reg.get_tools_for_llm()
-                            };
-                            handle.update_tools(new_tools)?;
                         }
-                    }
-
-                    // Submit results
-                    handle.submit_tool_results(results)?;
-                }
-                LoopStep::ToolResultsReceived { .. } => {
-                    // Just continue
-                }
-                LoopStep::Done {
-                    content,
-                    total_usage,
-                    ..
-                } => {
-                    // Update final content if provided
-                    if !content.is_empty() && content != full_content {
-                        full_content = content;
-                    }
-
-                    total_rounds += rounds;
-
-                    // If tools were picked, restart with updated tools
-                    if tools_picked {
-                        // Get updated tools from registry
-                        if let Some(ref registry) = config.registry {
-                            current_tools = {
-                                let reg = registry.read().unwrap();
-                                reg.get_tools_for_llm()
-                            };
+                    } else if let Some(executor) = config.tool_executors.get(&call.name) {
+                        // No registry, use executor directly
+                        match executor(call.clone()).await {
+                            Ok(output) => ToolResult {
+                                tool_call_id: call.id.clone(),
+                                content: output,
+                                is_error: false,
+                            },
+                            Err(error) => ToolResult {
+                                tool_call_id: call.id.clone(),
+                                content: error,
+                                is_error: true,
+                            },
                         }
-                        // Update messages with current history from provider
-                        current_messages = provider.get_history();
+                    } else {
+                        ToolResult {
+                            tool_call_id: call.id.clone(),
+                            content: format!("Tool '{}' not registered", call.name),
+                            is_error: true,
+                        }
+                    };
 
-                        // Add a system message to prompt the LLM to continue with the original task
-                        current_messages.push(Message {
-                            role: Role::User,
-                            content:
-                                "Tools have been loaded. Please continue with the original task."
-                                    .to_string(),
-                            tool_call_id: None,
-                            tool_calls: None,
-                        });
+                    // Prepend loop warning if present
+                    let result = if let Some(warning) = loop_warnings.get(&call.id) {
+                        ToolResult {
+                            tool_call_id: result.tool_call_id,
+                            content: format!("{}\n\n{}", warning, result.content),
+                            is_error: result.is_error,
+                        }
+                    } else {
+                        result
+                    };
 
-                        // Reset flag and restart outer loop
-                        break; // Break inner loop, continue outer loop
-                    }
-
-                    // No tools picked, conversation is complete
-                    // Clear picked tools from registry for next conversation
-                    if let Some(ref registry) = config.registry {
-                        let mut reg = registry.write().unwrap();
-                        reg.clear_picked();
-                    }
-
-                    return Ok(ChatLoopResponse {
-                        content: full_content,
-                        usage: total_usage,
-                        all_tool_calls,
-                        rounds: total_rounds,
-                    });
+                    results.push(result);
                 }
+
+                // Notify callback with results
+                if let Some(ref callback) = config.on_tool_results {
+                    callback(&results);
+                }
+
+                // Submit results once
+                handle.submit_tool_results(results)?;
             }
-        } // End of inner while loop
-    } // End of outer loop
+            LoopStep::ToolResultsReceived { .. } => {
+                // Just continue
+            }
+            LoopStep::Done {
+                content,
+                total_usage,
+                ..
+            } => {
+                // Update final content if provided
+                if !content.is_empty() && content != full_content {
+                    full_content = content;
+                }
 
-    // This code is unreachable but kept for clarity - the outer loop always returns
-    // Either on LoopStep::Done (no tools_picked) or continues forever on restarts
+                return Ok(ChatLoopResponse {
+                    content: full_content,
+                    usage: total_usage,
+                    all_tool_calls,
+                    rounds,
+                });
+            }
+        }
+    }
+
+    unreachable!()
 }
 
 #[cfg(test)]
