@@ -1,6 +1,24 @@
 # ToolRegistry Integration Design
 
-## Problem Statement
+> **Status**: PARTIALLY IMPLEMENTED  
+> **Last Updated**: 2026-01-03
+
+## Current Implementation Status
+
+### ✅ Completed
+- `ToolRegistry` struct with `register()`, `register_all_builtin()`, `execute()`
+- `ToolProvider` trait for custom tools
+- Integration in `chat_loop_with_tools()` - registry takes priority, fallback to `tool_executors`
+- `LoopDetector` for preventing repetitive tool calling patterns
+
+### ❌ Not Implemented
+- `pick_tools` meta-tool for dynamic tool selection
+- Brief vs full description switching
+- Loop restart when tools change mid-conversation
+
+---
+
+## Original Problem Statement
 
 Current implementation has a fundamental architectural issue:
 
@@ -42,9 +60,9 @@ pub async fn chat_loop(&self, messages: Vec<Message>, tools: Option<Vec<Tool>>)
 }
 ```
 
-## Solution Options
+---
 
-### Option A: Restart Loop After pick_tools ⭐ (Recommended)
+## Solution: Option A - Restart Loop After pick_tools ⭐ (Recommended)
 
 **Key Insight**: Instead of trying to update tools mid-loop, **restart the loop** with new tools.
 
@@ -128,7 +146,7 @@ pub async fn chat_loop_with_tools(
 
 ---
 
-### Option B: Add update_tools() to ChatLoopHandle
+## Alternative: Option B - Add update_tools() to ChatLoopHandle
 
 Add a channel to send tool updates:
 
@@ -158,121 +176,123 @@ impl ChatLoopHandle {
 
 ---
 
-### Option C: Hybrid - registry.execute() in helpers, manual restart
+## Current Implementation (Partial)
 
-Simplest implementation:
+The current `chat_loop_with_tools()` in `helpers.rs` supports:
 
 ```rust
-// In chat_loop_with_tools:
-
-// Execute tools
-for call in &tool_calls {
-    let result = if let Some(ref mut registry) = config.registry {
-        // Use registry.execute() which handles pick_tools
-        registry.execute(call).await
+// Registry takes priority, falls back to tool_executors
+let result = if let Some(ref registry) = config.registry {
+    if let Some(result) = registry.execute(call).await {
+        result
     } else if let Some(executor) = config.tool_executors.get(&call.name) {
-        // Fallback to legacy executors
-        match executor(call.clone()).await {
-            Ok(output) => ToolResult { ... },
-            Err(error) => ToolResult { is_error: true, ... },
-        }
-    } else {
-        ToolResult { is_error: true, content: "Tool not found" }
-    };
-    
-    results.push(result);
+        // Tool not in registry, try executor
+        // ...
+    }
 }
 ```
 
-**Issue**: Still doesn't solve the dynamic tools update problem.
+**What's missing:**
+1. `pick_tools` meta-tool implementation
+2. `registry.get_tools_for_llm()` returning brief descriptions initially
+3. Loop restart logic when `pick_tools` is called
+4. `registry.clear_picked()` method
 
 ---
 
-## Recommended Implementation: Option A
+## Implementation Plan (If Proceeding)
 
-### Implementation Plan
-
-1. **Change `chat_loop_with_tools` signature**:
+### Phase 1: ToolRegistry Enhancements
 ```rust
-// OLD: accepts static tools
-pub async fn chat_loop_with_tools(
-    provider: &P,
-    messages: Vec<Message>,
-    tools: Vec<Tool>,  // ← Static
-    config: ChatLoopConfig,
-)
-
-// NEW: requires registry in config
-pub async fn chat_loop_with_tools(
-    provider: &P,
-    messages: Vec<Message>,
-    config: ChatLoopConfig,  // config.registry required
-)
-```
-
-2. **Implement nested loop**:
-   - Outer loop: Restart when tools change
-   - Inner loop: Handle chat_loop events
-
-3. **Track state across restarts**:
-   - Accumulate messages
-   - Accumulate tool calls
-   - Count total rounds
-
-4. **Detect pick_tools calls**:
-   - When `call.name == "pick_tools"` and result is success
-   - Set flag to restart outer loop
-
-5. **Clear registry on completion**:
-   - Call `registry.clear_picked()` when Done
-
-### Migration Path
-
-**Legacy support** (for users not using registry):
-
-```rust
-// Option 1: Separate function
-pub async fn chat_loop_with_tools_legacy(
-    provider: &P,
-    messages: Vec<Message>,
-    tools: Vec<Tool>,
-    config: ChatLoopConfig,
-) -> Result<...> {
-    // Old implementation
-}
-
-// Option 2: Auto-create registry
-pub async fn chat_loop_with_tools(
-    provider: &P,
-    messages: Vec<Message>,
-    mut config: ChatLoopConfig,
-) -> Result<...> {
-    // If no registry, create one from tool_executors
-    if config.registry.is_none() && !config.tool_executors.is_empty() {
-        let mut registry = ToolRegistry::new();
-        // Convert tool_executors to registry tools... (complex)
+impl ToolRegistry {
+    /// Track which tools have been "picked" for full descriptions
+    picked_tools: HashSet<String>,
+    
+    /// Get tools for LLM - brief by default, full if picked
+    pub fn get_tools_for_llm(&self) -> Vec<Tool> {
+        self.tools.values().map(|provider| {
+            let is_picked = self.picked_tools.contains(provider.name());
+            Tool {
+                name: provider.name().to_string(),
+                description: if is_picked {
+                    provider.full_description()
+                } else {
+                    provider.brief().to_string()
+                },
+                parameters: provider.parameters(),
+            }
+        }).collect()
+    }
+    
+    /// Mark tools as picked (returns full descriptions next call)
+    pub fn pick(&mut self, tool_names: &[String]) {
+        for name in tool_names {
+            self.picked_tools.insert(name.clone());
+        }
+    }
+    
+    /// Clear picked state (for conversation reset)
+    pub fn clear_picked(&mut self) {
+        self.picked_tools.clear();
     }
 }
 ```
 
-**Better**: Make registry **optional** but recommended:
-
+### Phase 2: pick_tools Meta-Tool
 ```rust
-if let Some(mut registry) = config.registry {
-    // New path: use registry with dynamic tools
-    loop {
-        let tools = registry.get_tools_for_llm();
-        // ... nested loop logic
+pub struct PickToolsTool {
+    registry: Arc<RwLock<ToolRegistry>>,
+}
+
+impl ToolProvider for PickToolsTool {
+    fn name(&self) -> &str { "pick_tools" }
+    
+    fn brief(&self) -> &str {
+        "Select tools to get their full specifications"
     }
-} else {
-    // Legacy path: static tools from tool_executors
-    let tools = /* convert executors to tools */;
-    let mut handle = provider.chat_loop(messages, Some(tools)).await?;
-    // ... original logic
+    
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Tool names to select"
+                }
+            },
+            "required": ["tools"]
+        })
+    }
+    
+    fn execute(&self, call: &ToolCall) -> BoxFuture<Result<String, String>> {
+        // Parse tool names from arguments
+        // Call registry.pick(tool_names)
+        // Return confirmation message
+    }
 }
 ```
 
-## Example Usage
+### Phase 3: Nested Loop in chat_loop_with_tools
+Implement the outer/inner loop pattern from Option A.
+
+---
+
+## Decision: Defer Implementation
+
+**Rationale**: The current implementation is sufficient for most use cases:
+- Direct tool registration works well
+- Full descriptions are always available
+- Loop detection prevents runaway tool calling
+
+**When to revisit**:
+- If token costs become prohibitive due to large tool descriptions
+- If LLM confusion from many tool specs becomes an issue
+- If dynamic tool selection is explicitly needed
+
+---
+
+## Example Usage (Current)
 
 ```rust
 use km_tools::llm::*;
@@ -280,28 +300,29 @@ use km_tools::tools::*;
 
 let provider = OpenAIProvider::from_env()?;
 
-let registry = ToolRegistry::new().register_all_builtin();
+// Register all built-in tools
+let registry = Arc::new(ToolRegistry::new().register_all_builtin());
 
 let config = ChatLoopConfig::new()
-    .with_registry(registry)
-    .on_content(|text| print!("{}", text));
+    .with_registry(registry.clone())
+    .on_content(|text| print!("{}", text))
+    .on_tool_calls(|calls| {
+        for call in calls {
+            println!("📞 Calling: {} with {:?}", call.name, call.arguments);
+        }
+    });
 
 let response = chat_loop_with_tools(
     &provider,
     vec![Message::user("List files in current directory")],
+    registry.get_tools_for_llm(), // Pass tools explicitly
     config,
 ).await?;
-
-// Expected flow:
-// 1. LLM sees: [bash brief] + [read_file brief] + pick_tools
-// 2. LLM calls: pick_tools(["bash"])
-// 3. Result: "Selected bash. Full spec available next turn."
-// 4. Loop restarts with: [bash FULL spec] + [read_file brief] + pick_tools
-// 5. LLM calls: bash("ls")
-// 6. Done!
 ```
 
-## Open Questions
+---
+
+## Open Questions (For Future Reference)
 
 1. **Should we auto-restart or require user confirmation?**
    - Auto-restart is more convenient
