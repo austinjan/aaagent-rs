@@ -189,8 +189,8 @@ pub struct ChatLoopResponse {
 /// # Example
 ///
 /// ```no_run
-/// use km_tools::llm::*;
-/// use km_tools::tools::BashTool;
+/// use aaagent::llm::*;
+/// use aaagent::tools::BashTool;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// #     let api_key = std::env::var("OPENAI_API_KEY")?;

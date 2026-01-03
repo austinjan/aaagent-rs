@@ -9,8 +9,8 @@
 //
 // Run with: cargo run --example loop_detection_demo --features openai
 
-use km_tools::llm::*;
-use km_tools::tools::BashTool;
+use aaagent::llm::*;
+use aaagent::tools::BashTool;
 use std::io::{self, Write};
 
 #[tokio::main]

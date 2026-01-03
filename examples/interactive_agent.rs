@@ -10,7 +10,7 @@
 //   cargo run --example interactive_agent --features openai
 //   cargo run --example interactive_agent --features "openai gemini" -- --provider=gemini
 
-use km_tools::llm::*;
+use aaagent::llm::*;
 use simplelog::*;
 use std::env;
 use std::fs::File;

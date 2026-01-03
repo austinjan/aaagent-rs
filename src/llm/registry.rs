@@ -14,8 +14,8 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```no_run
-/// use km_tools::llm::ToolRegistry;
-/// use km_tools::tools::BashTool;
+/// use aaagent::llm::ToolRegistry;
+/// use aaagent::tools::BashTool;
 ///
 /// // Register all built-in tools
 /// let registry = ToolRegistry::new().register_all_builtin();

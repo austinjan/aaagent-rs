@@ -12,7 +12,7 @@
 //
 // Set OPENAI_API_KEY environment variable before running
 
-use km_tools::llm::{LLMProvider, Message, OpenAIProvider, Role, Tool};
+use aaagent::llm::{LLMProvider, Message, OpenAIProvider, Role, Tool};
 use serde_json::json;
 
 #[tokio::main]
@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(event_result) = handle.next().await {
                 match event_result {
                     Ok(event) => {
-                        use km_tools::llm::LoopStep;
+                        use aaagent::llm::LoopStep;
                         match event {
                             LoopStep::Thinking(thought) => {
                                 // Note: OpenAI models (gpt-4o, gpt-5) don't produce thinking tokens
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
 
                                 // Simulate tool execution
-                                use km_tools::llm::ToolResult;
+                                use aaagent::llm::ToolResult;
                                 let results: Vec<ToolResult> = tool_calls
                                     .iter()
                                     .map(|call| ToolResult {

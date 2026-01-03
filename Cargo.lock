@@ -3,6 +3,32 @@
 version = 4
 
 [[package]]
+name = "aaagent"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "clap",
+ "eventsource-stream",
+ "futures",
+ "ignore",
+ "jwalk",
+ "log",
+ "pin-project",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "simplelog",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -877,32 +903,6 @@ checksum = "2735847566356cd2179a2a38264839308f7079fa96e6bd5a42d740460e003c56"
 dependencies = [
  "crossbeam",
  "rayon",
-]
-
-[[package]]
-name = "km-tools"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "bytes",
- "chrono",
- "clap",
- "eventsource-stream",
- "futures",
- "ignore",
- "jwalk",
- "log",
- "pin-project",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "simplelog",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

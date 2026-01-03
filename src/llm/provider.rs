@@ -462,7 +462,7 @@ impl ChatLoopHandle {
     /// # Example
     ///
     /// ```no_run
-    /// # use km_tools::llm::*;
+    /// # use aaagent::llm::*;
     /// # async fn example(mut handle: ChatLoopHandle, registry: ToolRegistry) -> Result<(), ProviderError> {
     /// while let Some(event) = handle.next().await {
     ///     match event? {

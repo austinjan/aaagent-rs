@@ -1,7 +1,13 @@
 [package]
-name = "km-tools"
+name = "aaagent"
 version = "0.1.0"
 edition = "2021"
+description = "Unified LLM provider abstraction with streaming, tool calling, and agent support"
+license = "MIT"
+repository = "https://github.com/austinjan/aaagent-rs"
+keywords = ["llm", "openai", "anthropic", "agent", "streaming"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 # CLI and utilities
@@ -39,3 +45,11 @@ default = ["openai", "anthropic", "gemini"]
 openai = []
 anthropic = []
 gemini = []
+
+[[bin]]
+name = "aaagent"
+path = "src/main.rs"
+
+[lib]
+name = "aaagent"
+path = "src/lib.rs"

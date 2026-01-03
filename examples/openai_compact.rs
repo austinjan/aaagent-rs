@@ -9,7 +9,7 @@
 //
 // Set OPENAI_API_KEY environment variable before running
 
-use km_tools::llm::{LLMProvider, Message, OpenAIProvider, Role};
+use aaagent::llm::{LLMProvider, Message, OpenAIProvider, Role};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

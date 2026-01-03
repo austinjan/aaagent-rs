@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::Path;
 
-use km_tools::{find_missing_readme, format_map_as_markdown, generate_map};
+use aaagent::{find_missing_readme, format_map_as_markdown, generate_map};
 
 const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*", "node_modules"];
 
@@ -26,8 +26,8 @@ fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
 }
 
 #[derive(Parser)]
-#[command(name = "km-tools")]
-#[command(author, version, about = "A collection of CLI tools for km project", long_about = None)]
+#[command(name = "aaagent")]
+#[command(author, version, about = "A collection of CLI tools for LLM agent development", long_about = None)]
 struct Cli {
     /// Enable verbose output
     #[arg(short, long, global = true)]
@@ -81,7 +81,7 @@ fn main() {
             let dir = Path::new(&path);
             let patterns = read_gitignore_patterns(dir);
             let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
-            km_tools::logger::log(format!(
+            aaagent::logger::log(format!(
                 "missing-readme path={} json={} mk={}",
                 dir.display(),
                 json,
@@ -103,7 +103,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    km_tools::logger::log(format!("missing-readme failed: {}", e));
+                    aaagent::logger::log(format!("missing-readme failed: {}", e));
                     eprintln!("Error: {}", e);
                 }
             }
@@ -112,7 +112,7 @@ fn main() {
             let dir = Path::new(&path);
             let patterns = read_gitignore_patterns(dir);
             let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
-            km_tools::logger::log(format!(
+            aaagent::logger::log(format!(
                 "generate-map path={} depth={} json={}",
                 dir.display(),
                 depth,
@@ -130,7 +130,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    km_tools::logger::log(format!("generate-map failed: {}", e));
+                    aaagent::logger::log(format!("generate-map failed: {}", e));
                     eprintln!("Error: {}", e);
                 }
             }

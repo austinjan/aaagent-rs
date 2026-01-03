@@ -7,8 +7,8 @@
 //
 // Run with: cargo run --example simple_agent
 
-use km_tools::llm::*;
-use km_tools::tools::BashTool;
+use aaagent::llm::*;
+use aaagent::tools::BashTool;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
