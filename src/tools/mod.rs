@@ -5,10 +5,12 @@
 pub mod bash;
 pub mod editor_edit;
 pub mod invoke_skill;
+pub mod shell;
 
 pub use bash::BashTool;
 pub use editor_edit::EditorEditTool;
 pub use invoke_skill::InvokeSkillTool;
+pub use shell::ShellTool;
 
 use crate::llm::ToolCall;
 use std::future::Future;
@@ -54,8 +56,16 @@ pub trait ToolProvider: Send + Sync {
 /// all available tools at once.
 pub fn all_tools() -> Vec<Arc<dyn ToolProvider>> {
     vec![
-        Arc::new(BashTool::new()),
+        Arc::new(ShellTool::new()),
         Arc::new(EditorEditTool::new()),
         // Add new built-in tools here
     ]
+}
+
+/// Returns all built-in tools including the legacy BashTool
+///
+/// Use this for backwards compatibility if you need BashTool specifically.
+#[deprecated(since = "0.2.0", note = "Use all_tools() with ShellTool instead")]
+pub fn all_tools_with_bash() -> Vec<Arc<dyn ToolProvider>> {
+    vec![Arc::new(BashTool::new()), Arc::new(EditorEditTool::new())]
 }

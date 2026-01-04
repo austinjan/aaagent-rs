@@ -11,3 +11,6 @@
 
 # Log
 *.log
+
+# Windows null device artifact
+nul

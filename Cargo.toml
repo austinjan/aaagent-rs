@@ -37,6 +37,9 @@ bytes = "1.0"
 log = "0.4"
 dirs = "6.0.0"
 
+# Shell detection
+which = "7.0"
+
 [dev-dependencies]
 simplelog = "0.12"
 tempfile = "3"

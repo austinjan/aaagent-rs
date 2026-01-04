@@ -128,7 +128,8 @@ mod tests {
     #[test]
     fn test_register_all_builtin() {
         let registry = ToolRegistry::new().register_all_builtin();
-        assert!(registry.get("bash").is_some());
+        // ShellTool replaces BashTool as the default shell command tool
+        assert!(registry.get("shell").is_some());
     }
 
     #[test]
@@ -136,10 +137,10 @@ mod tests {
         let registry = ToolRegistry::new().register_all_builtin();
         let tools = registry.get_tools_for_llm();
 
-        // Should have bash tool with full description
-        let bash_tool = tools.iter().find(|t| t.name == "bash");
-        assert!(bash_tool.is_some());
-        assert!(bash_tool.unwrap().description.len() > 50);
+        // Should have shell tool with full description
+        let shell_tool = tools.iter().find(|t| t.name == "shell");
+        assert!(shell_tool.is_some());
+        assert!(shell_tool.unwrap().description.len() > 50);
     }
 
     #[test]
@@ -184,7 +185,7 @@ mod tests {
     #[test]
     fn test_has_tool() {
         let registry = ToolRegistry::new().register_all_builtin();
-        assert!(registry.has_tool("bash"));
+        assert!(registry.has_tool("shell"));
         assert!(!registry.has_tool("nonexistent"));
     }
 }
