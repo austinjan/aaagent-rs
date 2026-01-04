@@ -4,6 +4,7 @@
 pub mod helpers;
 pub mod loop_detector;
 pub mod provider;
+pub mod rate_limit;
 pub mod registry;
 
 #[cfg(feature = "openai")]
@@ -22,6 +23,7 @@ mod tests;
 pub use helpers::*;
 pub use loop_detector::{LoopAction, LoopDetection, LoopDetector, LoopDetectorConfig, LoopType};
 pub use provider::*;
+pub use rate_limit::{RateLimitConfig, RateLimitInfo, RetryState};
 pub use registry::ToolRegistry;
 
 #[cfg(feature = "openai")]

@@ -194,7 +194,7 @@ Correct:
                 },
                 "edits": {
                     "type": "array",
-                    "description": "List of edit operations (basic mode)",
+                    "description": "List of edit operations (basic mode). Use this OR operation/anchor/content, not both.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -208,8 +208,7 @@ Correct:
                             },
                             "replace_all": {
                                 "type": "boolean",
-                                "description": "If true, replace all occurrences. If false (default), old_text must be unique.",
-                                "default": false
+                                "description": "If true, replace all occurrences. If false (default), old_text must be unique."
                             }
                         },
                         "required": ["old_text", "new_text"]
@@ -217,29 +216,18 @@ Correct:
                 },
                 "operation": {
                     "type": "string",
-                    "enum": ["replace", "insert_before", "insert_after", "delete", "append", "prepend"],
-                    "description": "Operation type for extended mode"
+                    "description": "Operation type for extended mode: replace, insert_before, insert_after, delete, append, prepend. Use with anchor/content instead of edits."
                 },
                 "anchor": {
                     "type": "string",
-                    "description": "Text to locate (for replace/insert/delete operations)"
+                    "description": "Text to locate (for replace/insert_before/insert_after/delete operations)"
                 },
                 "content": {
                     "type": "string",
-                    "description": "New content (for replace/insert/append/prepend operations)"
+                    "description": "New content (for replace/insert_before/insert_after/append/prepend operations)"
                 }
             },
-            "required": ["file_path"],
-            "oneOf": [
-                {
-                    "required": ["edits"],
-                    "description": "Basic mode: multiple search-and-replace edits"
-                },
-                {
-                    "required": ["operation"],
-                    "description": "Extended mode: single operation with anchor/content"
-                }
-            ]
+            "required": ["file_path"]
         })
     }
 

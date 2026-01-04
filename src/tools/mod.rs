@@ -4,9 +4,11 @@
 
 pub mod bash;
 pub mod editor_edit;
+pub mod invoke_skill;
 
 pub use bash::BashTool;
 pub use editor_edit::EditorEditTool;
+pub use invoke_skill::InvokeSkillTool;
 
 use crate::llm::ToolCall;
 use std::future::Future;

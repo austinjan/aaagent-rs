@@ -11,10 +11,12 @@
 //   cargo run --example interactive_agent --features "openai gemini" -- --provider=gemini
 
 use aaagent::llm::*;
+use aaagent::skills::SkillsManager;
 use simplelog::*;
 use std::env;
 use std::fs::File;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -46,6 +48,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create registry with all built-in tools
     let registry = Arc::new(ToolRegistry::new().register_all_builtin());
 
+    // Create skills manager
+    // - home: for user skills (~/.aaagent/skills/) - use default or examples dir as fallback
+    // - cwd: for project skills (.aaagent/skills/) - use examples dir
+    let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let skills_home = dirs::home_dir()
+        .map(|h| h.join(".aaagent"))
+        .unwrap_or_else(|| examples_dir.clone());
+    let skills_manager = Arc::new(SkillsManager::new(skills_home));
+
+    // Load available skills - will find examples/.aaagent/skills/ as project skills
+    let skills_outcome = skills_manager.skills_for_cwd(&examples_dir);
+
     println!("╔════════════════════════════════════════════════════════════╗");
     println!(
         "║     Interactive AI Agent with Tool Registry ({})  ║",
@@ -56,11 +70,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Features:");
     println!("  - Dynamic tool loading via ToolRegistry");
     println!("  - LLM can pick tools as needed with pick_tools");
+    println!("  - Skills support with /skill:name syntax");
     println!("  - Detailed tool call/result logging");
     println!("  - History tracking across turns");
     println!("  - Type 'exit' or 'quit' to stop");
     println!("  - Type 'history' to see conversation history");
+    println!("  - Type 'skills' to list available skills");
     println!();
+
+    // Show available skills
+    if !skills_outcome.skills.is_empty() {
+        println!("Available skills:");
+        for skill in &skills_outcome.skills {
+            println!("  /skill:{} - {}", skill.name, skill.display_description());
+        }
+        println!();
+    }
 
     let mut conversation_history = Vec::new();
     let mut turn = 0;
@@ -96,6 +121,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
+        // Show skills command
+        if user_input.eq_ignore_ascii_case("skills") {
+            let outcome = skills_manager.skills_for_cwd(&examples_dir);
+            if outcome.skills.is_empty() {
+                println!("\nNo skills available.");
+            } else {
+                println!("\nAvailable skills:");
+                for skill in &outcome.skills {
+                    println!(
+                        "  /skill:{} ({}) - {}",
+                        skill.name,
+                        skill.scope,
+                        skill.display_description()
+                    );
+                }
+            }
+            continue;
+        }
+
         // Add user message to history
         conversation_history.push(Message {
             role: Role::User,
@@ -107,9 +151,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         print!("\n🤖 Assistant: ");
         let _ = io::stdout().flush();
 
-        // Configure the chat loop with registry and detailed logging
+        // Configure the chat loop with registry, skills, and detailed logging
         let config = ChatLoopConfig::new()
             .with_registry(Arc::clone(&registry))
+            .with_skills_manager(Arc::clone(&skills_manager))
+            .with_cwd(examples_dir.clone())
+            .with_auto_parse_skills(true)
+            .with_implicit_skills(true)
+            .on_skill_injected(|name, path| {
+                println!("\n📚 Skill loaded: {} ({})", name, path);
+            })
+            .on_skill_warning(|warning| {
+                println!("\n⚠️  Skill warning: {}", warning);
+            })
+            .on_rate_limit_retry(|attempt, delay, error| {
+                println!();
+                println!("┌─────────────────────────────────────────────────────┐");
+                println!("│ ⏳ Rate Limited - API quota exceeded                │");
+                println!("├─────────────────────────────────────────────────────┤");
+                println!(
+                    "│   Retry attempt: {}/5                                │",
+                    attempt
+                );
+                println!(
+                    "│   Waiting: {:.1} seconds                             │",
+                    delay.as_secs_f64()
+                );
+                // Show brief error info
+                if error.contains("retry in") {
+                    if let Some(pos) = error.find("retry in") {
+                        let snippet = &error[pos..std::cmp::min(pos + 25, error.len())];
+                        println!("│   Server hint: {}           │", snippet);
+                    }
+                }
+                println!("└─────────────────────────────────────────────────────┘");
+            })
             .on_content(|text| {
                 // Print each chunk as it arrives for visible streaming effect
                 print!("{}", text);
@@ -122,7 +198,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if calls.len() == 1 { "" } else { "s" }
                 );
                 for (i, call) in calls.iter().enumerate() {
-                    if let Some(cmd) = call.arguments.get("command").and_then(|v| v.as_str()) {
+                    if call.name == "invoke_skill" {
+                        // Special display for skill invocation
+                        if let Some(skill_name) =
+                            call.arguments.get("skill_name").and_then(|v| v.as_str())
+                        {
+                            println!("   {}. 📚 invoke_skill → {}", i + 1, skill_name);
+                        } else {
+                            println!("   {}. 📚 invoke_skill", i + 1);
+                        }
+                    } else if let Some(cmd) = call.arguments.get("command").and_then(|v| v.as_str())
+                    {
                         println!("   {}. {} → {}", i + 1, call.name, cmd);
                     } else {
                         println!("   {}. {}", i + 1, call.name);
