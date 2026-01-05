@@ -128,12 +128,7 @@ None currently
 ## 📋 To Do
 
 ### Gemini Provider (`src/llm/gemini.rs`)
-- [ ] Manual implementation with `reqwest`
-- [ ] SSE parsing
-- [ ] Streaming support
-- [ ] Tool calling (Function Calling API)
-- [ ] Context caching
-- [ ] Chat loop implementation
+- See dedicated plan: `doc/plan/GEMINI_PROVIDER_PLAN.md`
 
 ### Anthropic Provider Enhancements
 - [ ] Prompt caching (Anthropic-specific feature)
@@ -221,10 +216,7 @@ None currently
 **Recommended order:**
 
 1. **Implement Gemini provider** (manual)
-   - Manual implementation with `reqwest`
-   - SSE parsing for streaming
-   - Add context caching
-   - Tool calling (Function Calling API)
+   - See detailed plan: `doc/plan/GEMINI_PROVIDER_PLAN.md`
 
 2. **Enhance Anthropic provider**
    - Implement prompt caching
