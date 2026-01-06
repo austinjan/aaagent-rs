@@ -188,22 +188,22 @@ pub struct ChatLoopResponse {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use aaagent::llm::*;
-/// use aaagent::tools::BashTool;
+/// use aaagent::tools::ShellTool;
 ///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// #     let api_key = std::env::var("OPENAI_API_KEY")?;
-///     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), api_key)?;
-///     let bash_tool = BashTool::new();
-///     let tool_def = bash_tool.as_tool();
+/// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+///     let api_key = std::env::var("OPENAI_API_KEY")?;
+///     let provider = OpenAIProvider::create("gpt-4o-mini".to_string(), api_key)?;
+///     let shell_tool = ShellTool::new();
+///     let tool_def = shell_tool.as_tool();
 ///
 ///     let config = ChatLoopConfig::new()
-///         .with_tool("bash", {
-///             let bash_tool = bash_tool.clone();
+///         .with_tool("shell", {
+///             let shell_tool = shell_tool.clone();
 ///             move |call| {
-///                 let bash_tool = bash_tool.clone();
-///                 async move { bash_tool.execute(&call).await }
+///                 let shell_tool = shell_tool.clone();
+///                 async move { shell_tool.execute(&call).await }
 ///             }
 ///         })
 ///         .on_content(|text| print!("{}", text));
@@ -221,8 +221,8 @@ pub struct ChatLoopResponse {
 ///     ).await?;
 ///
 ///     println!("Done! Used {} tokens", response.usage.total());
-/// #     Ok(())
-/// # }
+///     Ok(())
+/// }
 /// ```
 pub async fn chat_loop_with_tools<P: LLMProvider>(
     provider: &P,

@@ -35,6 +35,8 @@ bytes = "1.0"
 
 # Logging
 log = "0.4"
+anyhow = "1.0.100"
+ulid = { version = "1.2.1", features = ["serde"] }
 
 [dev-dependencies]
 simplelog = "0.12"

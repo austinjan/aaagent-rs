@@ -46,29 +46,6 @@ pub trait LLMProvider: Send + Sync {
 
     /// Enable prompt caching for expensive prompts
     fn prompt_cache(&mut self, cache_prompt: String) -> Result<(), ProviderError>;
-
-    /// Compact conversation history to reduce token usage
-    ///
-    /// For long-running conversations, this compresses the history while preserving
-    /// the model's understanding of the conversation context.
-    ///
-    /// Different providers implement this differently:
-    /// - OpenAI: Uses the `/responses/compact` endpoint (Responses API)
-    /// - Anthropic: May use context editing or summarization
-    /// - Others: May use LLM-based summarization or simple truncation
-    ///
-    /// Returns the compacted history that can be used in subsequent chat_loop calls
-    async fn compact(&self, history: Vec<Message>) -> Result<Vec<Message>, ProviderError>;
-
-    /// Get the current conversation history
-    ///
-    /// Returns the accumulated conversation history from the last chat_loop call.
-    /// This includes all messages (user, assistant, tool calls, tool results) that
-    /// have been processed, after any automatic pruning has been applied.
-    ///
-    /// Note: History is only tracked during chat_loop. Simple chat() calls don't
-    /// maintain history state.
-    fn get_history(&self) -> Vec<Message>;
 }
 
 // ============================================================================
@@ -126,12 +103,6 @@ pub struct ProviderConfig {
 
     /// Provider-specific options
     pub extra_options: HashMap<String, serde_json::Value>,
-
-    /// Maximum number of tool call/result turns to keep in history (None = unlimited)
-    /// One turn = one assistant message with tool calls + corresponding tool result messages
-    /// When limit is reached, oldest tool turns are removed
-    /// Default: 3 turns
-    pub max_tool_turns: Option<usize>,
 }
 
 impl Default for ProviderConfig {
@@ -145,7 +116,6 @@ impl Default for ProviderConfig {
             system_prompt: None,
             stop_sequences: Vec::new(),
             extra_options: HashMap::new(),
-            max_tool_turns: Some(3), // Keep last 3 tool turns by default
         }
     }
 }

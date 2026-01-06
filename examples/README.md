@@ -210,5 +210,5 @@ Change to: gpt-5-nano, gpt-4o, o1-preview, etc.
 **Timeout errors**
 ```rust
 // Increase bash tool timeout
-let bash_tool = BashTool::new().with_timeout(60); // 60 seconds
+let shell_tool = ShellTool::new().with_timeout(60); // 60 seconds
 ```
