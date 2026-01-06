@@ -9,6 +9,9 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
+
+// Future: OpenAI Responses API for conversation compression
+#[allow(dead_code)]
 const OPENAI_RESPONSES_API_BASE: &str = "https://api.openai.com/v1/responses";
 
 /// OpenAI provider implementation
@@ -19,8 +22,6 @@ pub struct OpenAIProvider {
     model: String,
     config: Arc<RwLock<ProviderConfig>>,
     state: Arc<RwLock<ProviderState>>,
-    /// Conversation history from the last chat_loop
-    history: Arc<RwLock<Vec<Message>>>,
 }
 
 // Request/Response types matching OpenAI API spec
@@ -146,8 +147,10 @@ struct Usage {
     total_tokens: u32,
 }
 
-// Responses API types for compaction
+// Future: Responses API types for conversation compression
+// These will be used when OpenAI Responses API is integrated
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct ResponsesCompactRequest {
     model: String,
@@ -156,6 +159,7 @@ struct ResponsesCompactRequest {
     instructions: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 enum ResponsesInput {
@@ -163,12 +167,14 @@ enum ResponsesInput {
     CompactedItem(CompactedItem),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ResponsesMessage {
     role: String,
     content: ResponsesContent,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 enum ResponsesContent {
@@ -176,6 +182,7 @@ enum ResponsesContent {
     Parts(Vec<ResponsesContentPart>),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 enum ResponsesContentPart {
@@ -185,6 +192,7 @@ enum ResponsesContentPart {
     OutputText { text: String },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CompactedItem {
     #[serde(rename = "type")]
@@ -192,6 +200,7 @@ struct CompactedItem {
     data: String, // Opaque encrypted data
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ResponsesCompactResponse {
     output: Vec<ResponsesInput>,
@@ -203,55 +212,8 @@ impl OpenAIProvider {
         model.starts_with("gpt-5") || model.starts_with("o1") || model.starts_with("gpt-4o")
     }
 
-    /// Prune old tool call/result turns from history
-    /// Keeps only the most recent N turns, where one turn = assistant message with tool_calls + tool results
-    fn prune_tool_turns(messages: &mut Vec<ChatMessage>, max_turns: usize) {
-        if max_turns == 0 {
-            return;
-        }
-
-        // Find all tool turns (assistant message with tool_calls followed by tool results)
-        let mut tool_turn_ranges: Vec<(usize, usize)> = Vec::new();
-        let mut i = 0;
-
-        while i < messages.len() {
-            // Look for Assistant message with tool_calls
-            if let ChatMessage::Assistant {
-                tool_calls: Some(_),
-                ..
-            } = &messages[i]
-            {
-                let start = i;
-                i += 1;
-
-                // Find all consecutive Tool messages that follow
-                while i < messages.len() {
-                    if matches!(&messages[i], ChatMessage::Tool { .. }) {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                let end = i;
-                tool_turn_ranges.push((start, end));
-            } else {
-                i += 1;
-            }
-        }
-
-        // If we have more tool turns than max_turns, remove the oldest ones
-        if tool_turn_ranges.len() > max_turns {
-            let turns_to_remove = tool_turn_ranges.len() - max_turns;
-
-            // Remove from the end backwards to avoid index shifting issues
-            for &(start, end) in tool_turn_ranges.iter().take(turns_to_remove).rev() {
-                messages.drain(start..end);
-            }
-        }
-    }
-
-    /// Convert our Message type to Responses API format
+    /// Future: Convert our Message type to Responses API format
+    #[allow(dead_code)]
     fn convert_to_responses_input(msg: &Message) -> ResponsesInput {
         let role = match msg.role {
             Role::System => "system",
@@ -266,7 +228,8 @@ impl OpenAIProvider {
         })
     }
 
-    /// Convert ResponsesInput back to our Message type
+    /// Future: Convert ResponsesInput back to our Message type
+    #[allow(dead_code)]
     fn convert_from_responses_input(input: &ResponsesInput) -> Result<Message, ProviderError> {
         match input {
             ResponsesInput::Message(msg) => {
@@ -385,7 +348,6 @@ impl OpenAIProvider {
             model,
             config: Arc::new(RwLock::new(ProviderConfig::default())),
             state: Arc::new(RwLock::new(ProviderState::default())),
-            history: Arc::new(RwLock::new(Vec::new())),
         })
     }
 }
@@ -568,14 +530,10 @@ impl LLMProvider for OpenAIProvider {
         let model = self.model.clone();
         let cfg = self.config();
         let state = self.state.clone();
-        let provider_history = self.history.clone();
 
         // Convert messages and tools
         let mut messages: Vec<ChatMessage> = history.iter().map(Self::convert_message).collect();
         let mut openai_tools = tools.as_ref().map(|t| Self::convert_tools(t));
-
-        // Track history as our Message types (not ChatMessage)
-        let mut current_history = history.clone();
 
         // Spawn the chat loop task
         tokio::spawn(async move {
@@ -786,14 +744,6 @@ impl LLMProvider for OpenAIProvider {
                                 ),
                             });
 
-                            // Update current_history with assistant message
-                            current_history.push(Message {
-                                role: Role::Assistant,
-                                content: content_accumulator.clone(),
-                                tool_call_id: None,
-                                tool_calls: Some(tool_calls.clone()),
-                            });
-
                             // Signal that we received tool results
                             let result_count = results.len();
                             let _ = event_tx.send(Ok(LoopStep::ToolResultsReceived {
@@ -806,20 +756,6 @@ impl LLMProvider for OpenAIProvider {
                                     content: result.content.clone(),
                                     tool_call_id: result.tool_call_id.clone(),
                                 });
-
-                                // Update current_history with tool result
-                                current_history.push(Message {
-                                    role: Role::Tool,
-                                    content: result.content,
-                                    tool_call_id: Some(result.tool_call_id),
-                                    tool_calls: None,
-                                });
-                            }
-
-                            // Prune old tool turns if configured
-                            if let Some(max_turns) = cfg.max_tool_turns {
-                                Self::prune_tool_turns(&mut messages, max_turns);
-                                // TODO: Also prune current_history to match
                             }
 
                             // Reset for next iteration
@@ -853,11 +789,6 @@ impl LLMProvider for OpenAIProvider {
                     break;
                 }
             }
-
-            // Save the final history to provider
-            if let Ok(mut hist) = provider_history.write() {
-                *hist = current_history;
-            }
         });
 
         Ok(ChatLoopHandle::new(event_rx, command_tx))
@@ -865,72 +796,6 @@ impl LLMProvider for OpenAIProvider {
 
     fn prompt_cache(&mut self, _cache_prompt: String) -> Result<(), ProviderError> {
         Err(ProviderError::CachingNotSupported)
-    }
-
-    async fn compact(&self, history: Vec<Message>) -> Result<Vec<Message>, ProviderError> {
-        // Convert our Message types to Responses API format
-        let input: Vec<ResponsesInput> = history
-            .iter()
-            .map(Self::convert_to_responses_input)
-            .collect();
-
-        // Build compact request
-        let cfg = self.config();
-        let request = ResponsesCompactRequest {
-            model: self.model.clone(),
-            input,
-            instructions: cfg.system_prompt.clone(),
-        };
-
-        // Make HTTP request to /responses/compact
-        let response = self
-            .client
-            .post(format!("{}/compact", OPENAI_RESPONSES_API_BASE))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| ProviderError::ApiError(format!("Compact request failed: {}", e)))?;
-
-        // Check status
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::ApiError(format!(
-                "Compact API error HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        // Parse response
-        let compact_response: ResponsesCompactResponse = response.json().await.map_err(|e| {
-            ProviderError::ApiError(format!("Failed to parse compact response: {}", e))
-        })?;
-
-        // Convert back to our Message format
-        // Note: Compacted items will be preserved as opaque data
-        let mut compacted_history = Vec::new();
-        for input in compact_response.output {
-            match Self::convert_from_responses_input(&input) {
-                Ok(msg) => compacted_history.push(msg),
-                Err(_) => {
-                    // This is a compacted item - we can't convert it back
-                    // For now, skip it (we'll need to handle this better later)
-                    // TODO: Store compacted items separately and pass them through
-                    continue;
-                }
-            }
-        }
-
-        Ok(compacted_history)
-    }
-
-    fn get_history(&self) -> Vec<Message> {
-        self.history.read().map(|h| h.clone()).unwrap_or_default()
     }
 }
 
@@ -996,212 +861,5 @@ mod tests {
         let result =
             <OpenAIProvider as LLMProvider>::create("gpt-4".to_string(), "test-key".to_string());
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_prune_tool_turns_no_tools() {
-        let mut messages = vec![
-            ChatMessage::User {
-                content: "Hello".to_string(),
-            },
-            ChatMessage::Assistant {
-                content: Some("Hi".to_string()),
-                tool_calls: None,
-            },
-        ];
-
-        OpenAIProvider::prune_tool_turns(&mut messages, 3);
-        assert_eq!(messages.len(), 2); // No changes
-    }
-
-    #[test]
-    fn test_prune_tool_turns_under_limit() {
-        let mut messages = vec![
-            ChatMessage::User {
-                content: "Hello".to_string(),
-            },
-            ChatMessage::Assistant {
-                content: Some("Calling tool".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_1".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result".to_string(),
-                tool_call_id: "call_1".to_string(),
-            },
-            ChatMessage::Assistant {
-                content: Some("Done".to_string()),
-                tool_calls: None,
-            },
-        ];
-
-        let original_len = messages.len();
-        OpenAIProvider::prune_tool_turns(&mut messages, 3);
-        assert_eq!(messages.len(), original_len); // No pruning, only 1 turn
-    }
-
-    #[test]
-    fn test_prune_tool_turns_exceeds_limit() {
-        let mut messages = vec![
-            // Turn 1
-            ChatMessage::Assistant {
-                content: Some("Turn 1".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_1".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result 1".to_string(),
-                tool_call_id: "call_1".to_string(),
-            },
-            // Turn 2
-            ChatMessage::Assistant {
-                content: Some("Turn 2".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_2".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result 2".to_string(),
-                tool_call_id: "call_2".to_string(),
-            },
-            // Turn 3
-            ChatMessage::Assistant {
-                content: Some("Turn 3".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_3".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result 3".to_string(),
-                tool_call_id: "call_3".to_string(),
-            },
-            // Turn 4
-            ChatMessage::Assistant {
-                content: Some("Turn 4".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_4".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result 4".to_string(),
-                tool_call_id: "call_4".to_string(),
-            },
-        ];
-
-        OpenAIProvider::prune_tool_turns(&mut messages, 3);
-
-        // Should keep only last 3 turns (turn 2, 3, 4)
-        // Turn 1 should be removed
-        assert_eq!(messages.len(), 6); // 3 turns * 2 messages each
-
-        // Verify turn 1 is gone
-        if let ChatMessage::Assistant {
-            content: Some(c), ..
-        } = &messages[0]
-        {
-            assert_eq!(c, "Turn 2");
-        } else {
-            panic!("Expected Turn 2 to be first");
-        }
-    }
-
-    #[test]
-    fn test_get_history_initially_empty() {
-        let provider = OpenAIProvider::new("gpt-4o".to_string(), "test-key".to_string()).unwrap();
-        let history = provider.get_history();
-        assert_eq!(history.len(), 0);
-    }
-
-    #[test]
-    fn test_prune_tool_turns_multiple_tool_results() {
-        let mut messages = vec![
-            // Turn 1: multiple tool calls
-            ChatMessage::Assistant {
-                content: Some("Turn 1".to_string()),
-                tool_calls: Some(vec![
-                    OpenAIToolCall {
-                        id: "call_1a".to_string(),
-                        tool_type: "function".to_string(),
-                        function: OpenAIFunctionCall {
-                            name: "test".to_string(),
-                            arguments: "{}".to_string(),
-                        },
-                    },
-                    OpenAIToolCall {
-                        id: "call_1b".to_string(),
-                        tool_type: "function".to_string(),
-                        function: OpenAIFunctionCall {
-                            name: "test".to_string(),
-                            arguments: "{}".to_string(),
-                        },
-                    },
-                ]),
-            },
-            ChatMessage::Tool {
-                content: "result 1a".to_string(),
-                tool_call_id: "call_1a".to_string(),
-            },
-            ChatMessage::Tool {
-                content: "result 1b".to_string(),
-                tool_call_id: "call_1b".to_string(),
-            },
-            // Turn 2: single tool call
-            ChatMessage::Assistant {
-                content: Some("Turn 2".to_string()),
-                tool_calls: Some(vec![OpenAIToolCall {
-                    id: "call_2".to_string(),
-                    tool_type: "function".to_string(),
-                    function: OpenAIFunctionCall {
-                        name: "test".to_string(),
-                        arguments: "{}".to_string(),
-                    },
-                }]),
-            },
-            ChatMessage::Tool {
-                content: "result 2".to_string(),
-                tool_call_id: "call_2".to_string(),
-            },
-        ];
-
-        OpenAIProvider::prune_tool_turns(&mut messages, 1);
-
-        // Should keep only turn 2 (last turn)
-        assert_eq!(messages.len(), 2); // 1 assistant + 1 tool result
-
-        if let ChatMessage::Assistant {
-            content: Some(c), ..
-        } = &messages[0]
-        {
-            assert_eq!(c, "Turn 2");
-        } else {
-            panic!("Expected Turn 2");
-        }
     }
 }

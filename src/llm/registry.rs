@@ -15,7 +15,7 @@ use std::sync::Arc;
 ///
 /// ```no_run
 /// use aaagent::llm::ToolRegistry;
-/// use aaagent::tools::BashTool;
+/// use aaagent::tools::ShellTool;
 ///
 /// // Register all built-in tools
 /// let registry = ToolRegistry::new().register_all_builtin();
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_register_all_builtin() {
         let registry = ToolRegistry::new().register_all_builtin();
-        assert!(registry.get("bash").is_some());
+        assert!(registry.get("shell").is_some());
     }
 
     #[test]
@@ -136,21 +136,21 @@ mod tests {
         let registry = ToolRegistry::new().register_all_builtin();
         let tools = registry.get_tools_for_llm();
 
-        // Should have bash tool with full description
-        let bash_tool = tools.iter().find(|t| t.name == "bash");
-        assert!(bash_tool.is_some());
-        assert!(bash_tool.unwrap().description.len() > 50);
+        // Should have shell tool with full description
+        let shell_tool = tools.iter().find(|t| t.name == "shell");
+        assert!(shell_tool.is_some());
+        assert!(shell_tool.unwrap().description.len() > 50);
     }
 
     #[test]
     fn test_execute_tool() {
-        use crate::tools::BashTool;
+        use crate::tools::ShellTool;
 
-        let registry = ToolRegistry::new().register(BashTool::new());
+        let registry = ToolRegistry::new().register(ShellTool::new());
 
         let call = ToolCall {
             id: "test".to_string(),
-            name: "bash".to_string(),
+            name: "shell".to_string(),
             arguments: serde_json::json!({"command": "echo hello"}),
         };
 
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_has_tool() {
         let registry = ToolRegistry::new().register_all_builtin();
-        assert!(registry.has_tool("bash"));
+        assert!(registry.has_tool("shell"));
         assert!(!registry.has_tool("nonexistent"));
     }
 }

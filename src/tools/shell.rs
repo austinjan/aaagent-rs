@@ -1,6 +1,7 @@
-//! Bash command execution tool
+//! Shell command execution tool
 //!
-//! Provides a tool that allows LLMs to execute bash/shell commands safely.
+//! Provides a cross-platform tool that allows LLMs to execute shell commands safely.
+//! Uses PowerShell on Windows and sh/bash on Unix-like systems.
 
 use super::ToolProvider;
 use crate::llm::{Tool, ToolCall};
@@ -9,20 +10,22 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-/// Bash command execution tool
+/// Shell command execution tool
 ///
 /// This tool allows LLMs to execute shell commands and receive output.
-/// It includes timeout support and error handling.
+/// It automatically uses the appropriate shell for the platform:
+/// - Windows: PowerShell
+/// - Unix/Linux/macOS: sh (POSIX-compliant)
 #[derive(Clone)]
-pub struct BashTool {
+pub struct ShellTool {
     /// Maximum execution time in seconds (default: 30)
     timeout_secs: u64,
     /// Working directory for command execution (default: current directory)
     working_dir: Option<std::path::PathBuf>,
 }
 
-impl BashTool {
-    /// Create a new BashTool with default settings
+impl ShellTool {
+    /// Create a new ShellTool with default settings
     pub fn new() -> Self {
         Self {
             timeout_secs: 30,
@@ -118,7 +121,7 @@ WHEN NOT TO USE:
         );
 
         Tool {
-            name: "bash".to_string(),
+            name: "shell".to_string(),
             description,
             parameters: json!({
                 "type": "object",
@@ -328,15 +331,15 @@ WHEN NOT TO USE:
     }
 }
 
-impl Default for BashTool {
+impl Default for ShellTool {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ToolProvider for BashTool {
+impl ToolProvider for ShellTool {
     fn name(&self) -> &str {
-        "bash"
+        "shell"
     }
 
     fn brief(&self) -> &str {
@@ -406,7 +409,7 @@ CONSTRAINTS:
     }
 
     fn execute<'a>(&'a self, call: &'a ToolCall) -> super::BoxFuture<'a, Result<String, String>> {
-        Box::pin(async move { BashTool::execute(self, call).await })
+        Box::pin(async move { ShellTool::execute(self, call).await })
     }
 }
 
@@ -416,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simple_command() {
-        let tool = BashTool::new();
+        let tool = ShellTool::new();
         let result = tool.execute_command("echo hello").await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("hello"));
@@ -424,14 +427,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_with_error() {
-        let tool = BashTool::new();
+        let tool = ShellTool::new();
         let result = tool.execute_command("exit 1").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_timeout() {
-        let tool = BashTool::new().with_timeout(1);
+        let tool = ShellTool::new().with_timeout(1);
         let result = if cfg!(target_os = "windows") {
             tool.execute_command("timeout /t 5").await
         } else {
@@ -446,9 +449,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_as_tool() {
-        let tool = BashTool::new();
+        let tool = ShellTool::new();
         let tool_def = tool.as_tool();
-        assert_eq!(tool_def.name, "bash");
+        assert_eq!(tool_def.name, "shell");
         assert!(tool_def.description.contains("Execute"));
     }
 }

@@ -10,7 +10,7 @@
 // Run with: cargo run --example loop_detection_demo --features openai
 
 use aaagent::llm::*;
-use aaagent::tools::BashTool;
+use aaagent::tools::ShellTool;
 use std::io::{self, Write};
 
 #[tokio::main]
@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
 
     let provider = OpenAIProvider::create("gpt-5-nano".to_string(), api_key)?;
-    let bash_tool = BashTool::new().with_timeout(10);
+    let shell_tool = ShellTool::new().with_timeout(10);
 
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║              Loop Detection Demo (gpt-5-nano)             ║");
@@ -35,11 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let config = ChatLoopConfig::new()
-        .with_tool("bash", {
-            let bash_tool = bash_tool.clone();
+        .with_tool("shell", {
+            let shell_tool = shell_tool.clone();
             move |call| {
-                let bash_tool = bash_tool.clone();
-                async move { bash_tool.execute(&call).await }
+                let shell_tool = shell_tool.clone();
+                async move { shell_tool.execute(&call).await }
             }
         })
         .on_content(|text| {
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tool_calls: None,
     }];
 
-    match chat_loop_with_tools(&provider, messages, vec![bash_tool.as_tool()], config).await {
+    match chat_loop_with_tools(&provider, messages, vec![shell_tool.as_tool()], config).await {
         Ok(response) => {
             println!();
             println!();

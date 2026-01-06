@@ -16,7 +16,7 @@ mod tests {
         assert_eq!(config.temperature, 1.0);
         assert_eq!(config.max_tokens, 40960);
         assert_eq!(config.enable_reasoning, false);
-        assert_eq!(config.max_tool_turns, Some(3));
+        // Note: max_tool_turns removed - history management now handled by Session
     }
 
     #[test]

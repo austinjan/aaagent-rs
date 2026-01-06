@@ -27,7 +27,6 @@ pub struct GeminiProvider {
     model: String,
     config: Arc<RwLock<ProviderConfig>>,
     state: Arc<RwLock<ProviderState>>,
-    history: Arc<RwLock<Vec<Message>>>,
     tool_call_meta: Arc<RwLock<HashMap<String, GeminiToolCallMeta>>>,
     call_counter: Arc<AtomicU64>,
 }
@@ -53,7 +52,6 @@ impl GeminiProvider {
             model,
             config: Arc::new(RwLock::new(ProviderConfig::default())),
             state: Arc::new(RwLock::new(ProviderState::default())),
-            history: Arc::new(RwLock::new(Vec::new())),
             tool_call_meta: Arc::new(RwLock::new(HashMap::new())),
             call_counter: Arc::new(AtomicU64::new(1)),
         })
@@ -464,7 +462,6 @@ impl LLMProvider for GeminiProvider {
         let api_key = self.api_key.clone();
         let model = self.model.clone();
         let cfg = self.config();
-        let history_store = self.history.clone();
         let provider_clone = self.clone();
 
         tokio::spawn(async move {
@@ -474,13 +471,6 @@ impl LLMProvider for GeminiProvider {
             let tools_opt = tools;
 
             loop {
-                // Apply pruning if needed
-                if let Some(max_turns) = cfg.max_tool_turns {
-                    if max_turns > 0 {
-                        Self::prune_message_tool_turns(&mut history, max_turns);
-                    }
-                }
-
                 let (contents, system_instruction, gemini_tools) =
                     provider_clone.build_request_body(&history, &cfg, tools_opt.as_deref());
 
@@ -660,10 +650,6 @@ impl LLMProvider for GeminiProvider {
                     break;
                 }
             }
-
-            if let Ok(mut store) = history_store.write() {
-                *store = history;
-            }
         });
 
         Ok(ChatLoopHandle::new(event_rx, command_tx))
@@ -672,20 +658,11 @@ impl LLMProvider for GeminiProvider {
     fn prompt_cache(&mut self, _cache_prompt: String) -> Result<(), ProviderError> {
         Err(ProviderError::CachingNotSupported)
     }
-
-    async fn compact(&self, _history: Vec<Message>) -> Result<Vec<Message>, ProviderError> {
-        Err(ProviderError::ApiError(
-            "Gemini compact not implemented".to_string(),
-        ))
-    }
-
-    fn get_history(&self) -> Vec<Message> {
-        self.history.read().map(|h| h.clone()).unwrap_or_default()
-    }
 }
 
 impl GeminiProvider {
-    fn prune_message_tool_turns(history: &mut Vec<Message>, max_turns: usize) {
+    // Note: prune_message_tool_turns removed - history management now handled by Session
+    fn _unused_prune_message_tool_turns(history: &mut Vec<Message>, max_turns: usize) {
         if max_turns == 0 {
             return;
         }

@@ -1,4 +1,6 @@
+pub mod agent;
 pub mod explore_hierarchy;
+pub mod history;
 pub mod llm;
 pub mod logger;
 pub mod tools;

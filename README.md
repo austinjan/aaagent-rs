@@ -10,6 +10,7 @@ Unified LLM provider abstraction with streaming, tool calling, and agent support
 - **Chat loop**: High-level abstraction for multi-turn conversations
 - **Loop detection**: Prevent repetitive tool calling patterns
 - **Tool registry**: Centralized tool management with lazy loading
+- **Tree History**: 
 
 ## Installation
 
@@ -57,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |----------|--------|----------|
 | OpenAI | Complete | Streaming, tools, chat loop |
 | Anthropic | Complete | Streaming, tools, chat loop |
-| Gemini | Partial | Basic structure only |
+
 
 ## Examples
 
