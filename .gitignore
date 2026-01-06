@@ -5,3 +5,5 @@ debug/
 **/*.rs.bk
 
 *.pdb
+
+app.log
