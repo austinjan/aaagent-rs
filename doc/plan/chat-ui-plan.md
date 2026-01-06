@@ -3,7 +3,7 @@
 - Feature name: `chat-ui`
 - Status: Draft
 - Created: 2026-01-06
-- Last updated: 2026-01-06 (SSE transport + tool pair edge cases + AI error handling + performance targets specified)
+- Last updated: 2026-01-06 (SSE transport + tool pair edge cases + AI error handling + performance targets + state management specified)
 
 ## 1) Overview
 
@@ -683,6 +683,471 @@ function ErrorCard({ component, analysis, rawError, onRetry }: ErrorCardProps) {
 - Cache common error patterns to avoid re-analysis
 - Rate limit: max 10 analyses per minute per session
 
+### State Management Architecture
+
+#### Overview
+
+With synced selection between mini map and chat container, plus real-time streaming updates, we need a **clear state management pattern** to avoid race conditions and inconsistent UI state.
+
+#### Core Principles
+
+1. **Single Source of Truth**: All state lives in one store
+2. **Server-Authoritative Data**: Backend owns the conversation data
+3. **Client-Authoritative UI**: Frontend owns UI state (expand/collapse, scroll position)
+4. **Optimistic Updates**: User actions update UI immediately, no waiting
+5. **Event Ordering Guarantees**: Stream events applied in order via queue
+
+#### State Structure
+
+```typescript
+interface ChatUIState {
+  // ===== SERVER-AUTHORITATIVE DATA (read-only from backend) =====
+  session: {
+    sessionId: string;
+    totalNodes: number;
+    activeLeafId: string;
+    rootNodeId: string;
+  };
+  
+  nodes: Map<string, Node>;              // node_id → Node
+  activePath: string[];                  // Ordered node IDs from root → active_leaf
+  checkpoints: Map<string, CheckpointData>;
+  
+  // ===== CLIENT-AUTHORITATIVE UI STATE =====
+  ui: {
+    selectedNodeId: string | null;      // SINGLE SOURCE OF TRUTH for selection
+    expandedToolPairs: Set<string>;     // Tool pair IDs that are expanded
+    expandedCheckpoints: Set<string>;   // Checkpoint IDs showing full summary
+    scrollPosition: number;             // Current scroll offset
+    
+    // Virtual scroll state
+    visibleRange: { start: number; end: number };
+    loadedChunks: Set<string>;          // "offset-limit" keys
+  };
+  
+  // ===== TRANSIENT STREAMING STATE =====
+  streaming: {
+    isStreaming: boolean;
+    currentMessageId: string | null;    // Currently streaming message
+    toolPairGroups: Map<string, ToolPairGroup>;  // In-flight tool calls
+    pendingEvents: AgentEvent[];        // Event queue for ordering
+  };
+  
+  // ===== PERFORMANCE METRICS =====
+  metrics: {
+    renderTime: number;
+    memoryUsage: number;
+    fps: number;
+  };
+}
+```
+
+#### State Management Pattern: Unidirectional Data Flow
+
+```
+User Action → Dispatch Action → Reducer → New State → UI Re-render
+     ↑                                                      ↓
+     └──────────────── Side Effects (API calls) ───────────┘
+
+SSE Event → Event Queue → Ordered Processing → Reducer → New State → UI Re-render
+```
+
+#### Single Source of Truth: Selected Node
+
+**Problem**: Selection state must sync between mini map and chat container.
+
+**Solution**: Store selection in one place, derive UI from it.
+
+```typescript
+// ✅ CORRECT: Single source of truth
+const state = {
+  ui: {
+    selectedNodeId: "node_123"  // ONLY place selection is stored
+  }
+};
+
+// Derive UI state from single source
+function isMiniMapNodeSelected(nodeId: string): boolean {
+  return state.ui.selectedNodeId === nodeId;
+}
+
+function isChatCardSelected(nodeId: string): boolean {
+  return state.ui.selectedNodeId === nodeId;
+}
+
+// Update selection (both views react automatically)
+function selectNode(nodeId: string) {
+  dispatch({ type: 'SELECT_NODE', nodeId });
+  // Both mini map and chat container re-render with new selection
+}
+```
+
+**Anti-pattern**: Storing selection in multiple places
+```typescript
+// ❌ WRONG: Multiple sources of truth
+const miniMapState = { selectedNodeId: "node_123" };
+const chatState = { selectedNodeId: "node_456" };  // OUT OF SYNC!
+```
+
+#### Event Queue for Stream Updates
+
+**Problem**: SSE events can arrive faster than UI can process them, causing:
+- Race conditions (events processed out of order)
+- UI lag (main thread blocked)
+- Inconsistent state (partial updates)
+
+**Solution**: Event queue with ordering guarantees
+
+```typescript
+class EventQueue {
+  private queue: AgentEvent[] = [];
+  private processing = false;
+  private sequenceNumber = 0;
+  
+  enqueue(event: AgentEvent) {
+    // Assign sequence number for ordering
+    const sequencedEvent = { ...event, seq: this.sequenceNumber++ };
+    this.queue.push(sequencedEvent);
+    
+    // Start processing if not already running
+    if (!this.processing) {
+      this.processQueue();
+    }
+  }
+  
+  private async processQueue() {
+    this.processing = true;
+    
+    while (this.queue.length > 0) {
+      const event = this.queue.shift()!;
+      
+      // Process event (sync or async)
+      await this.processEvent(event);
+      
+      // Yield to browser for rendering (avoid blocking UI)
+      if (this.queue.length > 0) {
+        await this.yieldToUI();
+      }
+    }
+    
+    this.processing = false;
+  }
+  
+  private async yieldToUI(): Promise<void> {
+    return new Promise(resolve => {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 0);  // Let browser paint
+      });
+    });
+  }
+  
+  private async processEvent(event: AgentEvent) {
+    switch (event.type) {
+      case 'content':
+        store.dispatch({ type: 'APPEND_CONTENT', ...event });
+        break;
+      case 'tool_calls_requested':
+        store.dispatch({ type: 'START_TOOL_CALLS', ...event });
+        break;
+      case 'tool_result':
+        store.dispatch({ type: 'ADD_TOOL_RESULT', ...event });
+        break;
+      // ... handle all event types
+    }
+  }
+}
+```
+
+**Ordering Guarantees:**
+1. Events processed in arrival order (FIFO)
+2. No concurrent processing (one event at a time)
+3. Yields to UI between events (maintains 60fps)
+
+#### Optimistic UI vs Server-Authoritative
+
+**Client-Authoritative (Optimistic UI):**
+User actions that only affect UI state update immediately without server confirmation.
+
+```typescript
+// Expand/collapse tool pair (instant feedback)
+function toggleToolPair(toolPairId: string) {
+  // Update UI immediately (no server round-trip)
+  if (state.ui.expandedToolPairs.has(toolPairId)) {
+    dispatch({ type: 'COLLAPSE_TOOL_PAIR', toolPairId });
+  } else {
+    dispatch({ type: 'EXPAND_TOOL_PAIR', toolPairId });
+  }
+  // UI re-renders instantly
+}
+
+// Scroll position (local only)
+function updateScrollPosition(offset: number) {
+  dispatch({ type: 'UPDATE_SCROLL', offset });
+}
+
+// Select node (instant highlight)
+function selectNode(nodeId: string) {
+  dispatch({ type: 'SELECT_NODE', nodeId });
+  // Mini map and chat both highlight immediately
+}
+```
+
+**Server-Authoritative (Wait for Confirmation):**
+Actions that modify backend data must wait for server confirmation.
+
+```typescript
+// Send message (optimistic display, then confirm)
+async function sendMessage(text: string) {
+  // 1. Optimistic: Show message immediately with pending state
+  const tempId = `temp_${Date.now()}`;
+  dispatch({ 
+    type: 'ADD_OPTIMISTIC_MESSAGE', 
+    tempId,
+    content: text,
+    isPending: true 
+  });
+  
+  // 2. Send to server (SSE stream will send back real node)
+  const stream = await fetch(`/api/sessions/${sessionId}/chat`, {
+    method: 'POST',
+    body: JSON.stringify({ message: text })
+  });
+  
+  // 3. Server responds with real node_id via SSE
+  // EventQueue processes 'done' event and replaces temp node
+}
+
+// Retry failed tool call (server decides)
+async function retryToolCall(toolCallId: string) {
+  // NO optimistic update - wait for server
+  dispatch({ type: 'SHOW_RETRY_LOADING', toolCallId });
+  
+  await fetch(`/api/sessions/${sessionId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({ toolCallId })
+  });
+  
+  // Server sends new events via SSE
+  // EventQueue will update UI when events arrive
+}
+```
+
+#### State Update Flow Examples
+
+**Example 1: User expands tool pair (optimistic)**
+
+```
+User clicks "Expand" button
+    ↓
+dispatch({ type: 'EXPAND_TOOL_PAIR', toolPairId: 'call_123' })
+    ↓
+Reducer adds 'call_123' to state.ui.expandedToolPairs
+    ↓
+UI re-renders (tool pair expands immediately)
+    ↓
+No server call needed (UI state only)
+```
+
+**Example 2: User selects node in mini map (optimistic + side effect)**
+
+```
+User clicks node in mini map
+    ↓
+dispatch({ type: 'SELECT_NODE', nodeId: 'node_456' })
+    ↓
+Reducer sets state.ui.selectedNodeId = 'node_456'
+    ↓
+UI re-renders:
+  - Mini map highlights node_456
+  - Chat container scrolls to node_456
+  - Both views show same selection (single source of truth)
+```
+
+**Example 3: SSE stream delivers tool result (server-authoritative)**
+
+```
+SSE event: { type: 'tool_result', tool_call_id: 'call_123', result: '...' }
+    ↓
+EventQueue.enqueue(event)
+    ↓
+EventQueue processes in order
+    ↓
+dispatch({ type: 'ADD_TOOL_RESULT', ... })
+    ↓
+Reducer updates state.streaming.toolPairGroups
+    ↓
+UI re-renders (tool result appears, changes pending → complete)
+```
+
+**Example 4: Multiple rapid SSE events (queued)**
+
+```
+SSE events arrive rapidly:
+  1. content: "Let me"
+  2. content: " check"
+  3. tool_calls_requested: [...]
+  4. tool_result: ...
+    ↓
+All enqueued immediately (non-blocking)
+    ↓
+EventQueue processes in order:
+  - Process event 1 → yield to UI (browser paints)
+  - Process event 2 → yield to UI
+  - Process event 3 → yield to UI
+  - Process event 4 → yield to UI
+    ↓
+UI stays responsive (60fps maintained)
+```
+
+#### State Management Library Choice
+
+**Recommended: Zustand (lightweight, no boilerplate)**
+
+```typescript
+import create from 'zustand';
+
+interface ChatStore extends ChatUIState {
+  // Actions
+  selectNode: (nodeId: string) => void;
+  toggleToolPair: (toolPairId: string) => void;
+  addNode: (node: Node) => void;
+  updateToolPairState: (toolCallId: string, state: ToolCallState) => void;
+}
+
+const useChatStore = create<ChatStore>((set, get) => ({
+  // Initial state
+  session: { sessionId: '', totalNodes: 0, activeLeafId: '', rootNodeId: '' },
+  nodes: new Map(),
+  activePath: [],
+  checkpoints: new Map(),
+  ui: {
+    selectedNodeId: null,
+    expandedToolPairs: new Set(),
+    expandedCheckpoints: new Set(),
+    scrollPosition: 0,
+    visibleRange: { start: 0, end: 50 },
+    loadedChunks: new Set(),
+  },
+  streaming: {
+    isStreaming: false,
+    currentMessageId: null,
+    toolPairGroups: new Map(),
+    pendingEvents: [],
+  },
+  metrics: {
+    renderTime: 0,
+    memoryUsage: 0,
+    fps: 60,
+  },
+  
+  // Actions (optimistic)
+  selectNode: (nodeId) => set((state) => ({
+    ui: { ...state.ui, selectedNodeId: nodeId }
+  })),
+  
+  toggleToolPair: (toolPairId) => set((state) => {
+    const expanded = new Set(state.ui.expandedToolPairs);
+    if (expanded.has(toolPairId)) {
+      expanded.delete(toolPairId);
+    } else {
+      expanded.add(toolPairId);
+    }
+    return { ui: { ...state.ui, expandedToolPairs: expanded } };
+  }),
+  
+  // Actions (server-authoritative)
+  addNode: (node) => set((state) => {
+    const nodes = new Map(state.nodes);
+    nodes.set(node.node_id, node);
+    return { nodes };
+  }),
+  
+  updateToolPairState: (toolCallId, newState) => set((state) => {
+    const groups = new Map(state.streaming.toolPairGroups);
+    const group = groups.get(toolCallId);
+    if (group) {
+      group.state = newState;
+      groups.set(toolCallId, group);
+    }
+    return { streaming: { ...state.streaming, toolPairGroups: groups } };
+  }),
+}));
+
+// Usage in components
+function MiniMap() {
+  const selectedNodeId = useChatStore(state => state.ui.selectedNodeId);
+  const selectNode = useChatStore(state => state.selectNode);
+  
+  return (
+    <div>
+      {nodes.map(node => (
+        <NodeDot 
+          key={node.id}
+          isSelected={node.id === selectedNodeId}  // Derived from single source
+          onClick={() => selectNode(node.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ChatContainer() {
+  const selectedNodeId = useChatStore(state => state.ui.selectedNodeId);
+  
+  return (
+    <div>
+      {cards.map(card => (
+        <Card 
+          key={card.id}
+          isHighlighted={card.id === selectedNodeId}  // Same single source
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+#### Synchronization Invariants
+
+**Guarantees to maintain:**
+
+1. **Selection Sync**: `miniMap.selected === chatContainer.highlighted === state.ui.selectedNodeId`
+2. **Tool Pair Consistency**: Every `tool_calls_requested` event has matching results or timeout
+3. **Event Ordering**: Events processed in arrival order (seq numbers)
+4. **No Lost Updates**: All SSE events either processed or queued, never dropped
+5. **Memory Bounds**: `nodes.size <= loadedChunks.size * 50` (only loaded chunks in memory)
+
+**Validation checks (dev mode):**
+
+```typescript
+function validateState(state: ChatUIState) {
+  // Check 1: Selected node exists in active path
+  if (state.ui.selectedNodeId) {
+    assert(
+      state.activePath.includes(state.ui.selectedNodeId),
+      'Selected node must be in active path'
+    );
+  }
+  
+  // Check 2: All tool pairs have matching calls
+  for (const [groupId, group] of state.streaming.toolPairGroups) {
+    for (const pair of group.pairs) {
+      assert(pair.toolCall, 'Tool pair must have toolCall');
+      if (pair.state === 'complete') {
+        assert(pair.result, 'Complete pair must have result');
+      }
+    }
+  }
+  
+  // Check 3: No duplicate nodes in active path
+  const uniqueNodes = new Set(state.activePath);
+  assert(
+    uniqueNodes.size === state.activePath.length,
+    'Active path must not have duplicates'
+  );
+}
+```
+
 ### Performance Optimization & Lazy Loading Strategy
 
 #### Performance Targets (Concrete Metrics)
@@ -1091,6 +1556,14 @@ class PerformanceMonitor {
 - [ ] Integrate error analysis into agent chat loop (tool errors, API errors, LLM errors).
 - [ ] Implement error analysis caching to reduce costs.
 
+**Frontend - State Management:**
+- [ ] Implement ChatUIState interface with server/client/streaming/metrics sections.
+- [ ] Set up Zustand store with unidirectional data flow.
+- [ ] Implement EventQueue with ordering guarantees (FIFO + yield to UI).
+- [ ] Implement single source of truth for selectedNodeId.
+- [ ] Separate optimistic actions (expand/collapse) from server-authoritative (add node).
+- [ ] Add state validation checks (dev mode) for sync invariants.
+
 **Frontend - View Models:**
 - [ ] Implement view model: ToolPairGroup with state machine (pending/slow/orphaned/complete/error).
 - [ ] Implement ToolPairTracker with 10s/60s timeout timers.
@@ -1154,6 +1627,11 @@ class PerformanceMonitor {
 
 **Frontend Tests:**
 - Unit tests: 
+  - State management: single source of truth for selectedNodeId
+  - State management: optimistic vs server-authoritative actions
+  - EventQueue: FIFO ordering with sequence numbers
+  - EventQueue: yield to UI between events (maintains 60fps)
+  - State validation: sync invariants (selection, tool pairs, no duplicates)
   - ToolPairGroup state machine transitions (pending → slow → orphaned)
   - Timer logic (10s slow warning, 60s orphaned timeout)
   - tool_call_id matching for out-of-order results
@@ -1165,6 +1643,10 @@ class PerformanceMonitor {
   - Adaptive strategy selection (4 tiers by session size)
   
 - Integration tests: 
+  - State sync: mini map selection updates chat container highlight
+  - State sync: chat container scroll updates mini map highlight
+  - EventQueue: rapid SSE events processed in order without lag
+  - EventQueue: no lost updates during reconnection
   - Stream updates with multiple tool calls in single turn
   - Tool result arrival during different timeout phases
   - Error analysis streaming (raw error → analysis arrives later)
@@ -1172,6 +1654,7 @@ class PerformanceMonitor {
   - Lazy loading on scroll (fetch new chunks)
   - Virtual scroll with rapid scrolling
   - Memory cleanup during long scroll sessions
+  - Optimistic UI: expand/collapse instant without server round-trip
   
 - Performance tests:
   - Initial render <200ms with 50 cards
@@ -1229,6 +1712,15 @@ class PerformanceMonitor {
 
 ## 9) Acceptance criteria
 
+**State Management:**
+- [ ] Single source of truth: selectedNodeId stored in one place.
+- [ ] Selection sync: mini map and chat container both reflect state.ui.selectedNodeId.
+- [ ] EventQueue processes SSE events in order (FIFO with sequence numbers).
+- [ ] Optimistic updates: expand/collapse/scroll update UI instantly.
+- [ ] Server-authoritative: conversation data waits for SSE confirmation.
+- [ ] State validation passes all invariants (no duplicate nodes, tool pairs consistent).
+- [ ] No lost SSE events (all enqueued and processed).
+
 **Message & Tool Display:**
 - [ ] Cards render for every node on the active path.
 - [ ] Tool pairs from single assistant turn are grouped into one collapsible card.
@@ -1278,3 +1770,4 @@ class PerformanceMonitor {
 - 2026-01-06: Added detailed tool pair grouping & edge case handling (state machine, timeout thresholds, out-of-order results)
 - 2026-01-06: Added AI-enhanced error handling with comprehensive error analysis agent (all error types, severity levels, actionable suggestions)
 - 2026-01-06: Added concrete performance targets and comprehensive lazy loading strategy (virtualization, pagination, memory management)
+- 2026-01-06: Added state management architecture (single source of truth, event queue, optimistic UI, sync invariants)
