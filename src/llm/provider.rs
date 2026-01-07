@@ -95,9 +95,6 @@ pub struct ProviderConfig {
     /// Enable thinking/reasoning mode (for supported providers like Claude)
     pub enable_reasoning: bool,
 
-    /// System prompt
-    pub system_prompt: Option<String>,
-
     /// Stop sequences
     pub stop_sequences: Vec<String>,
 
@@ -113,7 +110,6 @@ impl Default for ProviderConfig {
             top_p: None,
             top_k: None,
             enable_reasoning: false,
-            system_prompt: None,
             stop_sequences: Vec::new(),
             extra_options: HashMap::new(),
         }

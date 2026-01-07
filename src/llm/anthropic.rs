@@ -237,23 +237,13 @@ impl LLMProvider for AnthropicProvider {
         ProviderError,
     > {
         let cfg = self.config();
-        let mut history = Vec::new();
-
-        if let Some(system_prompt) = &cfg.system_prompt {
-            history.push(Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
-
-        history.push(Message {
+        // Note: system_prompt is now handled by Session.get_context()
+        let history = vec![Message {
             role: Role::User,
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: None,
-        });
+        }];
 
         let (messages, system) = self.build_request_body(&history, &cfg, None);
         let request_body = self.build_create_message_request(messages, system, None, &cfg, true);

@@ -328,23 +328,13 @@ impl LLMProvider for GeminiProvider {
         ProviderError,
     > {
         let cfg = self.config();
-        let mut history = Vec::new();
-
-        if let Some(system_prompt) = &cfg.system_prompt {
-            history.push(Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
-
-        history.push(Message {
+        // Note: system_prompt is now handled by Session.get_context()
+        let history = vec![Message {
             role: Role::User,
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: None,
-        });
+        }];
 
         let (contents, system_instruction, _) = self.build_request_body(&history, &cfg, None);
         let request_body = self.build_stream_request(contents, system_instruction, None, &cfg);

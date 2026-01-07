@@ -382,17 +382,10 @@ impl LLMProvider for OpenAIProvider {
         let cfg = self.config();
 
         // Build messages
-        let mut messages = vec![];
-
-        if let Some(system_prompt) = &cfg.system_prompt {
-            messages.push(ChatMessage::System {
-                content: system_prompt.clone(),
-            });
-        }
-
-        messages.push(ChatMessage::User {
+        // Note: system_prompt is now handled by Session.get_context()
+        let messages = vec![ChatMessage::User {
             content: prompt.to_string(),
-        });
+        }];
 
         // Build request
         let request = ChatCompletionRequest {
