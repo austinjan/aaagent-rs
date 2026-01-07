@@ -1,9 +1,56 @@
 # Chat UI Foundation Plan
 
 - Feature name: `chat-ui-foundation`
-- Status: Draft
+- Status: **Implemented** ✅
 - Created: 2026-01-06
+- Completed: 2026-01-07
 - Parent plan: [chat-ui-plan.md](./chat-ui-plan.md)
+
+## Implementation Summary
+
+**Status: 100% Complete** ✅
+
+### What's Working ✅
+- **Frontend**: Vite + React 18 + TypeScript with hot reload
+- **UI Framework**: daisyUI + Tailwind CSS with BlackBear TechHive theme  
+- **Backend**: Rust + axum web server with embedded assets
+- **Development Workflow**: `develop.py` script manages both servers
+- **API Endpoints**: Health check and placeholder routes
+- **Feature Flags**: `dev-server` for CORS in development
+- **Production Build**: Automated frontend build in `build.rs`
+- **Single Binary**: Release binary serves both UI and API
+
+### Quick Start
+
+**Development Mode:**
+```bash
+# Start development environment (single command)
+python develop.py start
+# Frontend: http://localhost:5173 (hot reload)
+# Backend:  http://localhost:3000 (API + embedded UI)
+
+# Stop everything
+python develop.py stop
+
+# Restart backend after Rust code changes
+python develop.py restart
+```
+
+**Production Mode:**
+```bash
+# Build release binary (auto-builds frontend)
+cargo build --release
+
+# Run single binary
+./target/release/aaagent serve
+# Serves on http://localhost:3000
+```
+
+### Test Backend
+```bash
+curl http://localhost:3000/api/health
+# {"status":"ok","message":"aaagent-rs chat UI backend is running","version":"0.1.0"}
+```
 
 ## 1) Overview
 
@@ -94,7 +141,31 @@ aaagent-rs/
 
 ## 4) Development Workflow
 
-### Development Mode
+### Development Mode (Simplified with Python Script)
+
+**Single-Command Development** (Recommended):
+
+```bash
+# Start both frontend (Vite) and backend (Rust) in one command
+python develop.py start
+
+# Restart backend only (rebuild if necessary)
+python develop.py restart
+
+# Stop both frontend and backend
+python develop.py stop
+```
+
+**What `develop.py` does:**
+- Starts Vite dev server on http://localhost:5173 (with hot reload)
+- Builds and runs Rust backend on http://localhost:3000
+- Manages both processes (no need for two terminals)
+- Handles graceful shutdown on Ctrl+C or `stop` command
+- Automatically rebuilds backend on `restart` command
+
+**Manual Mode** (Alternative):
+
+If you prefer separate terminals:
 
 **Terminal 1: Run Rust backend**
 ```bash
@@ -139,6 +210,7 @@ export default defineConfig({
 - No CORS issues (proxy handles it)
 - Fast iteration (no rebuild needed)
 - Backend and frontend run independently
+- Single command with `develop.py` (no multiple terminals needed)
 
 ### Production Build
 
@@ -167,6 +239,105 @@ cargo build --release
 # GET / → index.html
 # GET /api/* → API endpoints
 # GET /assets/* → CSS, JS, images
+```
+
+### Development Script (`develop.py`)
+
+**Purpose**: Simplify development workflow by managing both frontend and backend in a single command.
+
+**Location**: `aaagent-rs/develop.py`
+
+**Commands**:
+
+```bash
+# Start both frontend dev server and backend
+python develop.py start
+
+# Restart backend only (kill, rebuild, restart)
+python develop.py restart
+
+# Stop both frontend and backend
+python develop.py stop
+```
+
+**Requirements**:
+```python
+# Python 3.8+
+# Standard library only (subprocess, signal, sys, os, time, pathlib, json)
+```
+
+**Behavior**:
+
+1. **`start` command**:
+   - Check if `web/node_modules` exists, if not run `npm install` in `web/`
+   - Start Vite dev server: `cd web && npm run dev` (background process)
+   - Build Rust backend: `cargo build --features dev-server` (if needed)
+   - Run Rust backend: `cargo run --features dev-server` (background process)
+   - Monitor both processes, print their output with prefixes `[vite]` and `[backend]`
+   - Handle Ctrl+C gracefully (kill both processes)
+   - Store PIDs in `.dev_pids.json` for `restart`/`stop` commands
+
+2. **`restart` command**:
+   - Read backend PID from `.dev_pids.json`
+   - Kill backend process (SIGTERM, wait 5s, SIGKILL if needed)
+   - Keep frontend running (no interruption to hot reload)
+   - Rebuild backend: `cargo build --features dev-server`
+   - Restart backend: `cargo run --features dev-server`
+   - Update backend PID in `.dev_pids.json`
+
+3. **`stop` command**:
+   - Read PIDs from `.dev_pids.json`
+   - Kill both frontend and backend processes (SIGTERM, then SIGKILL if needed)
+   - Remove `.dev_pids.json`
+   - Clean exit
+
+**Output Format**:
+```
+[develop.py] Starting development environment...
+[develop.py] Checking frontend dependencies...
+[npm] added 245 packages in 8s
+[develop.py] Starting Vite dev server...
+[vite] VITE v5.3.0  ready in 523 ms
+[vite] ➜  Local:   http://localhost:5173/
+[develop.py] Building Rust backend...
+[cargo] Compiling aaagent-rs v0.1.0
+[cargo] Finished dev [unoptimized + debuginfo] target(s) in 12.34s
+[develop.py] Starting Rust backend...
+[backend] Server running on http://127.0.0.1:3000
+[develop.py] ✓ Development environment ready
+[develop.py] 
+[develop.py]   Frontend: http://localhost:5173
+[develop.py]   Backend:  http://localhost:3000
+[develop.py] 
+[develop.py] Press Ctrl+C to stop both servers
+```
+
+**Error Handling**:
+- If Vite fails to start: Print error, kill backend, exit
+- If backend fails to build: Print error, kill Vite, exit
+- If backend fails to run: Print error, kill Vite, exit
+- If ports already in use: Print error with instructions
+- If `.dev_pids.json` missing on `restart`/`stop`: Print helpful error
+
+**Cross-Platform Support**:
+- Windows: Use `subprocess.CREATE_NEW_PROCESS_GROUP` and `taskkill /F /T /PID` for cleanup
+- Unix/Linux/macOS: Use process groups with `os.setpgid()` and `SIGTERM`/`SIGKILL`
+
+**Implementation Details**:
+- Use `subprocess.Popen()` with `stdout=subprocess.PIPE`, `stderr=subprocess.STDOUT`
+- Use separate threads to read and print output from both processes in real-time
+- Prefix each output line with `[vite]` or `[backend]` for clarity
+- Store PIDs in JSON: `{"frontend": 12345, "backend": 67890}`
+- Graceful shutdown: Try SIGTERM first, wait 5s, then SIGKILL if process still alive
+- Color output (optional): green for success, red for errors, yellow for warnings (use `colorama` if available)
+
+**PID File Format** (`.dev_pids.json`):
+```json
+{
+  "frontend": 12345,
+  "backend": 67890,
+  "started_at": "2026-01-07T10:30:00"
+}
 ```
 
 ### Automated Build (Optional)
@@ -213,6 +384,8 @@ fn main() {
     }
 }
 ```
+
+After finished Automated Build, Do not forget write usage in the README.md file.
 
 **Benefits:**
 - `cargo build --release` automatically builds frontend
@@ -547,29 +720,40 @@ dev-server = ["tower-http/cors"]  # Enable CORS for dev mode
 
 ## 8) Acceptance Criteria
 
-- [ ] `cargo build --release` produces single binary
-- [ ] Binary serves UI at `http://localhost:3000/`
-- [ ] API routes accessible at `/api/*`
-- [ ] Static assets (CSS, JS, images) load correctly
-- [ ] SPA routing works (refresh doesn't 404)
-- [ ] Dev mode supports hot reload
-- [ ] No CORS errors in development
-- [ ] Frontend build outputs to `web/dist/`
-- [ ] daisyUI theme applied with BlackBear colors
+- [x] Frontend initializes with Vite + React + TypeScript
+- [x] daisyUI theme applied with BlackBear colors (#E8C236, #000000)
+- [x] Tailwind CSS configured and working
+- [x] Backend has `serve` subcommand
+- [x] Backend serves embedded assets from `web/dist/`
+- [x] API routes accessible at `/api/*`
+- [x] Health check endpoint `/api/health` returns JSON
+- [x] Dev mode supports hot reload (Vite on 5173, backend on 3000)
+- [x] No CORS errors in development (dev-server feature)
+- [x] `develop.py start` launches both servers
+- [x] `develop.py stop` gracefully shuts down both servers
+- [x] `develop.py restart` restarts backend only
+- [x] `cargo build --release` produces single binary
+- [x] Binary serves UI at `http://localhost:3000/`
+- [x] SPA routing works (refresh doesn't 404)
+- [x] Frontend build outputs to `web/dist/`
 
 ## 9) Implementation Tasks
 
-- [ ] Create `web/` directory structure
-- [ ] Initialize Vite + React + TypeScript project
-- [ ] Configure Tailwind CSS + daisyUI
-- [ ] Add `rust-embed` to Cargo.toml
-- [ ] Implement `src/web/mod.rs` with asset handler
-- [ ] Implement `src/api/mod.rs` with router
-- [ ] Update `src/main.rs` with server setup
-- [ ] Create `build.rs` for automated builds
-- [ ] Test development workflow (two terminals)
-- [ ] Test production build (single binary)
-- [ ] Document setup in README
+- [x] Create `web/` directory structure
+- [x] Initialize Vite + React + TypeScript project
+- [x] Configure Tailwind CSS + daisyUI with BlackBear theme
+- [x] Add `rust-embed` to Cargo.toml
+- [x] Implement `src/web/mod.rs` with asset handler
+- [x] Implement `src/api/mod.rs` with router
+- [x] Update `src/main.rs` with server setup (`serve` subcommand)
+- [x] Add health check endpoint `/api/health`
+- [x] **Create `develop.py` script for simplified development workflow**
+- [x] Test development workflow with `python develop.py start`
+- [x] Test backend restart with `python develop.py restart`
+- [x] Test graceful shutdown with `python develop.py stop`
+- [x] Create `build.rs` for automated builds
+- [x] Test production build (single binary)
+- [x] Document setup in README (include `develop.py` usage)
 
 ---
 
