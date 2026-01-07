@@ -43,78 +43,85 @@ aaagent = { version = "0.1", default-features = false, features = ["openai", "ge
 
 ## Quick Start
 
-```rust
-use aaagent::agent::Agent;
-use aaagent::history::{MemoryStore, Session, SessionConfig};
-use aaagent::llm::{OpenAIProvider, ToolRegistry};
-use std::sync::Arc;
+### Development Mode (Recommended)
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Setup
-    let api_key = std::env::var("OPENAI_API_KEY")?;
-    let provider = OpenAIProvider::create("gpt-4o".to_string(), api_key)?;
-    let store = Arc::new(MemoryStore::new());
-    let config = SessionConfig::default();
-    let session = Session::new(store, config).await?;
-    let tools = ToolRegistry::new().register_all_builtin();
+Start both frontend and backend with one command:
 
-    // Create agent
-    let mut agent = Agent::new(session, provider, tools);
+```bash
+python develop.py start
+```
 
-    // Chat with real-time events
-    let response = agent
-        .chat_with_callback("List files in current directory", |event| {
-            match event {
-                AgentEvent::Content(text) => print!("{}", text),
-                AgentEvent::ToolCallsRequested { tool_calls } => {
-                    println!("Calling {} tools...", tool_calls.len());
-                }
-                AgentEvent::Done { total_usage, .. } => {
-                    println!("\nTokens used: {}", total_usage.total());
-                }
-                _ => {}
-            }
-        })
-        .await?;
+This will:
+- Start Vite dev server on http://localhost:5173 (hot reload)
+- Start Rust backend on http://localhost:3000 (API + embedded UI)
+- Manage both processes automatically
 
-    Ok(())
+**Stop everything:**
+```bash
+python develop.py stop
+```
+
+**Restart backend only (after Rust code changes):**
+```bash
+python develop.py restart
+```
+
+### Manual Development Mode
+
+If you prefer separate terminals:
+
+**Terminal 1: Backend**
+```bash
+cargo run --features dev-server -- serve
+# Runs on http://localhost:3000
+```
+
+**Terminal 2: Frontend**
+```bash
+cd web
+npm run dev
+# Runs on http://localhost:5173 with hot reload
+# Proxies /api/* to backend on port 3000
+```
+
+### Production Build
+
+Build a single binary that serves both UI and API:
+
+```bash
+# Step 1: Build frontend
+cd web
+npm run build
+
+# Step 2: Build Rust binary (embeds frontend)
+cd ..
+cargo build --release
+
+# Step 3: Run
+./target/release/aaagent serve
+# Serves on http://localhost:3000
+```
+
+## Testing
+
+### Backend Health Check
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "message": "aaagent-rs chat UI backend is running",
+  "version": "0.1.0"
 }
 ```
 
-## Providers
+### Frontend
 
-| Provider | Status | Features |
-|----------|--------|----------|
-| OpenAI | Complete | Streaming, tools, chat loop |
-| Anthropic | Complete | Streaming, tools, chat loop |
-| Gemini | Complete | Streaming, tools, chat loop |
-
-## Context Optimization
-
-The library automatically optimizes context to reduce token usage:
-
-### Tool Result Compression (3 layers)
-- **Layer 1** (Recent): Last N turns kept in full
-- **Layer 2** (Medium): Truncated with preview
-- **Layer 3** (Old): Summarized, full content archived for recall
-
-### Checkpointing
-- Auto-checkpoint after N user turns
-- Auto-checkpoint when context exceeds token limit
-- Summaries replace old conversation history
-
-## Examples
-
-See the [examples](./examples) directory:
-
-- `interactive_agent_tree.rs` - Interactive chat with tree history and tools
-- `loop_detection_demo.rs` - Loop detection in action
-
-Run with:
-```bash
-cargo run --example interactive_agent_tree --features gemini -- --provider=gemini
-```
+Open http://localhost:5173 (dev mode) or http://localhost:3000 (production)
 
 ## License
 

@@ -36,8 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         label: provider_label,
         model: provider_model,
         provider,
+        quick_provider,
     } = provider_info;
     let provider_name = format!("{} ({})", provider_label, provider_model);
+    let has_quick_provider = quick_provider.is_some();
 
     // Create session with tree storage
     let store = Arc::new(MemoryStore::new());
@@ -68,9 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Features:");
     println!("  - Tree-based conversation history (supports branching)");
-    println!("  - Automatic checkpointing (every 10 messages)");
+    println!("  - Automatic checkpointing (every 10 user turns)");
     println!("  - Tool execution via ToolRegistry");
     println!("  - Stateless provider (history in tree)");
+    if has_quick_provider {
+        println!("  - Quick provider enabled for checkpoint summaries");
+    }
     println!();
     println!("Commands:");
     println!("  - Type your message to chat");
@@ -82,12 +87,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the appropriate agent based on provider type
     match provider {
         ActiveProvider::OpenAI(p) => {
-            let mut agent = Agent::new(session, p, registry);
+            let agent = Agent::new(session, p, registry);
+            let mut agent = if let Some(qp) = quick_provider {
+                agent.with_quick_provider(qp)
+            } else {
+                agent
+            };
             run_agent_loop(&mut agent).await?;
         }
         #[cfg(feature = "gemini")]
         ActiveProvider::Gemini(p) => {
-            let mut agent = Agent::new(session, p, registry);
+            let agent = Agent::new(session, p, registry);
+            let mut agent = if let Some(qp) = quick_provider {
+                agent.with_quick_provider(qp)
+            } else {
+                agent
+            };
             run_agent_loop(&mut agent).await?;
         }
     }
@@ -529,19 +544,33 @@ struct ProviderInfo {
     label: &'static str,
     model: String,
     provider: ActiveProvider,
+    /// Optional quick provider for simple tasks (checkpoint summaries)
+    quick_provider: Option<Box<dyn LLMProvider>>,
 }
 
 fn init_provider(kind: ProviderKind) -> Result<ProviderInfo, ProviderError> {
+    // Check if quick provider is requested via QUICK_MODEL env var
+    let quick_model = env::var("QUICK_MODEL").ok();
+
     match kind {
         ProviderKind::OpenAI => {
             let api_key =
                 env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
             let model = env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-            let provider = OpenAIProvider::create(model.clone(), api_key)?;
+            let provider = OpenAIProvider::create(model.clone(), api_key.clone())?;
+
+            // Create quick provider if QUICK_MODEL is set
+            let quick_provider: Option<Box<dyn LLMProvider>> = if let Some(ref qm) = quick_model {
+                Some(Box::new(OpenAIProvider::create(qm.clone(), api_key)?))
+            } else {
+                None
+            };
+
             Ok(ProviderInfo {
                 label: "OpenAI",
                 model,
                 provider: ActiveProvider::OpenAI(provider),
+                quick_provider,
             })
         }
         ProviderKind::Gemini => {
@@ -549,13 +578,23 @@ fn init_provider(kind: ProviderKind) -> Result<ProviderInfo, ProviderError> {
             {
                 let api_key = env::var("GEMINI_API_KEY")
                     .expect("GEMINI_API_KEY environment variable not set");
-                let model = env::var("GEMINI_MODEL")
-                    .unwrap_or_else(|_| "gemini-3-flash-preview".to_string());
-                let provider = GeminiProvider::create(model.clone(), api_key)?;
+                let model =
+                    env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
+                let provider = GeminiProvider::create(model.clone(), api_key.clone())?;
+
+                // Create quick provider if QUICK_MODEL is set
+                let quick_provider: Option<Box<dyn LLMProvider>> = if let Some(ref qm) = quick_model
+                {
+                    Some(Box::new(GeminiProvider::create(qm.clone(), api_key)?))
+                } else {
+                    None
+                };
+
                 Ok(ProviderInfo {
                     label: "Gemini",
                     model,
                     provider: ActiveProvider::Gemini(provider),
+                    quick_provider,
                 })
             }
             #[cfg(not(feature = "gemini"))]

@@ -223,7 +223,7 @@ impl LLMProvider for AnthropicProvider {
         self.config.read().map(|c| c.clone()).unwrap_or_default()
     }
 
-    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig)) {
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>) {
         if let Ok(mut config) = self.config.write() {
             f(&mut config);
         }

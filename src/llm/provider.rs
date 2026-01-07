@@ -26,7 +26,7 @@ pub trait LLMProvider: Send + Sync {
     fn config(&self) -> ProviderConfig;
 
     /// Update configuration using a closure
-    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig));
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>);
 
     /// Simple chat completion (single prompt -> response)
     /// Returns a stream of chunks for streaming responses
