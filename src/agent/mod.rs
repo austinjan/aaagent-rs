@@ -56,6 +56,9 @@ impl Default for AgentConfig {
 pub struct Agent<P: LLMProvider> {
     pub session: Session,
     provider: P,
+    /// Optional quick provider for simple internal tasks (e.g., checkpoint summaries)
+    /// If None, falls back to main provider
+    quick_provider: Option<Box<dyn LLMProvider>>,
     tools: ToolRegistry,
     config: AgentConfig,
 }
@@ -66,6 +69,7 @@ impl<P: LLMProvider> Agent<P> {
         Self {
             session,
             provider,
+            quick_provider: None,
             tools,
             config: AgentConfig::default(),
         }
@@ -81,14 +85,38 @@ impl<P: LLMProvider> Agent<P> {
         Self {
             session,
             provider,
+            quick_provider: None,
             tools,
             config,
         }
     }
 
+    /// Set a quick provider for simple internal tasks (e.g., checkpoint summaries)
+    ///
+    /// The quick provider is used for tasks that don't require complex reasoning,
+    /// allowing you to use a cheaper/faster model for these operations.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let main_provider = OpenAIProvider::create("gpt-4o".into(), api_key)?;
+    /// let quick_provider = OpenAIProvider::create("gpt-4o-mini".into(), api_key)?;
+    ///
+    /// let agent = Agent::new(session, main_provider, tools)
+    ///     .with_quick_provider(Box::new(quick_provider));
+    /// ```
+    pub fn with_quick_provider(mut self, provider: Box<dyn LLMProvider>) -> Self {
+        self.quick_provider = Some(provider);
+        self
+    }
+
     /// Update agent configuration
     pub fn set_config(&mut self, config: AgentConfig) {
         self.config = config;
+    }
+
+    /// Set quick provider after construction
+    pub fn set_quick_provider(&mut self, provider: Box<dyn LLMProvider>) {
+        self.quick_provider = Some(provider);
     }
 
     /// Main chat interface - sends a user message and gets assistant response
@@ -603,7 +631,7 @@ impl<P: LLMProvider> Agent<P> {
         Ok(None)
     }
 
-    /// Generate a summary for checkpoint using the LLM
+    /// Generate a summary for checkpoint using the quick provider (or main provider as fallback)
     async fn generate_summary(&self, context: &[Message]) -> Result<String> {
         // Simple implementation: ask LLM to summarize
         let summary_prompt = format!(
@@ -622,7 +650,13 @@ impl<P: LLMProvider> Agent<P> {
             tool_calls: None,
         }];
 
-        let mut handle = self.provider.chat_loop(summary_context, None).await?;
+        // Use quick_provider if available, otherwise fall back to main provider
+        let mut handle = if let Some(ref quick) = self.quick_provider {
+            quick.chat_loop(summary_context, None).await?
+        } else {
+            self.provider.chat_loop(summary_context, None).await?
+        };
+
         let mut summary = String::new();
 
         use crate::llm::LoopStep;
