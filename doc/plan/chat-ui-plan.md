@@ -3,7 +3,7 @@
 - Feature name: `chat-ui`
 - Status: Draft
 - Created: 2026-01-06
-- Last updated: 2026-01-06
+- Last updated: 2026-01-08
 
 ## 1) Overview
 
@@ -12,6 +12,10 @@ Deliver a web-based chat UI that visualizes the conversation history tree path w
 
 ### Architecture
 **Single Binary + Embedded Frontend**: Rust backend embeds compiled React frontend, serving both API and UI from one executable.
+
+**Frontend:** Vite + React 18 + TypeScript + shadcn/ui + Tailwind CSS  
+**Backend:** Rust + axum + rust-embed  
+**Theme:** BlackBear TechHive (Yellow #E8C236, Black #000000)
 
 ### Scope (In)
 - Web UI with chat container and minimal mini map
@@ -31,13 +35,33 @@ Deliver a web-based chat UI that visualizes the conversation history tree path w
 
 This master plan is broken down into focused sub-plans:
 
-### 2.1) Foundation ([chat-ui-foundation.md](./chat-ui-foundation.md))
+### 2.1) Configuration System ([chat-ui-config.md](./chat-ui-config.md))
+**Status**: ✅ Implemented (API keys pending)  
+**Scope**: Intent-first API configuration, presets, API key management
+
+**Key Topics**:
+- Intent over parameters (creativity, verbosity, rounds)
+- 4 presets: general, coding, research, quick
+- Temperature profiles with model-specific handling
+- API key management - see [api-key-management.md](./api-key-management.md)
+- Session metadata for resolved config
+- Immutable system prompts
+
+**Deliverables**:
+- ✅ Config module with types, presets, resolver
+- ✅ ConfigManager with config.yaml loading
+- ✅ POST `/api/sessions/{id}/chat` with config support
+- ✅ Session metadata integration
+- [ ] API key management system ([api-key-management.md](./api-key-management.md))
+- [ ] Frontend config panel
+
+### 2.2) Foundation ([chat-ui-foundation.md](./chat-ui-foundation.md))
 **Status**: Draft  
 **Scope**: Architecture, tech stack, build process, deployment
 
 **Key Topics**:
 - Single binary + embedded frontend approach
-- Vite + React + TypeScript + daisyUI + Zustand
+- Vite + React + TypeScript + shadcn/ui + Zustand
 - Development workflow (two terminals: Rust + Vite)
 - Production build (one executable with embedded assets)
 - rust-embed for asset bundling
@@ -163,7 +187,7 @@ This master plan is broken down into focused sub-plans:
 
 **Tasks** (see [chat-ui-foundation.md](./chat-ui-foundation.md)):
 - [ ] Set up project structure (web/, src/web/, src/api/)
-- [ ] Configure Vite + React + TypeScript + daisyUI
+- [ ] Configure Vite + React + TypeScript + shadcn/ui
 - [ ] Implement rust-embed asset serving
 - [ ] Set up axum router with SPA fallback
 - [ ] Test development workflow (two terminals)
@@ -173,7 +197,7 @@ This master plan is broken down into focused sub-plans:
 - `cargo build --release` produces single binary
 - Binary serves UI at `http://localhost:3000/`
 - Hot reload works in development
-- daisyUI theme applied with BlackBear colors
+- shadcn/ui components styled with BlackBear colors
 
 ### Phase 2: SSE Streaming (Milestone 2)
 **Goal**: Real-time data flow from backend to frontend  
@@ -383,3 +407,4 @@ This master plan is broken down into focused sub-plans:
 - 2026-01-06: Created master plan
 - 2026-01-06: Added single binary + embedded frontend architecture
 - 2026-01-06: Broke down into 6 focused sub-plans for maintainability
+- 2026-01-08: Updated from daisyUI to shadcn/ui component library

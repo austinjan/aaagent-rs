@@ -13,6 +13,9 @@ import threading
 import time
 from pathlib import Path
 
+# Global flag to stop output threads gracefully
+_shutdown_flag = threading.Event()
+
 PID_FILE = ".dev_pids.json"
 WEB_DIR = "web"
 VITE_PORT = 5173
@@ -41,7 +44,7 @@ def read_pids():
     try:
         with open(PID_FILE, "r") as f:
             return json.load(f)
-    except:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -85,9 +88,14 @@ def kill_process(pid):
 
 def stream_output(process, prefix):
     """Stream process output with prefix"""
-    for line in iter(process.stdout.readline, b""):
-        if line:
+    try:
+        while not _shutdown_flag.is_set():
+            line = process.stdout.readline()
+            if not line:
+                break
             print(f"[{prefix}] {line.decode().rstrip()}")
+    except Exception:
+        pass  # Silently handle errors during shutdown
 
 
 def check_node_modules():
@@ -194,6 +202,12 @@ def cmd_start():
         print_msg("Run 'python develop.py stop' first")
         sys.exit(1)
 
+    # Reset shutdown flag
+    _shutdown_flag.clear()
+
+    frontend_process = None
+    backend_process = None
+
     try:
         # Start frontend
         frontend_process = start_frontend()
@@ -232,18 +246,40 @@ def cmd_start():
         except KeyboardInterrupt:
             print_msg("\nShutting down...")
 
-        # Cleanup
-        kill_process(frontend_process.pid)
-        kill_process(backend_process.pid)
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
-        print_success("Stopped")
-
+    except KeyboardInterrupt:
+        print_msg("\nShutting down...")
     except Exception as e:
         print_error(f"Failed to start: {e}")
+    finally:
+        # Signal output threads to stop
+        _shutdown_flag.set()
+
+        # Cleanup processes
+        if frontend_process:
+            kill_process(frontend_process.pid)
+        if backend_process:
+            kill_process(backend_process.pid)
+
+        # Wait briefly for threads to finish
+        time.sleep(0.5)
+
+        # Remove PID file
         if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
-        sys.exit(1)
+
+        # Restore terminal on Windows
+        if sys.platform == "win32":
+            try:
+                # Flush stdout/stderr
+                sys.stdout.flush()
+                sys.stderr.flush()
+                # Reset console mode on Windows
+                os.system("")
+            except Exception:
+                # Intentionally ignore failures while restoring the Windows console
+                pass
+
+        print_success("Stopped")
 
 
 def cmd_restart():

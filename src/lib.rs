@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod config;
 pub mod explore_hierarchy;
 pub mod history;
 pub mod llm;

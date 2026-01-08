@@ -5,6 +5,23 @@ debug/
 *.pdb
 app.log
 
+# Data directory - NEVER commit user data
+/data/
+
+# Sensitive configuration files (NEVER commit these!)
+secrets.yaml
+.env
+.env.local
+.env.*.local
+
+# Key files directory
+keys/
+*.key
+
+# NOTE: config.yaml is NOT in .gitignore
+# It only contains references (env vars or file paths), not actual keys
+# It is SAFE to commit config.yaml
+
 # Frontend (Node.js / Vite)
 web/node_modules/
 web/dist/

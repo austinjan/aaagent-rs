@@ -187,6 +187,35 @@ Fallback handler serves embedded frontend from `web/dist/`.
 
 ## Project Conventions
 
+### Data Directory Structure
+
+**IMPORTANT**: All persistent data files MUST be stored in the `data/` directory.
+
+```
+project_root/
+├── config.yaml              # Configuration (working directory only)
+├── secrets.yaml             # API keys (working directory, gitignored)
+├── .env                     # Environment variables (working directory, gitignored)
+└── data/                    # All persistent data (gitignored)
+    ├── sessions/            # Session JSON files
+    ├── nodes/               # Tree node storage (for FileStore)
+    ├── audit/               # Audit logs (future)
+    └── backups/             # Session backups (future)
+```
+
+**Rules**:
+- ✅ **`config.yaml`** - ONLY user-facing config in working directory
+- ✅ **`secrets.yaml`, `.env`** - Sensitive config in working directory (gitignored)
+- ✅ **`data/`** - ALL other persistent files (sessions, nodes, logs, backups)
+- ❌ **NEVER** write data files to working directory (except config.yaml)
+- ❌ **NEVER** write logs to working directory (use `data/audit/` or stdout)
+
+**Implementation**:
+- Session storage: `data/sessions/{session_id}.json`
+- Node storage: `data/nodes/{node_id}.json`
+- Audit logs: `data/audit/{date}.log` (future)
+- Use `ensure_data_directories()` on startup to create structure
+
 ### Error Handling
 - Use `anyhow::Result` for application-level errors
 - Use `thiserror` for library-level error types
@@ -199,7 +228,7 @@ Fallback handler serves embedded frontend from `web/dist/`.
 
 ### Logging
 - Simple file-based logger in `src/logger.rs`
-- Writes to `app.log` in current directory
+- Writes to `app.log` in current directory (TODO: move to `data/audit/`)
 - Use `aaagent::logger::log(message)` for logging
 
 ### Testing Strategy

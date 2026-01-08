@@ -1,0 +1,61 @@
+# aaagent Configuration File
+# This file is SAFE to commit to git - it contains NO actual API keys
+
+# API Key References (NOT the actual keys!)
+# Tell the application WHERE to find keys, not the keys themselves
+api_keys:
+  openai:
+    env: OPENAI_API_KEY              # Read from environment variable (recommended)
+  anthropic:
+    env: ANTHROPIC_API_KEY
+  google:
+    env: GOOGLE_API_KEY
+
+  # Alternative: Read from file
+  # openai:
+  #   file: ~/.config/aaagent/keys/openai.key
+  # anthropic:
+  #   file: ~/.config/aaagent/keys/anthropic.key
+  # google:
+  #   file: ~/.config/aaagent/keys/google.key
+
+# Temperature profiles for creativity mapping
+# These control how the 'creativity' intent maps to temperature for each model
+temperature_profiles:
+  # GPT-5.2 - configurable temperature
+  gpt-5.2:
+    creativity_map:
+      - [0.0, 0.0]    # creativity 0.0 → temperature 0.0 (deterministic)
+      - [0.5, 0.35]   # creativity 0.5 → temperature 0.35 (balanced)
+      - [1.0, 0.7]    # creativity 1.0 → temperature 0.7 (creative)
+
+  # GPT-5 - reasoning model with fixed temperature
+  gpt-5:
+    fixed: 1.0
+    ignore_creativity: true
+
+  # GPT-5-mini - reasoning model
+  gpt-5-mini:
+    fixed: 1.0
+    ignore_creativity: true
+
+  # GPT-5-nano - reasoning model
+  gpt-5-nano:
+    fixed: 1.0
+    ignore_creativity: true
+
+  # Gemini-3-flash-preview
+  gemini-3-flash-preview:
+    fixed: 1.0
+    ignore_creativity: true
+
+  # Gemini-3-pro-preview
+  gemini-3-pro-preview:
+    fixed: 1.0
+    ignore_creativity: true
+
+  # Default fallback for unknown models
+  default:
+    creativity_map:
+      - [0.0, 0.0]
+      - [1.0, 1.0]

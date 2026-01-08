@@ -503,6 +503,52 @@ impl Session {
             .unwrap_or_default()
     }
 
+    /// Save a key-value pair to session metadata
+    pub fn set_metadata<T: Serialize>(&mut self, key: &str, value: &T) -> Result<()> {
+        let metadata = self.metadata.get_or_insert_with(|| serde_json::json!({}));
+
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.insert(key.to_string(), serde_json::to_value(value)?);
+        } else {
+            // Replace with object if not already an object
+            *metadata = serde_json::json!({ key: serde_json::to_value(value)? });
+        }
+
+        self.updated_at = now();
+        Ok(())
+    }
+
+    /// Get a value from session metadata
+    pub fn get_metadata<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Option<T> {
+        self.metadata
+            .as_ref()?
+            .as_object()?
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Remove a key from session metadata
+    pub fn remove_metadata(&mut self, key: &str) -> Option<serde_json::Value> {
+        let metadata = self.metadata.as_mut()?;
+        let obj = metadata.as_object_mut()?;
+        let removed = obj.remove(key);
+
+        if removed.is_some() {
+            self.updated_at = now();
+        }
+
+        removed
+    }
+
+    /// Check if a metadata key exists
+    pub fn has_metadata(&self, key: &str) -> bool {
+        self.metadata
+            .as_ref()
+            .and_then(|m| m.as_object())
+            .map(|obj| obj.contains_key(key))
+            .unwrap_or(false)
+    }
+
     /// Get all leaf node IDs in this session
     pub async fn get_all_leaf_ids(&self) -> Result<Vec<NodeId>> {
         let store = self.store()?;
@@ -1256,5 +1302,48 @@ mod tests {
         let active_branches: Vec<_> = branches.iter().filter(|b| b.is_active).collect();
         assert_eq!(active_branches.len(), 1);
         assert_eq!(active_branches[0].leaf_id, node_y_id);
+    }
+
+    #[tokio::test]
+    async fn test_metadata_operations() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store, config).await.unwrap();
+
+        // Initially no metadata
+        assert!(!session.has_metadata("test_key"));
+        assert!(session.get_metadata::<String>("test_key").is_none());
+
+        // Set string metadata
+        session.set_metadata("test_key", &"test_value".to_string()).unwrap();
+        assert!(session.has_metadata("test_key"));
+        let value: String = session.get_metadata("test_key").unwrap();
+        assert_eq!(value, "test_value");
+
+        // Set complex metadata (like resolved config)
+        use serde::{Deserialize, Serialize};
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+        struct TestConfig {
+            name: String,
+            count: u32,
+        }
+
+        let test_config = TestConfig {
+            name: "test".to_string(),
+            count: 42,
+        };
+
+        session.set_metadata("config", &test_config).unwrap();
+        let loaded: TestConfig = session.get_metadata("config").unwrap();
+        assert_eq!(loaded, test_config);
+
+        // Remove metadata
+        let removed = session.remove_metadata("test_key");
+        assert!(removed.is_some());
+        assert!(!session.has_metadata("test_key"));
+        assert!(session.get_metadata::<String>("test_key").is_none());
+
+        // Config should still be there
+        assert!(session.has_metadata("config"));
     }
 }
