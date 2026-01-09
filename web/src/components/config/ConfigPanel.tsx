@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
@@ -105,11 +105,20 @@ export function ConfigPanel({
 }: ConfigPanelProps) {
   const isNewSession = !sessionId;
   const [preset, setPreset] = useState<string>("general");
-  const [systemPrompt, setSystemPrompt] = useState<string>("");
-  const [toolsEnabled, setToolsEnabled] = useState<boolean>(true);
+  const [systemPrompt, setSystemPrompt] = useState<string>(() => {
+    if (isNewSession) {
+      return PRESETS.general.systemPrompt;
+    }
+    return existingConfig?.session.system_prompt ?? "";
+  });
+  const [toolsEnabled, setToolsEnabled] = useState<boolean>(
+    existingConfig?.agent.tools_enabled ?? true,
+  );
   const [creativity, setCreativity] = useState<number>(0.5);
   const [verbosity, setVerbosity] = useState<string>("normal");
-  const [rounds, setRounds] = useState<number>(30);
+  const [rounds, setRounds] = useState<number>(
+    existingConfig?.agent.max_rounds ?? 30,
+  );
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
 
   // Advanced overrides
@@ -118,22 +127,15 @@ export function ConfigPanel({
   const [frequencyPenalty, setFrequencyPenalty] = useState<string>("0.0");
   const [presencePenalty, setPresencePenalty] = useState<string>("0.0");
 
-  // Load preset defaults when preset changes
-  useEffect(() => {
-    const presetData = PRESETS[preset as keyof typeof PRESETS];
-    if (presetData && isNewSession) {
-      setSystemPrompt(presetData.systemPrompt);
+  const handlePresetChange = (value: string) => {
+    setPreset(value);
+    if (isNewSession) {
+      const presetData = PRESETS[value as keyof typeof PRESETS];
+      if (presetData) {
+        setSystemPrompt(presetData.systemPrompt);
+      }
     }
-  }, [preset, isNewSession]);
-
-  // Load existing config for existing sessions
-  useEffect(() => {
-    if (existingConfig) {
-      setSystemPrompt(existingConfig.session.system_prompt);
-      setToolsEnabled(existingConfig.agent.tools_enabled);
-      setRounds(existingConfig.agent.max_rounds);
-    }
-  }, [existingConfig]);
+  };
 
   const handleSubmit = () => {
     const config: ChatConfig = {
@@ -202,7 +204,7 @@ export function ConfigPanel({
         {/* Preset Selector */}
         <div className="space-y-2">
           <Label htmlFor="preset">Preset</Label>
-          <Select value={preset} onValueChange={setPreset}>
+          <Select value={preset} onValueChange={handlePresetChange}>
             <SelectTrigger id="preset">
               <SelectValue>
                 <span>

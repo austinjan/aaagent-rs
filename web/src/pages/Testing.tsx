@@ -42,7 +42,7 @@ export function Testing() {
           <h1 className="text-xl font-bold text-foreground">
             Component Testing
           </h1>
-          <p className="text-sm text-muted-foreground400">
+          <p className="text-sm text-muted-foreground">
             Test UI components in isolation
           </p>
         </div>
@@ -55,7 +55,7 @@ export function Testing() {
             <h2 className="text-2xl font-bold text-foreground">
               ConfigPanel Component
             </h2>
-            <p className="text-muted-foreground400">
+            <p className="text-muted-foreground">
               Test the configuration panel with all controls
             </p>
           </div>
@@ -89,7 +89,7 @@ export function Testing() {
                       {JSON.stringify(submittedConfig, null, 2)}
                     </pre>
                   ) : (
-                    <p className="text-muted-foreground400 italic">
+                    <p className="text-muted-foreground italic">
                       No config submitted yet. Fill out the form and click
                       "Apply Config".
                     </p>
@@ -108,7 +108,9 @@ export function Testing() {
             <h2 className="text-2xl font-bold text-foreground">
               Existing Session Mode
             </h2>
-            <p className="text-muted-foreground400">System prompt is locked (read-only)</p>
+            <p className="text-muted-foreground">
+              System prompt is locked (read-only)
+            </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -148,12 +150,12 @@ export function Testing() {
                     Test Instructions
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2 text-sm text-muted-foreground300">
+                <CardContent className="space-y-2 text-sm text-muted-foreground">
                   <div>
                     <h4 className="font-semibold text-foreground mb-2">
                       New Session Mode (Left Panel)
                     </h4>
-                    <ul className="list-disc list-inside space-y-1 text-muted-foreground400">
+                    <ul className="list-disc list-inside space-y-1 text-muted-foreground">
                       <li>System prompt should be editable</li>
                       <li>All presets change system prompt when selected</li>
                       <li>Character counter updates (max 10,000)</li>
@@ -170,7 +172,7 @@ export function Testing() {
                     <h4 className="font-semibold text-foreground mb-2">
                       Existing Session Mode (Right Panel)
                     </h4>
-                    <ul className="list-disc list-inside space-y-1 text-muted-foreground400">
+                    <ul className="list-disc list-inside space-y-1 text-muted-foreground">
                       <li>System prompt should be grayed out (read-only)</li>
                       <li>Lock icon visible next to "System Prompt" label</li>
                       <li>Warning message below system prompt textarea</li>
@@ -185,7 +187,7 @@ export function Testing() {
                     <h4 className="font-semibold text-foreground mb-2">
                       Visual Tests
                     </h4>
-                    <ul className="list-disc list-inside space-y-1 text-muted-foreground400">
+                    <ul className="list-disc list-inside space-y-1 text-muted-foreground">
                       <li>
                         BlackBear theme: Yellow (#E8C236) on Black (#000000)
                       </li>
@@ -209,16 +211,16 @@ export function Testing() {
             <h2 className="text-2xl font-bold text-foreground">
               Browser Console
             </h2>
-            <p className="text-muted-foreground400">
+            <p className="text-muted-foreground">
               Check the browser console for config submit/reset logs
             </p>
           </div>
           <Card className="bg-background border">
             <CardContent className="pt-6">
-              <p className="text-sm text-muted-foreground300">
+              <p className="text-sm text-muted-foreground">
                 Open DevTools (F12) and check the Console tab. You should see:
               </p>
-              <ul className="list-disc list-inside mt-2 space-y-1 text-sm text-muted-foreground400">
+              <ul className="list-disc list-inside mt-2 space-y-1 text-sm text-muted-foreground">
                 <li>
                   <code className="text-foreground">
                     Config submitted: &#123;...&#125;

@@ -236,4 +236,10 @@ project_root/
 - Integration tests use `MemoryStore` for in-memory history
 - Mock providers for testing Agent without real API calls
 
+## Frontend Styling (Tailwind v4)
+
+- Use Tailwind v4 CSS-first setup in `web/src/index.css` with `@import "tailwindcss";` first and `@config "../tailwind.config.js";` immediately after; do not place other at-rules before `@import`.
+- Do not mix `@tailwind base/components/utilities` with the v4 `@import "tailwindcss"` pipeline.
+- Avoid non-standard utility classes (e.g., `text-muted-foreground400`); prefer token-based classes like `text-muted-foreground` for consistency.
+- When changing Tailwind config or index.css directives, restart Vite to ensure the class scan and theme tokens apply.
 

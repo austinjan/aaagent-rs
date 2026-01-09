@@ -512,9 +512,32 @@ function ConfigPanel({ onSubmit }: ChatConfigProps) {
 - [x] Temporary overrides reject system_prompt changes
 - [x] Temperature profiles handle model-specific behavior
 - [x] Validation rejects invalid values with clear errors
-- [ ] Frontend config panel updates all fields (not implemented - UI only)
+- [ ] Frontend config panel reads/writes real session config (currently UI-only)
 - [x] Power users can override model and sampling parameters
 - [x] Error messages guide users to create new session for prompt changes
+
+## 11) Remaining Work (Detailed)
+
+### Backend
+- [ ] Add API to fetch session config (e.g., `GET /api/sessions/:id/config`) returning resolved_config + editable fields.
+- [ ] Add API to update session config (e.g., `PATCH /api/sessions/:id/config`) with validation against immutable fields.
+- [ ] Persist resolved_config in session metadata on create/update.
+- [ ] Ensure API returns helpful errors for immutable/invalid updates.
+
+### Frontend
+- [ ] Replace console-only submit with real API calls in ConfigPanel consumer (or add a ConfigPanel container).
+- [ ] Load existing session config from API and map into UI fields (creativity/verbosity/rounds/tools + overrides).
+- [ ] Map UI → payload correctly (exclude system_prompt for existing sessions, omit overrides unless set).
+- [ ] Show success/failure status (inline message or toast).
+
+### Mapping/Validation
+- [ ] Provide reverse mapping from resolved_config to intent (creativity/verbosity) for display.
+- [ ] Confirm model whitelist and numeric ranges on the client (optional, server remains source of truth).
+
+### Testing/Verification
+- [ ] Manual: new session flow submits config and returns resolved_config.
+- [ ] Manual: existing session loads config, blocks system_prompt changes, updates allowed fields.
+- [ ] Manual: overrides round-trip (model/top_p/frequency/presence).
 
 ---
 

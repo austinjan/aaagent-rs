@@ -38,3 +38,10 @@
 
 - Set `OPENAI_API_KEY` (and `GEMINI_API_KEY` when using Gemini examples) in your environment before running examples.
 - Avoid committing secrets or sample keys; use `.env` files locally if needed.
+
+## Frontend Styling (Tailwind v4)
+
+- Keep `web/src/index.css` in Tailwind v4 CSS-first mode: `@import "tailwindcss";` must be the first statement, followed immediately by `@config "../tailwind.config.js";`.
+- Do not use `@tailwind base/components/utilities` in v4 CSS-first mode; mixing causes missing utilities or build errors.
+- Prefer shadcn token classes (e.g., `text-muted-foreground`, `bg-popover`) and avoid ad-hoc utilities like `text-muted-foreground400`.
+- Restart Vite after changing Tailwind config or index.css directives to ensure styles recompile.
