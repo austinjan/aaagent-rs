@@ -1,7 +1,7 @@
 # Separate Serve Binary
 
-- Feature name: `separate-serve-binary`  
-- Status: Draft
+- Feature name: `separate-serve-binary`
+- Status: Achieved
 - Created: 2026-01-10
 - Last updated: 2026-01-10
 
@@ -72,16 +72,17 @@ src/
 ## 5) Implementation plan
 
 ### Task breakdown (TODO)
-- [ ] Add `pub mod api;` and `pub mod web;` to `src/lib.rs`
-- [ ] Create `src/bin/serve.rs` with clap CLI and server startup
-- [ ] Add `[[bin]]` entry to `Cargo.toml`
-- [ ] Remove `Serve` variant and handler from `src/main.rs`
-- [ ] Remove unused `mod web;` and `mod api;` from `src/main.rs`
-- [ ] Test both binaries compile and run correctly
+(All tasks completed)
 
 ### Completed (DONE)
 - [x] Explored current binary structure
 - [x] Identified files to modify
+- [x] Added `pub mod api;` and `pub mod web;` to `src/lib.rs`
+- [x] Created `src/bin/serve.rs` with clap CLI and server startup
+- [x] Added `[[bin]]` entry to `Cargo.toml`
+- [x] Removed `Serve` variant and handler from `src/main.rs`
+- [x] Removed unused `mod web;` and `mod api;` from `src/main.rs`
+- [x] Tested both binaries compile and run correctly
 
 ## 6) Testing plan
 - Unit tests: Existing tests should pass
@@ -102,12 +103,13 @@ src/
   - Mitigation: Verify build.rs runs on release profile regardless of binary target
 
 ## 9) Acceptance criteria
-- [ ] `cargo build --bin aaagent` produces CLI-only binary
-- [ ] `cargo build --bin aaagent-serve` produces web server binary
-- [ ] `aaagent-serve` starts server identical to previous `aaagent serve`
-- [ ] `aaagent` no longer has `serve` subcommand
+- [x] `cargo build --bin aaagent` produces CLI-only binary
+- [x] `cargo build --bin aaagent-serve` produces web server binary
+- [x] `aaagent-serve` starts server identical to previous `aaagent serve`
+- [x] `aaagent` no longer has `serve` subcommand
 
 ---
 
 ## Changelog
 - 2026-01-10: Created
+- 2026-01-10: Completed implementation and testing

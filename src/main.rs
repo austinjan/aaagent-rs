@@ -4,9 +4,6 @@ use std::path::Path;
 
 use aaagent::{find_missing_readme, format_map_as_markdown, generate_map};
 
-mod web;
-mod api;
-
 const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*", "node_modules"];
 
 fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
@@ -29,7 +26,7 @@ fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
 }
 
 #[derive(Parser)]
-#[command(name = "aaagent")]
+#[command(name = "km")]
 #[command(author, version, about = "A collection of CLI tools for LLM agent development", long_about = None)]
 struct Cli {
     /// Enable verbose output
@@ -69,12 +66,6 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-    },
-    /// Start the chat UI web server
-    Serve {
-        /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
-        port: u16,
     },
 }
 
@@ -144,27 +135,6 @@ async fn main() {
                     eprintln!("Error: {}", e);
                 }
             }
-        }
-        Commands::Serve { port } => {
-            aaagent::logger::log(format!("serve port={}", port));
-            println!("Starting aaagent-rs chat UI server...");
-
-            // Create router
-            let app = api::create_router();
-
-            // Start server
-            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("Failed to bind to address");
-
-            println!("Server running on http://{}", addr);
-            println!("Open http://localhost:{} in your browser", port);
-
-            axum::serve(listener, app)
-                .await
-                .expect("Server error");
         }
     }
 }

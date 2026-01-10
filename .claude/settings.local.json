@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Skill(managing-feature-plans)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(./target/debug/aaagent-serve:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(./target/debug/km:*)"
     ]
   }
 }
