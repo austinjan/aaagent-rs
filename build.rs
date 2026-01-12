@@ -33,7 +33,7 @@ fn main() {
             println!("cargo:warning=Installing frontend dependencies...");
 
             let npm_install = Command::new(if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" })
-                .args(&["install"])
+                .args(["install"])
                 .current_dir("web")
                 .status()
                 .expect("Failed to run npm install");
@@ -47,7 +47,7 @@ fn main() {
         println!("cargo:warning=Building frontend with Vite...");
 
         let npm_build = Command::new(if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" })
-            .args(&["run", "build"])
+            .args(["run", "build"])
             .current_dir("web")
             .status()
             .expect("Failed to run npm build");

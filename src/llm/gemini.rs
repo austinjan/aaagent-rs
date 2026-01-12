@@ -176,7 +176,7 @@ impl GeminiProvider {
             }
         }
 
-        let gemini_tools = tools.map(|t| Self::convert_tools(t));
+        let gemini_tools = tools.map(Self::convert_tools);
 
         (contents, system_instruction, gemini_tools)
     }

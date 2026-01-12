@@ -252,9 +252,9 @@ impl OpenAIProvider {
                         // Combine all text parts
                         parts
                             .iter()
-                            .filter_map(|part| match part {
-                                ResponsesContentPart::InputText { text } => Some(text.as_str()),
-                                ResponsesContentPart::OutputText { text } => Some(text.as_str()),
+                            .map(|part| match part {
+                                ResponsesContentPart::InputText { text } => text.as_str(),
+                                ResponsesContentPart::OutputText { text } => text.as_str(),
                             })
                             .collect::<Vec<_>>()
                             .join("\n")

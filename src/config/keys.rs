@@ -173,6 +173,7 @@ pub fn get_provider_for_model(model: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn test_validate_empty_key() {

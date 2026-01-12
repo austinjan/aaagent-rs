@@ -286,9 +286,7 @@ impl ToolCallAssembler {
 
     /// Get all completed tool calls
     pub fn into_tool_calls(self) -> Result<Vec<ToolCall>, serde_json::Error> {
-        self.calls
-            .into_iter()
-            .map(|(_, partial)| {
+        self.calls.into_values().map(|partial| {
                 Ok(ToolCall {
                     id: partial.id,
                     name: partial.name.unwrap_or_default(),

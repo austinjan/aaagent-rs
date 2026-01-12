@@ -105,6 +105,7 @@ impl Default for CheckpointConfig {
 /// Context optimization configuration
 /// Combines tool result compression and checkpoint strategies
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ContextOptimizationConfig {
     /// Tool result compression settings
     pub compression: CompressionConfig,
@@ -113,14 +114,6 @@ pub struct ContextOptimizationConfig {
     pub checkpoint: CheckpointConfig,
 }
 
-impl Default for ContextOptimizationConfig {
-    fn default() -> Self {
-        Self {
-            compression: CompressionConfig::default(),
-            checkpoint: CheckpointConfig::default(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {

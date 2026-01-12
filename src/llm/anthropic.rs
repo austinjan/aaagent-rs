@@ -293,12 +293,9 @@ impl LLMProvider for AnthropicProvider {
                         match event.event.as_str() {
                             "content_block_delta" => {
                                 if let Ok(delta) = serde_json::from_str::<ContentBlockDelta>(&event.data) {
-                                    match delta.delta {
-                                        ContentDelta::TextDelta { text } => {
-                                            full_content.push_str(&text);
-                                            yield Ok(StreamChunk::Content(text));
-                                        }
-                                        _ => {}
+                                    if let ContentDelta::TextDelta { text } = delta.delta {
+                                        full_content.push_str(&text);
+                                        yield Ok(StreamChunk::Content(text));
                                     }
                                 }
                             }
@@ -446,14 +443,13 @@ impl LLMProvider for AnthropicProvider {
                                     if let Ok(block_start) =
                                         serde_json::from_str::<ContentBlockStart>(&event.data)
                                     {
-                                        match block_start.content_block {
-                                            AnthropicContentBlock::ToolUse { id, name, input } => {
-                                                // Start collecting tool use
-                                                let input_str = serde_json::to_string(&input)
-                                                    .unwrap_or_else(|_| "{}".to_string());
-                                                current_tool_input = Some((id, name, input_str));
-                                            }
-                                            _ => {}
+                                        if let AnthropicContentBlock::ToolUse { id, name, input } =
+                                            block_start.content_block
+                                        {
+                                            // Start collecting tool use
+                                            let input_str = serde_json::to_string(&input)
+                                                .unwrap_or_else(|_| "{}".to_string());
+                                            current_tool_input = Some((id, name, input_str));
                                         }
                                     }
                                 }
@@ -839,6 +835,7 @@ struct ContentBlockDelta {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::enum_variant_names)]
 enum ContentDelta {
     #[serde(rename = "text_delta")]
     TextDelta { text: String },

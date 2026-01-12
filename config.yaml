@@ -1,31 +1,31 @@
 temperature_profiles:
   profiles:
-  gpt-5:
-    fixed: 1.0
-    ignore_creativity: true
-  gpt-5-mini:
-    fixed: 1.0
-    ignore_creativity: true
-  gpt-5-nano:
-    fixed: 1.0
-    ignore_creativity: true
-  gemini-3-flash-preview:
-    fixed: 1.0
-    ignore_creativity: true
-  gpt-5.2:
-    creativity_map:
-      - - 0.0
-        - 0.0
-      - - 0.5
-        - 0.35
-      - - 1.0
-        - 0.7
-  gemini-3-pro-preview:
-    fixed: 1.0
-    ignore_creativity: true
-  default:
-    creativity_map:
-      - - 0.0
-        - 0.0
-      - - 1.0
-        - 1.0
+    gpt-5:
+      fixed: 1.0
+      ignore_creativity: true
+    gpt-5-mini:
+      fixed: 1.0
+      ignore_creativity: true
+    gpt-5-nano:
+      fixed: 1.0
+      ignore_creativity: true
+    gemini-3-flash-preview:
+      fixed: 1.0
+      ignore_creativity: true
+    gpt-5.2:
+      creativity_map:
+        - - 0.0
+          - 0.0
+        - - 0.5
+          - 0.35
+        - - 1.0
+          - 0.7
+    gemini-3-pro-preview:
+      fixed: 1.0
+      ignore_creativity: true
+    default:
+      creativity_map:
+        - - 0.0
+          - 0.0
+        - - 1.0
+          - 1.0
