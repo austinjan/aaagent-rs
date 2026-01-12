@@ -57,8 +57,12 @@ gemini = []
 dev-server = ["tower-http/cors"]
 
 [[bin]]
-name = "aaagent"
+name = "km"
 path = "src/main.rs"
+
+[[bin]]
+name = "aaagent-serve"
+path = "src/bin/serve.rs"
 
 [lib]
 name = "aaagent"

@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scalable Conversation Tree Demo (100+ Messages)</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --color-user: #595757;
+      --color-assistant: #5785A3;
+      --color-system: #7B9FBF;
+      --color-tool: #57A357;
+      --color-checkpoint: #D4C257;
+      --color-error: #C23C3C;
+      --color-active-highlight: #E8C236;
+      --minimap-bg: #DDE5ED;
+      --minimap-border: #D7D2CB;
+      --chat-bg: #F5F5F5;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--chat-bg);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* === Tree Visualization === */
+    .tree-container {
+      width: 180px;
+      background: var(--minimap-bg);
+      border-right: 1px solid var(--minimap-border);
+      overflow: auto;
+      padding: 16px 8px;
+      flex-shrink: 0;
+    }
+
+    .tree-container svg {
+      display: block;
+    }
+
+    .node-tree {
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .node-tree:hover .node-circle {
+      r: 7;
+    }
+
+    .node-tree.selected .node-circle {
+      stroke: var(--color-active-highlight);
+      stroke-width: 2.5;
+    }
+
+    .edge-active {
+      stroke: var(--color-assistant);
+      stroke-width: 2;
+      stroke-linecap: round;
+    }
+
+    .edge-inactive {
+      stroke: #9CA3AF;
+      stroke-width: 1.5;
+      stroke-dasharray: 4 2;
+      opacity: 0.3;
+    }
+
+    /* Collapsed group */
+    .collapsed-group {
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .collapsed-group:hover {
+      opacity: 0.8;
+    }
+
+    /* === Chat Area === */
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 16px 24px;
+      background: white;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .chat-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .chat-stats {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .chat-messages-content {
+      padding: 24px;
+    }
+
+    /* Message Card */
+    .message-card {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      transition: box-shadow 0.2s;
+    }
+
+    .message-card:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .message-card.selected {
+      box-shadow: 0 0 0 2px var(--color-active-highlight);
+    }
+
+    .message-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .message-card-body {
+      color: #333;
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .message-card-body.tool-result {
+      background: #f9f9f9;
+      padding: 12px;
+      border-radius: 4px;
+      font-family: 'Monaco', monospace;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .role-label {
+      font-weight: 600;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .role-label.user { color: var(--color-user); }
+    .role-label.assistant { color: var(--color-assistant); }
+    .role-label.system { color: var(--color-system); }
+    .role-label.tool { color: var(--color-tool); }
+
+    /* Checkpoint Summary Card */
+    .checkpoint-summary-card {
+      background: linear-gradient(135deg, #FFF9E6 0%, #FFF 100%);
+      border: 2px solid var(--color-checkpoint);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .checkpoint-summary-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(212, 194, 87, 0.2);
+    }
+
+    .checkpoint-summary-card .summary-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      color: #666;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .checkpoint-summary-card .summary-icon {
+      width: 16px;
+      height: 16px;
+      background: var(--color-checkpoint);
+      transform: rotate(45deg);
+    }
+
+    .checkpoint-summary-card .summary-content {
+      font-size: 13px;
+      color: #555;
+      line-height: 1.5;
+    }
+
+    .checkpoint-summary-card .expand-hint {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #999;
+      font-style: italic;
+    }
+
+    /* Standard Node (32px) */
+    .node-standard {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 4px solid;
+      background: #fff;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .node-standard.node-user { border-color: var(--color-user); }
+    .node-standard.node-assistant { border-color: var(--color-assistant); }
+    .node-standard.node-system { border-color: var(--color-system); }
+    .node-standard.node-tool { border-color: var(--color-tool); }
+
+    .node-standard .node-center {
+      position: absolute;
+      top: 5px;
+      left: 5px;
+      right: 5px;
+      bottom: 5px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .checkpoint-marker-standard {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      background: var(--color-checkpoint);
+      opacity: 0.9;
+      transform: rotate(45deg);
+      top: 50%;
+      left: 50%;
+      margin-top: -7px;
+      margin-left: -7px;
+      pointer-events: none;
+    }
+
+    .node-standard .spinner-ring {
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      width: 32px;
+      height: 32px;
+      border: 2px dashed;
+      border-radius: 50%;
+      opacity: 0.6;
+      animation: spin 2s linear infinite;
+    }
+
+    .node-standard .node-center.error {
+      background: var(--color-error);
+    }
+
+    .node-standard .error-icon {
+      color: white;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .node-standard .node-center.streaming {
+      background: var(--color-assistant);
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* Controls */
+    .controls {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 100;
+    }
+
+    .controls h3 {
+      font-size: 14px;
+      margin-bottom: 12px;
+      color: #666;
+    }
+
+    .controls button {
+      margin-right: 8px;
+      margin-bottom: 8px;
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.2s;
+    }
+
+    .controls button:hover {
+      background: #f0f0f0;
+    }
+
+    .controls button.active {
+      background: var(--color-assistant);
+      color: white;
+      border-color: var(--color-assistant);
+    }
+
+    .controls label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .controls input[type="checkbox"] {
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Tree Visualization -->
+  <div class="tree-container">
+    <svg id="tree-svg" width="164" height="600"></svg>
+  </div>
+
+  <!-- Chat Area -->
+  <div class="chat-container">
+    <div class="chat-header">
+      <h1>Conversation History</h1>
+      <div class="chat-stats">
+        <span id="total-messages">0</span> messages
+        (<span id="visible-messages">0</span> visible)
+      </div>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-messages-content" id="chat-content">
+        <!-- Messages will be injected here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <h3>Tree 檢視選項</h3>
+    <label>
+      <input type="checkbox" id="show-inactive-branches" onchange="toggleInactiveBranches()">
+      顯示非活動分支
+    </label>
+    <hr style="margin: 12px 0; border: none; border-top: 1px solid #eee;">
+    <h3>模擬狀態</h3>
+    <button onclick="simulateStatus('idle')" class="active">Idle</button>
+    <button onclick="simulateStatus('running')">Running</button>
+    <button onclick="simulateStatus('streaming')">Streaming</button>
+    <button onclick="simulateStatus('error')">Error</button>
+    <hr style="margin: 12px 0; border: none; border-top: 1px solid #eee;">
+    <button onclick="generateMoreMessages()" style="width: 100%;">
+      生成更多訊息 (+20)
+    </button>
+  </div>
+
+  <script>
+    const NODE_COLORS = {
+      user: '#595757',
+      assistant: '#5785A3',
+      system: '#7B9FBF',
+      tool: '#57A357'
+    };
+
+    const CONFIG = {
+      nodeSpacing: 40,
+      branchSpacing: 30,
+      nodeSize: 6,
+      collapseThreshold: 20 // 超過 20 則訊息時開始摺疊
+    };
+
+    let mockTree = generateMockTree(50); // 初始生成 50 則訊息
+    let selectedNode = null;
+    let showInactiveBranches = false;
+
+    // Generate mock tree with many messages and branches
+    function generateMockTree(count) {
+      const nodes = [
+        { id: 'root', parent_id: null, role: 'root', content: 'Root', seq: 0 }
+      ];
+
+      let checkpoint1 = null;
+      let checkpoint2 = null;
+      let branchPoint = null;
+      let activeLeafId = null;
+
+      // Main path
+      for (let i = 1; i <= Math.min(count, 10); i++) {
+        const roles = ['user', 'assistant', 'tool'];
+        const role = roles[i % 3];
+        const parentId = nodes[nodes.length - 1].id;
+
+        const node = {
+          id: `n${i}`,
+          parent_id: parentId,
+          role: role,
+          content: generateMockContent(role, i),
+          seq: i
+        };
+
+        nodes.push(node);
+
+        // Mark branch point
+        if (i === 5) {
+          branchPoint = node.id;
+          checkpoint1 = node.id;
+        }
+      }
+
+      // Create branch 1 (inactive)
+      if (count > 10) {
+        for (let i = 11; i <= Math.min(count, 15); i++) {
+          const roles = ['assistant', 'user', 'assistant'];
+          const role = roles[(i - 11) % 3];
+          const parentId = i === 11 ? branchPoint : nodes[nodes.length - 1].id;
+
+          const node = {
+            id: `b1_${i}`,
+            parent_id: parentId,
+            role: role,
+            content: generateMockContent(role, i, 'Branch 1'),
+            seq: i
+          };
+
+          nodes.push(node);
+        }
+      }
+
+      // Create branch 2 (active path continues)
+      if (count > 15) {
+        for (let i = 16; i <= Math.min(count, 35); i++) {
+          const roles = ['assistant', 'user', 'tool'];
+          const role = roles[(i - 16) % 3];
+          const parentId = i === 16 ? branchPoint : nodes[nodes.length - 1].id;
+
+          const node = {
+            id: `n${i}`,
+            parent_id: parentId,
+            role: role,
+            content: generateMockContent(role, i),
+            seq: i
+          };
+
+          nodes.push(node);
+          activeLeafId = node.id;
+
+          if (i === 25) checkpoint2 = node.id;
+        }
+      }
+
+      // Create branch 3 from checkpoint2 (inactive)
+      if (count > 35 && checkpoint2) {
+        for (let i = 36; i <= Math.min(count, 40); i++) {
+          const roles = ['assistant', 'tool'];
+          const role = roles[(i - 36) % 2];
+          const parentId = i === 36 ? checkpoint2 : nodes[nodes.length - 1].id;
+
+          const node = {
+            id: `b3_${i}`,
+            parent_id: parentId,
+            role: role,
+            content: generateMockContent(role, i, 'Branch 3'),
+            seq: i
+          };
+
+          nodes.push(node);
+        }
+      }
+
+      // Continue main path
+      if (count > 40) {
+        const lastMain = nodes.find(n => n.id === activeLeafId);
+        for (let i = 41; i <= count; i++) {
+          const roles = ['user', 'assistant', 'tool'];
+          const role = roles[(i - 41) % 3];
+          const parentId = i === 41 ? lastMain.id : nodes[nodes.length - 1].id;
+
+          const node = {
+            id: `n${i}`,
+            parent_id: parentId,
+            role: role,
+            content: generateMockContent(role, i),
+            seq: i
+          };
+
+          nodes.push(node);
+          activeLeafId = node.id;
+        }
+      }
+
+      return {
+        nodes,
+        active_leaf_id: activeLeafId || nodes[nodes.length - 1].id,
+        checkpoints: {
+          [checkpoint1]: {
+            created_at: Date.now(),
+            strategy: 'auto_turns',
+            summary: `前 5 則訊息摘要：使用者詢問如何實作登入功能，討論了 JWT vs Session 方案，最終選擇 JWT 並開始實作。已安裝必要依賴並建立基礎架構。`
+          },
+          [checkpoint2]: {
+            created_at: Date.now(),
+            strategy: 'auto_token_limit',
+            summary: `第 6-25 則訊息摘要：完成 JWT 認證模組實作，包含 token 生成、驗證、中介層。使用者要求新增密碼重設功能，已實作郵件發送和驗證流程。進行單元測試並修正若干 bug。`
+          }
+        },
+        runtime_status: {}
+      };
+    }
+
+    function generateMockContent(role, index, branch = '') {
+      const templates = {
+        user: [
+          '請幫我實作這個功能',
+          '可以解釋一下這段代碼嗎？',
+          '有沒有更好的做法？',
+          '測試通過了嗎？',
+          '我遇到這個錯誤...'
+        ],
+        assistant: [
+          '好的，我來幫你實作。首先...',
+          '這段代碼的作用是...',
+          '我建議使用以下方式...',
+          '讓我檢查一下測試結果...',
+          '這個錯誤是因為...'
+        ],
+        tool: [
+          'read_file("src/index.ts")',
+          'execute("npm test")',
+          'search_code("function login")',
+          'write_file("src/auth.ts", ...)',
+          'execute("git commit -m \'...\'")'
+        ]
+      };
+
+      const template = templates[role][index % templates[role].length];
+      const branchLabel = branch ? ` [${branch}]` : '';
+      return `[#${index}]${branchLabel} ${template}`;
+    }
+
+    function generateMoreMessages() {
+      const currentCount = mockTree.nodes.length - 1;
+      const newTree = generateMockTree(currentCount + 20);
+      mockTree = newTree;
+      renderAll();
+    }
+
+    // Build children map
+    function buildChildrenMap(nodes) {
+      const map = new Map();
+      nodes.forEach(node => {
+        if (node.parent_id) {
+          const siblings = map.get(node.parent_id) || [];
+          siblings.push(node);
+          map.set(node.parent_id, siblings);
+        }
+      });
+      map.forEach(siblings => siblings.sort((a, b) => a.seq - b.seq));
+      return map;
+    }
+
+    // Calculate active path
+    function getActivePath(nodes, activeLeafId) {
+      const path = new Set();
+      const nodeMap = new Map(nodes.map(n => [n.id, n]));
+      let current = activeLeafId;
+      while (current) {
+        path.add(current);
+        const node = nodeMap.get(current);
+        current = node?.parent_id;
+      }
+      return path;
+    }
+
+    // Layout tree
+    function layoutTree(tree) {
+      const { nodes, active_leaf_id } = tree;
+      const childrenMap = buildChildrenMap(nodes);
+      const activePath = getActivePath(nodes, active_leaf_id);
+      const nodeMap = new Map(nodes.map(n => [n.id, n]));
+      const positioned = [];
+
+      function dfs(nodeId, depth, baseX) {
+        const node = nodeMap.get(nodeId);
+        if (!node) return;
+
+        const isActive = activePath.has(nodeId);
+        const children = childrenMap.get(nodeId) || [];
+
+        // Skip inactive branches if option is disabled
+        if (!showInactiveBranches && !isActive && node.role !== 'root') {
+          return;
+        }
+
+        positioned.push({
+          ...node,
+          x: baseX,
+          y: depth * CONFIG.nodeSpacing + 20,
+          isActive,
+          hasCheckpoint: !!tree.checkpoints[nodeId],
+          status: tree.runtime_status[nodeId] || 'idle'
+        });
+
+        if (children.length === 0) {
+          return;
+        } else if (children.length === 1) {
+          dfs(children[0].id, depth + 1, baseX);
+        } else {
+          const totalWidth = (children.length - 1) * CONFIG.branchSpacing;
+          const startX = baseX - totalWidth / 2;
+
+          children.forEach((child, i) => {
+            const childX = startX + i * CONFIG.branchSpacing;
+            dfs(child.id, depth + 1, childX);
+          });
+        }
+      }
+
+      const root = nodes.find(n => n.role === 'root');
+      if (root) {
+        dfs(root.id, 0, 82);
+      }
+
+      return positioned;
+    }
+
+    // Render tree
+    function renderTree(tree) {
+      const svg = document.getElementById('tree-svg');
+      svg.innerHTML = '';
+
+      const positioned = layoutTree(tree);
+      const nodeMap = new Map(positioned.map(n => [n.id, n]));
+
+      const maxY = Math.max(...positioned.map(n => n.y)) + 50;
+      svg.setAttribute('height', maxY);
+
+      // Draw edges
+      const edgesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      positioned.forEach(node => {
+        if (node.parent_id && node.role !== 'root') {
+          const parent = nodeMap.get(node.parent_id);
+          if (parent) {
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            line.setAttribute('x1', parent.x);
+            line.setAttribute('y1', parent.y);
+            line.setAttribute('x2', node.x);
+            line.setAttribute('y2', node.y);
+
+            const isActiveEdge = node.isActive && parent.isActive;
+            line.setAttribute('class', isActiveEdge ? 'edge-active' : 'edge-inactive');
+
+            edgesGroup.appendChild(line);
+          }
+        }
+      });
+      svg.appendChild(edgesGroup);
+
+      // Draw nodes
+      positioned.forEach(node => {
+        if (node.role === 'root') return;
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'node-tree');
+        g.setAttribute('transform', `translate(${node.x}, ${node.y})`);
+        g.setAttribute('data-id', node.id);
+
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('class', 'node-circle');
+        circle.setAttribute('r', CONFIG.nodeSize);
+        circle.setAttribute('fill', '#fff');
+        circle.setAttribute('stroke', NODE_COLORS[node.role]);
+        circle.setAttribute('stroke-width', '1.5');
+        g.appendChild(circle);
+
+        const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        center.setAttribute('r', CONFIG.nodeSize - 2);
+        center.setAttribute('fill', getTreeCenterColor(node.status, node.role));
+        if (node.status === 'streaming') {
+          center.style.animation = 'pulse 1.5s ease-in-out infinite';
+        }
+        g.appendChild(center);
+
+        if (node.hasCheckpoint) {
+          const checkpoint = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          checkpoint.setAttribute('width', '5');
+          checkpoint.setAttribute('height', '5');
+          checkpoint.setAttribute('x', '-2.5');
+          checkpoint.setAttribute('y', '-2.5');
+          checkpoint.setAttribute('fill', '#D4C257');
+          checkpoint.setAttribute('opacity', '0.9');
+          checkpoint.setAttribute('transform', 'rotate(45)');
+          g.appendChild(checkpoint);
+        }
+
+        if (node.status === 'running') {
+          const spinner = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          spinner.setAttribute('r', CONFIG.nodeSize);
+          spinner.setAttribute('fill', 'none');
+          spinner.setAttribute('stroke', NODE_COLORS[node.role]);
+          spinner.setAttribute('stroke-width', '1');
+          spinner.setAttribute('stroke-dasharray', '3 2');
+          spinner.setAttribute('opacity', '0.6');
+          spinner.style.animation = 'spin 2s linear infinite';
+          g.appendChild(spinner);
+        }
+
+        g.addEventListener('click', () => selectNode(node));
+        svg.appendChild(g);
+      });
+    }
+
+    function getTreeCenterColor(status, role) {
+      if (status === 'error') return '#C23C3C';
+      if (status === 'streaming') return NODE_COLORS[role];
+      return 'transparent';
+    }
+
+    // Render chat messages - faithfully displays current conversation (active path)
+    function renderChatMessages(tree) {
+      const container = document.getElementById('chat-content');
+      container.innerHTML = '';
+
+      const nodeMap = new Map(tree.nodes.map(n => [n.id, n]));
+
+      // Get path from root to active leaf (this is the current conversation)
+      const pathNodes = [];
+      let current = tree.active_leaf_id;
+      while (current) {
+        const node = nodeMap.get(current);
+        if (node && node.role !== 'root') {
+          pathNodes.unshift(node);
+        }
+        current = nodeMap.get(current)?.parent_id;
+      }
+
+      // Render all messages in the active path
+      pathNodes.forEach((node) => {
+        const card = document.createElement('div');
+        card.className = 'message-card';
+        card.setAttribute('data-id', node.id);
+
+        const status = tree.runtime_status[node.id] || 'idle';
+        const hasCheckpoint = !!tree.checkpoints[node.id];
+
+        card.innerHTML = `
+          <div class="message-card-header">
+            ${createStandardNode(node.role, status, hasCheckpoint)}
+            <span class="role-label ${node.role}">${node.role}</span>
+          </div>
+          <div class="message-card-body ${node.role === 'tool' ? 'tool-result' : ''}">
+            ${node.content}
+          </div>
+        `;
+
+        card.addEventListener('click', () => selectNodeById(node.id));
+        container.appendChild(card);
+      });
+
+      // Update stats
+      document.getElementById('total-messages').textContent = pathNodes.length;
+      document.getElementById('visible-messages').textContent = pathNodes.length;
+    }
+
+    function createStandardNode(role, status, hasCheckpoint) {
+      let centerContent = '';
+      let spinnerRing = '';
+
+      if (status === 'running') {
+        const color = NODE_COLORS[role];
+        spinnerRing = `<div class="spinner-ring" style="border-color: ${color};"></div>`;
+      } else if (status === 'error') {
+        centerContent = '<div class="node-center error"><span class="error-icon">!</span></div>';
+      } else if (status === 'streaming') {
+        centerContent = '<div class="node-center streaming"></div>';
+      } else {
+        centerContent = '<div class="node-center"></div>';
+      }
+
+      const checkpointMarker = hasCheckpoint
+        ? '<div class="checkpoint-marker-standard"></div>'
+        : '';
+
+      return `
+        <div class="node-standard node-${role}">
+          ${spinnerRing}
+          ${centerContent}
+          ${checkpointMarker}
+        </div>
+      `;
+    }
+
+    function selectNode(node) {
+      selectedNode = node;
+
+      document.querySelectorAll('.node-tree').forEach(n => n.classList.remove('selected'));
+      const treeNode = document.querySelector(`.node-tree[data-id="${node.id}"]`);
+      if (treeNode) {
+        treeNode.classList.add('selected');
+      }
+
+      document.querySelectorAll('.message-card').forEach(n => n.classList.remove('selected'));
+      const chatCard = document.querySelector(`.message-card[data-id="${node.id}"]`);
+      if (chatCard) {
+        chatCard.classList.add('selected');
+        chatCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function selectNodeById(id) {
+      const node = mockTree.nodes.find(n => n.id === id);
+      if (node) {
+        const positioned = layoutTree(mockTree);
+        const positionedNode = positioned.find(n => n.id === id);
+        selectNode(positionedNode || node);
+      }
+    }
+
+    function simulateStatus(status) {
+      document.querySelectorAll('.controls button').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      event.target.classList.add('active');
+
+      if (selectedNode) {
+        mockTree.runtime_status[selectedNode.id] = status;
+        renderAll();
+        selectNodeById(selectedNode.id);
+      }
+    }
+
+    function toggleInactiveBranches() {
+      showInactiveBranches = document.getElementById('show-inactive-branches').checked;
+      renderAll();
+    }
+
+    function renderAll() {
+      renderTree(mockTree);
+      renderChatMessages(mockTree);
+    }
+
+    // Initial render
+    renderAll();
+  </script>
+</body>
+</html>
