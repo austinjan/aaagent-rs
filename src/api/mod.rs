@@ -16,7 +16,7 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
-use aaagent::config::{
+use crate::config::{
     AgentConfig, ChatConfig, ChatIntent, ConfigResolver, ProviderConfig, ResolvedConfig,
     SessionConfig,
 };
