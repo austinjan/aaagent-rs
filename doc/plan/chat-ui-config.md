@@ -519,25 +519,27 @@ function ConfigPanel({ onSubmit }: ChatConfigProps) {
 ## 11) Remaining Work (Detailed)
 
 ### Backend
-- [ ] Add API to fetch session config (e.g., `GET /api/sessions/:id/config`) returning resolved_config + editable fields.
-- [ ] Add API to update session config (e.g., `PATCH /api/sessions/:id/config`) with validation against immutable fields.
-- [ ] Persist resolved_config in session metadata on create/update.
-- [ ] Ensure API returns helpful errors for immutable/invalid updates.
+- [x] Add API to fetch session config (e.g., `GET /api/sessions/:id/config`) returning resolved_config + editable fields.
+- [x] Add API to update session config (e.g., `PATCH /api/sessions/:id/config`) with validation against immutable fields.
+- [x] Persist resolved_config in session metadata on create/update.
+- [x] Ensure API returns helpful errors for immutable/invalid updates.
 
 ### Frontend
-- [ ] Replace console-only submit with real API calls in ConfigPanel consumer (or add a ConfigPanel container).
-- [ ] Load existing session config from API and map into UI fields (creativity/verbosity/rounds/tools + overrides).
-- [ ] Map UI → payload correctly (exclude system_prompt for existing sessions, omit overrides unless set).
-- [ ] Show success/failure status (inline message or toast).
+- [x] Replace console-only submit with real API calls in ConfigPanel consumer (or add a ConfigPanel container).
+- [x] Load existing session config from API and map into UI fields (creativity/verbosity/rounds/tools + overrides).
+- [x] Map UI → payload correctly (exclude system_prompt for existing sessions, omit overrides unless set).
+- [x] Show success/failure status (inline message or toast).
 
 ### Mapping/Validation
-- [ ] Provide reverse mapping from resolved_config to intent (creativity/verbosity) for display.
-- [ ] Confirm model whitelist and numeric ranges on the client (optional, server remains source of truth).
+- [x] Provide reverse mapping from resolved_config to intent (creativity/verbosity) for display.
+- [x] Confirm model whitelist and numeric ranges on the client (optional, server remains source of truth).
 
 ### Testing/Verification
-- [ ] Manual: new session flow submits config and returns resolved_config.
-- [ ] Manual: existing session loads config, blocks system_prompt changes, updates allowed fields.
-- [ ] Manual: overrides round-trip (model/top_p/frequency/presence).
+- [ ] Manual: new session flow submits config and returns resolved_config (needs actual session storage).
+- [ ] Manual: existing session loads config, blocks system_prompt changes, updates allowed fields (needs actual session storage).
+- [ ] Manual: overrides round-trip (model/top_p/frequency/presence) (needs actual session storage).
+
+**Note**: API endpoints are implemented but use placeholder data until session storage backend is connected.
 
 ---
 

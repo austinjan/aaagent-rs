@@ -18,6 +18,7 @@ pub struct ConfigManager {
     secrets_path: PathBuf,
     config: ConfigFile,
     secrets: Option<SecretsFile>,
+    #[allow(dead_code)]
     allow_secrets_file: bool,
 }
 
@@ -52,8 +53,8 @@ impl ConfigManager {
                 temperature_profiles: TemperatureProfiles::default(),
             };
 
-            let yaml =
-                serde_yaml::to_string(&default_config).context("Failed to serialize default config")?;
+            let yaml = serde_yaml::to_string(&default_config)
+                .context("Failed to serialize default config")?;
 
             fs::write(&config_path, yaml).context(format!(
                 "Failed to write default config to {}",
@@ -125,12 +126,16 @@ impl ConfigManager {
 
     /// Get API key for a provider with fallback chain
     pub fn get_api_key(&self, provider: &str) -> Result<SecretApiKey> {
-        let key_ref = self.config.api_keys.as_ref().and_then(|keys| match provider {
-            "openai" => keys.openai.as_ref(),
-            "anthropic" => keys.anthropic.as_ref(),
-            "google" => keys.google.as_ref(),
-            _ => None,
-        });
+        let key_ref = self
+            .config
+            .api_keys
+            .as_ref()
+            .and_then(|keys| match provider {
+                "openai" => keys.openai.as_ref(),
+                "anthropic" => keys.anthropic.as_ref(),
+                "google" => keys.google.as_ref(),
+                _ => None,
+            });
 
         load_api_key(provider, key_ref, self.secrets.as_ref())
     }

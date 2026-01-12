@@ -68,7 +68,7 @@ def kill_process(pid):
         if sys.platform == "win32":
             # Windows: use taskkill
             subprocess.run(
-                ["taskkill", "//F", "//T", "//PID", str(pid)],
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
                 capture_output=True,
                 check=False,
             )
@@ -125,6 +125,7 @@ def start_frontend():
             cwd=WEB_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             shell=True,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )

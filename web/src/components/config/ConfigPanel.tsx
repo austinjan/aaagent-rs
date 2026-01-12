@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
@@ -18,41 +18,15 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { ChevronDown, ChevronUp, Lock, AlertCircle } from "lucide-react";
-
-// Types from backend
-interface ChatConfig {
-  preset: string;
-  system_prompt?: string;
-  tools_enabled: boolean;
-  intent: {
-    creativity: number;
-    verbosity: string;
-    rounds: number;
-  };
-  overrides?: {
-    model?: string;
-    top_p?: number;
-    frequency_penalty?: number;
-    presence_penalty?: number;
-  };
-}
-
-interface ResolvedConfig {
-  provider: {
-    model: string;
-    temperature: number;
-    max_tokens: number;
-  };
-  agent: {
-    max_rounds: number;
-    tools_enabled: boolean;
-  };
-  session: {
-    system_prompt: string;
-    max_context_tokens: number;
-  };
-}
+import {
+  ChevronDown,
+  ChevronUp,
+  Lock,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
+import { getSessionConfig, updateSessionConfig } from "@/lib/api";
+import type { ChatConfig, ResolvedConfig } from "@/lib/api";
 
 interface ConfigPanelProps {
   sessionId?: string;
@@ -104,6 +78,13 @@ export function ConfigPanel({
   onReset,
 }: ConfigPanelProps) {
   const isNewSession = !sessionId;
+
+  // Loading and error states
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const [preset, setPreset] = useState<string>("general");
   const [systemPrompt, setSystemPrompt] = useState<string>(() => {
     if (isNewSession) {
@@ -127,6 +108,50 @@ export function ConfigPanel({
   const [frequencyPenalty, setFrequencyPenalty] = useState<string>("0.0");
   const [presencePenalty, setPresencePenalty] = useState<string>("0.0");
 
+  // Load existing config when sessionId changes
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const loadConfig = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await getSessionConfig(sessionId);
+        const { resolved_config, editable_config } = response;
+
+        // Populate form fields from editable config
+        setPreset(editable_config.preset);
+        setSystemPrompt(resolved_config.session.system_prompt);
+        setToolsEnabled(editable_config.tools_enabled);
+        setCreativity(editable_config.intent.creativity);
+        setVerbosity(editable_config.intent.verbosity);
+        setRounds(editable_config.intent.rounds);
+
+        // Set overrides if present
+        if (editable_config.overrides) {
+          setModelOverride(editable_config.overrides.model ?? "auto");
+          setTopP(editable_config.overrides.top_p?.toString() ?? "0.9");
+          setFrequencyPenalty(
+            editable_config.overrides.frequency_penalty?.toString() ?? "0.0",
+          );
+          setPresencePenalty(
+            editable_config.overrides.presence_penalty?.toString() ?? "0.0",
+          );
+          if (editable_config.overrides.model) {
+            setShowAdvanced(true);
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load config");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadConfig();
+  }, [sessionId]);
+
   const handlePresetChange = (value: string) => {
     setPreset(value);
     if (isNewSession) {
@@ -137,7 +162,7 @@ export function ConfigPanel({
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const config: ChatConfig = {
       preset,
       system_prompt: isNewSession ? systemPrompt : undefined,
@@ -162,7 +187,29 @@ export function ConfigPanel({
         config.overrides.presence_penalty = parseFloat(presencePenalty);
     }
 
+    // Call the provided callback first
     onSubmit?.(config);
+
+    // If we have a sessionId, update the config via API
+    if (sessionId) {
+      setIsSaving(true);
+      setError(null);
+      setSuccessMessage(null);
+
+      try {
+        await updateSessionConfig(sessionId, config);
+        setSuccessMessage("Configuration updated successfully!");
+
+        // Clear success message after 3 seconds
+        setTimeout(() => setSuccessMessage(null), 3000);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to update config",
+        );
+      } finally {
+        setIsSaving(false);
+      }
+    }
   };
 
   const handleResetClick = () => {
@@ -201,6 +248,46 @@ export function ConfigPanel({
         <CardTitle>Configuration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* Loading State */}
+        {isLoading && (
+          <div className="flex items-center gap-2 p-4 border rounded-lg bg-muted/50">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">Loading configuration...</span>
+          </div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <div className="flex items-center gap-2 p-4 border border-red-500 rounded-lg bg-red-50 dark:bg-red-950/20">
+            <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <span className="text-sm text-red-600 dark:text-red-400">
+              {error}
+            </span>
+          </div>
+        )}
+
+        {/* Success Message */}
+        {successMessage && (
+          <div className="flex items-center gap-2 p-4 border border-green-500 rounded-lg bg-green-50 dark:bg-green-950/20">
+            <svg
+              className="w-4 h-4 text-green-600 dark:text-green-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+            <span className="text-sm text-green-600 dark:text-green-400">
+              {successMessage}
+            </span>
+          </div>
+        )}
+
         {/* Preset Selector */}
         <div className="space-y-2">
           <Label htmlFor="preset">Preset</Label>
@@ -445,13 +532,22 @@ export function ConfigPanel({
         <div className="flex gap-4">
           <Button
             onClick={handleSubmit}
+            disabled={isLoading || isSaving || isOverLimit}
             className="flex-1  text-primary-foreground "
           >
-            Apply Config
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Apply Config"
+            )}
           </Button>
           <Button
             onClick={handleResetClick}
             variant="outline"
+            disabled={isLoading || isSaving}
             className="  hover:/10"
           >
             Reset

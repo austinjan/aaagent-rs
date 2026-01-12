@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use secrecy::{ExposeSecret, Secret};
+use secrecy::Secret;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -70,10 +70,8 @@ pub fn load_api_key(
             }
             KeySource::File { file } => {
                 let path = shellexpand::tilde(file).to_string();
-                let key = fs::read_to_string(&path).context(format!(
-                    "Failed to read API key from file: {}",
-                    path
-                ))?;
+                let key = fs::read_to_string(&path)
+                    .context(format!("Failed to read API key from file: {}", path))?;
                 return validate_and_wrap(provider, key.trim());
             }
         }
