@@ -20,7 +20,7 @@ struct GeminiToolCallMeta {
     function_name: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GeminiProvider {
     client: reqwest::Client,
     api_key: String,

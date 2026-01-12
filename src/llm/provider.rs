@@ -286,7 +286,9 @@ impl ToolCallAssembler {
 
     /// Get all completed tool calls
     pub fn into_tool_calls(self) -> Result<Vec<ToolCall>, serde_json::Error> {
-        self.calls.into_values().map(|partial| {
+        self.calls
+            .into_values()
+            .map(|partial| {
                 Ok(ToolCall {
                     id: partial.id,
                     name: partial.name.unwrap_or_default(),
@@ -473,7 +475,7 @@ impl ChatLoopHandle {
 // ============================================================================
 
 /// Token usage statistics
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -530,4 +532,121 @@ pub enum ProviderError {
 
     #[error("JSON parse error: {0}")]
     JsonError(#[from] serde_json::Error),
+}
+
+// ============================================================================
+// Active Provider Enum
+// ============================================================================
+
+/// Enum for active provider instances
+/// Used to hold concrete provider types in API contexts
+#[derive(Debug)]
+pub enum ActiveProvider {
+    #[cfg(feature = "openai")]
+    OpenAI(crate::llm::OpenAIProvider),
+
+    #[cfg(feature = "anthropic")]
+    Anthropic(crate::llm::AnthropicProvider),
+
+    #[cfg(feature = "gemini")]
+    Gemini(crate::llm::GeminiProvider),
+}
+
+#[async_trait::async_trait]
+impl LLMProvider for ActiveProvider {
+    fn create(_model: String, _api_key: String) -> Result<Self, ProviderError>
+    where
+        Self: Sized,
+    {
+        Err(ProviderError::ConfigError(
+            "Cannot create ActiveProvider directly. Use provider_factory::create_provider instead."
+                .to_string(),
+        ))
+    }
+
+    fn state(&self) -> ProviderState {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.state(),
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.state(),
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.state(),
+        }
+    }
+
+    fn config(&self) -> ProviderConfig {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.config(),
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.config(),
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.config(),
+        }
+    }
+
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>) {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.update_config(f),
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.update_config(f),
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.update_config(f),
+        }
+    }
+
+    async fn chat(
+        &self,
+        prompt: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk, ProviderError>> + Send>>, ProviderError>
+    {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.chat(prompt).await,
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.chat(prompt).await,
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.chat(prompt).await,
+        }
+    }
+
+    async fn chat_loop(
+        &self,
+        history: Vec<Message>,
+        tools: Option<Vec<Tool>>,
+    ) -> Result<ChatLoopHandle, ProviderError> {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.chat_loop(history, tools).await,
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.chat_loop(history, tools).await,
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.chat_loop(history, tools).await,
+        }
+    }
+
+    fn prompt_cache(&mut self, cache_prompt: String) -> Result<(), ProviderError> {
+        match self {
+            #[cfg(feature = "openai")]
+            ActiveProvider::OpenAI(p) => p.prompt_cache(cache_prompt),
+
+            #[cfg(feature = "anthropic")]
+            ActiveProvider::Anthropic(p) => p.prompt_cache(cache_prompt),
+
+            #[cfg(feature = "gemini")]
+            ActiveProvider::Gemini(p) => p.prompt_cache(cache_prompt),
+        }
+    }
 }

@@ -1,6 +1,6 @@
+use super::manager::ConfigManager;
 use super::presets::{Preset, PresetRegistry};
 use super::types::*;
-use super::manager::ConfigManager;
 use anyhow::{bail, Context, Result};
 
 pub struct ConfigResolver {
@@ -14,6 +14,11 @@ impl ConfigResolver {
             presets: PresetRegistry::new(),
             config_manager: ConfigManager::new()?,
         })
+    }
+
+    /// Get a reference to the config manager
+    pub fn config_manager(&self) -> &ConfigManager {
+        &self.config_manager
     }
 
     /// Resolve a chat config into final runtime configuration
@@ -117,11 +122,7 @@ impl ConfigResolver {
                     "gemini-3-pro-preview",
                 ];
                 if !valid_models.contains(&model.as_str()) {
-                    bail!(
-                        "Invalid model '{}'. Allowed: {:?}",
-                        model,
-                        valid_models
-                    );
+                    bail!("Invalid model '{}'. Allowed: {:?}", model, valid_models);
                 }
             }
         }
@@ -377,7 +378,10 @@ mod tests {
         // Research preset
         config.preset = "research".to_string();
         let resolved = resolver.resolve(&config).unwrap();
-        assert!(resolved.session.system_prompt.contains("research assistant"));
+        assert!(resolved
+            .session
+            .system_prompt
+            .contains("research assistant"));
 
         // Quick preset
         config.preset = "quick".to_string();

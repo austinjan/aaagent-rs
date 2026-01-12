@@ -21,7 +21,7 @@ mod tests;
 // Re-export main types
 pub use helpers::*;
 pub use loop_detector::{LoopAction, LoopDetection, LoopDetector, LoopDetectorConfig, LoopType};
-pub use provider::*;
+pub use provider::{ActiveProvider, *};
 pub use registry::ToolRegistry;
 
 #[cfg(feature = "openai")]

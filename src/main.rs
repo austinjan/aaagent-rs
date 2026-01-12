@@ -4,8 +4,8 @@ use std::path::Path;
 
 use aaagent::{find_missing_readme, format_map_as_markdown, generate_map};
 
-mod web;
 mod api;
+mod web;
 
 const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*", "node_modules"];
 
@@ -162,9 +162,7 @@ async fn main() {
             println!("Server running on http://{}", addr);
             println!("Open http://localhost:{} in your browser", port);
 
-            axum::serve(listener, app)
-                .await
-                .expect("Server error");
+            axum::serve(listener, app).await.expect("Server error");
         }
     }
 }

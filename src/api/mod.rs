@@ -20,11 +20,17 @@ use aaagent::config::{ChatConfig, ChatIntent, ConfigResolver, ResolvedConfig};
 use aaagent::storage::file_store::FileSessionStore;
 use aaagent::storage::SessionStore;
 
+mod provider_factory;
+mod stream_manager;
+
+use stream_manager::StreamManager;
+
 // Shared application state
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
     pub session_store: Arc<dyn SessionStore>,
+    pub stream_manager: Arc<StreamManager>,
 }
 
 impl AppState {
@@ -35,6 +41,7 @@ impl AppState {
         Ok(Self {
             config_resolver: Arc::new(ConfigResolver::new()?),
             session_store: Arc::new(FileSessionStore::new("data/sessions")?),
+            stream_manager: Arc::new(StreamManager::new()),
         })
     }
 }
@@ -106,6 +113,7 @@ async fn health() -> Json<Value> {
 // Error type for API responses
 enum ApiError {
     BadRequest(String),
+    NotFound(String),
     Internal(String),
 }
 
@@ -113,6 +121,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
@@ -265,36 +274,86 @@ mod sessions {
     }
 
     pub async fn chat(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
         State(state): State<AppState>,
         Json(req): Json<ChatRequest>,
     ) -> Result<Json<ChatResponse>, ApiError> {
+        aaagent::logger::log(format!("Chat request received for session: {}", session_id));
+
         // Validate request
         if req.message.trim().is_empty() {
             return Err(ApiError::BadRequest("message cannot be empty".to_string()));
         }
 
-        // Use temporary config if provided, otherwise use persistent config
-        let config = req
-            .temporary_config
-            .or(req.config)
-            .unwrap_or_else(|| ChatConfig {
-                preset: "general".to_string(),
-                system_prompt: None,
-                tools_enabled: true,
-                intent: Default::default(),
-                overrides: None,
-            });
+        // Load session from storage
+        let stored_session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
 
-        // Resolve configuration
-        let resolved = state
-            .config_resolver
-            .resolve(&config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        // Get resolved config from session metadata
+        let resolved = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("resolved_config"))
+            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
 
-        // TODO: Actually process the chat request with Agent
-        // For now, just return the resolved config
-        let stream_id = format!("stream-{}", ulid::Ulid::new());
+        // Create stream
+        let (stream_id, tx) = state.stream_manager.create_stream().await;
+        aaagent::logger::log(format!(
+            "Created stream: {} for session: {}",
+            stream_id, session_id
+        ));
+
+        // Clone values for the background task
+        let message = req.message.clone();
+        let config_manager = state.config_resolver.clone();
+        let _session_store = state.session_store.clone();
+        let stream_id_clone = stream_id.clone();
+        let resolved_for_task = resolved.clone();
+
+        // Spawn background task to run Agent
+        tokio::spawn(async move {
+            aaagent::logger::log(format!(
+                "Starting agent chat for stream: {}",
+                stream_id_clone
+            ));
+
+            let result = run_agent_chat(
+                stored_session,
+                message,
+                resolved_for_task,
+                config_manager,
+                tx,
+            )
+            .await;
+
+            // If agent failed, we should still save the session if possible
+            match result {
+                Ok(_) => {
+                    aaagent::logger::log(format!(
+                        "Agent chat completed successfully for stream: {}",
+                        stream_id_clone
+                    ));
+                }
+                Err(e) => {
+                    aaagent::logger::log(format!(
+                        "ERROR: Agent chat failed for stream {}: {}",
+                        stream_id_clone, e
+                    ));
+                    aaagent::logger::log(format!("ERROR: Error details: {:?}", e));
+
+                    // Note: tx was already moved into run_agent_chat, so we can't send error here
+                    // The SSE stream will close and frontend will show generic error
+                }
+            }
+
+            // TODO: Save updated session back to storage
+            // For now, sessions are not persisted after chat
+        });
 
         Ok(Json(ChatResponse {
             stream_id,
@@ -426,13 +485,167 @@ mod sessions {
     }
 }
 
-mod sse {
-    use axum::response::sse::Event;
-    use futures::stream;
-    use std::convert::Infallible;
+/// Run agent chat in background task
+async fn run_agent_chat(
+    session: aaagent::history::Session,
+    message: String,
+    resolved_config: ResolvedConfig,
+    config_manager: Arc<ConfigResolver>,
+    tx: tokio::sync::mpsc::Sender<aaagent::agent::AgentEvent>,
+) -> anyhow::Result<()> {
+    use aaagent::agent::Agent;
+    use aaagent::history::MemoryStore;
+    use aaagent::llm::ToolRegistry;
 
-    pub async fn stream() -> impl axum::response::IntoResponse {
-        // Placeholder
-        axum::response::sse::Sse::new(stream::empty::<Result<Event, Infallible>>())
+    aaagent::logger::log("run_agent_chat: Creating tree store".to_string());
+    // Create tree store for the session
+    // Note: The session loaded from file storage doesn't have a TreeStore attached
+    // We need to create one and populate it from the session data
+    let tree_store = Arc::new(MemoryStore::new());
+
+    aaagent::logger::log("run_agent_chat: Creating new session".to_string());
+    // TODO: Properly reconstruct session with tree store
+    // For now, create a new session - this is a limitation we need to fix
+    let session =
+        aaagent::history::Session::new(tree_store.clone(), session.config.clone()).await?;
+
+    aaagent::logger::log(format!(
+        "run_agent_chat: Creating provider (model: {})",
+        resolved_config.provider.model
+    ));
+    // Create provider from resolved config
+    let provider =
+        provider_factory::create_provider(&resolved_config, config_manager.config_manager())?;
+
+    aaagent::logger::log("run_agent_chat: Creating tool registry".to_string());
+    // Create tool registry
+    let registry = ToolRegistry::new().register_all_builtin();
+
+    aaagent::logger::log("run_agent_chat: Creating agent".to_string());
+    // Create agent
+    let mut agent = Agent::new(session, provider, registry);
+
+    aaagent::logger::log(format!(
+        "run_agent_chat: Starting chat with message: {}",
+        message
+    ));
+    // Run chat with callback to stream events
+    let result = agent
+        .chat_with_callback(&message, |event| {
+            let tx = tx.clone();
+            async move {
+                // Debug logging disabled for performance
+                // aaagent::logger::log(format!("DEBUG: Sending event: {:?}", event));
+                // Send event through channel (ignore if channel is closed)
+                let _ = tx.send(event).await;
+            }
+        })
+        .await;
+
+    match result {
+        Ok(_) => {
+            aaagent::logger::log("run_agent_chat: Chat completed successfully".to_string());
+            Ok(())
+        }
+        Err(e) => {
+            // Send error message to frontend before returning error
+            let error_msg = format!("❌ Agent Error: {}\n\nDetails logged in app.log", e);
+            let _ = tx
+                .send(aaagent::agent::AgentEvent::Content(error_msg))
+                .await;
+            Err(e)
+        }
+    }
+}
+
+mod sse {
+    use super::{ApiError, AppState};
+    use axum::{
+        extract::{Path, State},
+        response::sse::{Event, Sse},
+    };
+    use futures::stream::Stream;
+    use std::{convert::Infallible, time::Duration};
+    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::StreamExt;
+
+    pub async fn stream(
+        Path((_session_id, stream_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+        aaagent::logger::log(format!("SSE stream requested: {}", stream_id));
+
+        // Take the stream from the manager
+        let receiver = state
+            .stream_manager
+            .take_stream(&stream_id)
+            .await
+            .ok_or_else(|| {
+                aaagent::logger::log(format!("ERROR: Stream {} not found", stream_id));
+                ApiError::NotFound(format!("Stream {} not found", stream_id))
+            })?;
+
+        aaagent::logger::log(format!("SSE stream connection established: {}", stream_id));
+
+        // Convert mpsc::Receiver to Stream
+        let event_stream = ReceiverStream::new(receiver).map(|agent_event| {
+            // Convert AgentEvent to SSE Event
+            let (event_type, data) = match agent_event {
+                aaagent::agent::AgentEvent::Content(content) => {
+                    ("content", serde_json::json!({ "content": content }))
+                }
+                aaagent::agent::AgentEvent::Thinking(text) => {
+                    ("thinking", serde_json::json!({ "text": text }))
+                }
+                aaagent::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
+                    "tool_calls",
+                    serde_json::json!({ "tool_calls": tool_calls }),
+                ),
+                aaagent::agent::AgentEvent::ToolResult {
+                    tool_call_id,
+                    tool_name,
+                    result,
+                    is_error,
+                } => (
+                    "tool_result",
+                    serde_json::json!({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "result": result,
+                        "is_error": is_error
+                    }),
+                ),
+                aaagent::agent::AgentEvent::LoopDetected { detection } => (
+                    "loop_detected",
+                    serde_json::json!({ "detection": format!("{:?}", detection) }),
+                ),
+                aaagent::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
+                    "checkpoint",
+                    serde_json::json!({ "node_id": node_id, "strategy": strategy }),
+                ),
+                aaagent::agent::AgentEvent::Done {
+                    total_usage,
+                    all_tool_calls,
+                    rounds,
+                } => (
+                    "done",
+                    serde_json::json!({
+                        "total_usage": total_usage,
+                        "all_tool_calls": all_tool_calls,
+                        "rounds": rounds
+                    }),
+                ),
+            };
+
+            // Create SSE event
+            Ok(Event::default().event(event_type).data(data.to_string()))
+        });
+
+        // Create SSE response with keepalive
+        Ok(Sse::new(event_stream).keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        ))
     }
 }

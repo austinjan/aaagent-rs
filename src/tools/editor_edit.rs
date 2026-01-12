@@ -187,6 +187,10 @@ Correct:
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
+            "description": "IMPORTANT: This tool has two mutually exclusive modes:\n\
+                            1. Basic mode: Provide 'edits' array for multiple search-and-replace operations\n\
+                            2. Extended mode: Provide 'operation' field for single insert/delete/append/prepend\n\
+                            You MUST use exactly one mode per call.",
             "properties": {
                 "file_path": {
                     "type": "string",
@@ -194,7 +198,7 @@ Correct:
                 },
                 "edits": {
                     "type": "array",
-                    "description": "List of edit operations (basic mode)",
+                    "description": "List of edit operations (BASIC MODE ONLY - do not combine with 'operation')",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -218,28 +222,18 @@ Correct:
                 "operation": {
                     "type": "string",
                     "enum": ["replace", "insert_before", "insert_after", "delete", "append", "prepend"],
-                    "description": "Operation type for extended mode"
+                    "description": "Operation type (EXTENDED MODE ONLY - do not combine with 'edits')"
                 },
                 "anchor": {
                     "type": "string",
-                    "description": "Text to locate (for replace/insert/delete operations)"
+                    "description": "Text to locate (for replace/insert/delete operations in extended mode)"
                 },
                 "content": {
                     "type": "string",
-                    "description": "New content (for replace/insert/append/prepend operations)"
+                    "description": "New content (for replace/insert/append/prepend operations in extended mode)"
                 }
             },
-            "required": ["file_path"],
-            "oneOf": [
-                {
-                    "required": ["edits"],
-                    "description": "Basic mode: multiple search-and-replace edits"
-                },
-                {
-                    "required": ["operation"],
-                    "description": "Extended mode: single operation with anchor/content"
-                }
-            ]
+            "required": ["file_path"]
         })
     }
 

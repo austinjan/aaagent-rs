@@ -41,6 +41,14 @@
     --ring: 222.2 84% 4.9%;
 
     --radius: 0.5rem;
+
+    /* Role colors from tree-visualization-demo.html */
+    --role-user: 0 0% 35%; /* #595757 深灰色 */
+    --role-assistant: 201 32% 49%; /* #5785A3 藍灰色 */
+    --role-system: 206 30% 61%; /* #7B9FBF 淺藍色 */
+    --role-tool: 120 40% 49%; /* #57A357 綠色 */
+    --role-checkpoint: 47 58% 58%; /* #D4C257 黃色 */
+    --role-error: 0 55% 50%; /* #C23C3C 紅色 */
 }
 
 .dark {
