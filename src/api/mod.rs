@@ -20,17 +20,23 @@ use aaagent::config::{
     AgentConfig, ChatConfig, ChatIntent, ConfigResolver, ProviderConfig, ResolvedConfig,
     SessionConfig,
 };
+use aaagent::storage::{FileSessionStore, SessionStore};
 
 // Shared application state
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
+    pub session_store: Arc<dyn SessionStore>,
 }
 
 impl AppState {
     pub fn new() -> anyhow::Result<Self> {
+        // Ensure data directory exists
+        std::fs::create_dir_all("data/sessions")?;
+
         Ok(Self {
             config_resolver: Arc::new(ConfigResolver::new()?),
+            session_store: Arc::new(FileSessionStore::new("data/sessions")?),
         })
     }
 }
