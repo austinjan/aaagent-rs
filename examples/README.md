@@ -1,214 +1,160 @@
-# LLM Provider Examples
+# Examples
 
-This directory contains examples demonstrating the LLM provider features.
+This directory contains examples demonstrating the aaagent library features.
 
 ## Prerequisites
 
-Set your OpenAI API key:
+Set your API key based on the provider you want to use:
+
 ```bash
+# OpenAI
 export OPENAI_API_KEY=sk-...
-# or on Windows
-set OPENAI_API_KEY=sk-...
+
+# Gemini
+export GEMINI_API_KEY=...
+
+# Anthropic
+export ANTHROPIC_API_KEY=...
 ```
 
 ## Examples
 
-### 1. `interactive_agent.rs` - Interactive Conversation with Detailed Logging ⭐ **Recommended**
+### `interactive_agent_tree.rs` - Interactive Agent with Tree History
 
 **Features demonstrated:**
-- Interactive conversation loop (ask questions, get answers)
-- Detailed tool call/result logging in real-time
-- History tracking across multiple turns
-- Commands: `history` to view conversation, `exit` to quit
-- Uses gpt-5-nano for fast responses
+- Tree-based conversation history (supports branching)
+- Automatic checkpointing with context optimization
+- Real-time event callbacks (tool calls, results, thinking, etc.)
+- Tool execution via ToolRegistry
+- Optional quick provider for simple tasks (checkpoint summaries)
 
-**Run:**
+**Run with OpenAI:**
 ```bash
-cargo run --example interactive_agent --features openai
+cargo run --example interactive_agent_tree --features openai
 ```
 
-**What it does:**
-- Starts an interactive chat session
-- Shows detailed information for every tool call and result
-- Displays token usage and turn statistics
-- Type `history` to see full conversation
-- Type `exit` or `quit` to end session
+**Run with Gemini:**
+```bash
+cargo run --example interactive_agent_tree --features gemini -- --provider=gemini
+```
+
+**With Quick Provider (uses cheaper model for checkpoints):**
+```bash
+QUICK_MODEL=gpt-4o-mini cargo run --example interactive_agent_tree --features openai
+# or
+QUICK_MODEL=gemini-2.0-flash-lite cargo run --example interactive_agent_tree --features gemini -- --provider=gemini
+```
+
+**Environment Variables:**
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | OpenAI API key | Required for OpenAI |
+| `OPENAI_MODEL` | OpenAI model to use | `gpt-4o-mini` |
+| `GEMINI_API_KEY` | Gemini API key | Required for Gemini |
+| `GEMINI_MODEL` | Gemini model to use | `gemini-2.0-flash` |
+| `QUICK_MODEL` | Model for simple tasks (checkpoints) | None (uses main model) |
+
+**Commands during session:**
+- Type your message to chat
+- `branches` - View all conversation branches
+- `checkpoints` - View checkpoint info
+- `exit` or `quit` - End session
 
 **Example interaction:**
 ```
 ╔════════════════════════════════════════════════════════════╗
-║     Interactive AI Agent with Tool Calling (gpt-5-nano)   ║
+║   Interactive AI Agent (Tree-based) - Gemini (gemini-2.0-flash)    ║
 ╚════════════════════════════════════════════════════════════╝
 
-┌─ Turn 1 ────────────────────────────────────────────
-│ 👤 You: list files in current directory
-│
-│ 🤖 Assistant: Let me check the files for you.
-│
-│ 🔧 Tool Calls Requested (1 call):
-│   1. Tool: bash
-│      Command: ls -la
-│
-│ ⏳ Executing tools...
-│
-│ 🔍 Tool Call Details:
-│   1. bash
-│      Cmd: ls -la
-│      Result: total 48
-│              drwxr-xr-x  12 user  staff   384 Dec 30 10:00 .
-│              drwxr-xr-x   5 user  staff   160 Dec 29 15:30 ..
-│              ... (15 more lines)
-│
-│ 📊 Turn Summary:
-│   - Rounds: 1
-│   - Tool calls: 1
-│   - Tokens: 123 in / 45 out
-│   - History size: 3 messages
-└──────────────────────────────────────────────────────
+Features:
+  - Tree-based conversation history (supports branching)
+  - Automatic checkpointing (every 10 user turns)
+  - Tool execution via ToolRegistry
+  - Stateless provider (history in tree)
+  - Quick provider enabled for checkpoint summaries
 
-┌─ Turn 2 ────────────────────────────────────────────
-│ 👤 You: history
-└──────────────────────────────────────────────────────
+──── Turn 1 ────
+👤 You: list files in current directory
 
-╔════════════════════════════════════════════════════════════╗
-║                  Conversation History                      ║
-╚════════════════════════════════════════════════════════════╝
-Total messages: 3
+>>> Event: ToolCallsRequested
+    🔧 1 tool(s) requested:
+       1. shell (id: call_abc123)
+          {
+            "command": "ls -la"
+          }
 
-[Shows all messages with details...]
+>>> Event: ToolResult
+    📦 ✓ shell (id: call_abc123)
+       Result: total 48...
+
+>>> Event: Done
+    ✅ Completed
+       Rounds: 1
+       Tool calls: 1
+       Tokens: 234 (input: 180, output: 54, cached: 0)
+
+🤖 Assistant: Here are the files in the current directory...
 ```
 
-### 2. `simple_agent.rs` - Multi-turn Tool Calling with History Tracking
+### `loop_detection_demo.rs` - Loop Detection
 
 **Features demonstrated:**
-- Multi-turn tool calling (agent makes multiple tool calls to complete tasks)
-- Conversation history tracking with `get_history()`
-- Automatic tool result pruning (configurable via `max_tool_turns`)
-- Tool execution with timeout
+- Detection of repeated tool calls
+- Pattern matching (A-B-A-B, A-B-C-A-B-C)
+- Configurable thresholds and actions (warn, terminate)
 
 **Run:**
 ```bash
-cargo run --example simple_agent --features openai
+cargo run --example loop_detection_demo --features openai
 ```
 
-**What it does:**
-1. Asks the agent to list folders and analyze files (requires 2+ tool calls)
-2. Agent automatically calls bash tool multiple times
-3. Displays conversation history after completion
-4. Shows how pruning keeps history manageable
+## Architecture
 
-**Expected output:**
 ```
-🤖 Simple AI Agent - Multi-turn Tool Calling Test
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 Tasks:
-Please help me with the following tasks:
-1. List all children folders in the current directory
-2. Check files in the current folder and give me a summary
-
-🔧 Executing 1 tool(s):
-   $ ls -d */
-   
-[Agent processes results and makes more calls...]
-
-📊 Summary:
-   Rounds: 3
-   Tools called: 4
-   Tokens: 1234 in, 567 out (total: 1801)
-
-📜 Conversation History:
-   Total messages: 10
-   
-   [1] 👤 User:
-      Please help me with the following tasks:
-      
-   [2] 🤖 Assistant:
-      Called 1 tool(s):
-        - bash
-        
-   [3] 🔧 Tool Result:
-      doc/ examples/ src/ target/ ... (256 chars total)
-      
-   ...
-   
-✅ Test Complete!
-   - Multiple tool calls executed successfully
-   - History tracked: 10 messages
-   - Tool pruning configured: max 3 turns
+Agent (orchestrator)
+├── Session (tree-based history)
+│   ├── ContextOptimizationConfig
+│   │   ├── CompressionConfig (tool result compression)
+│   │   └── CheckpointConfig (context summarization)
+│   └── TreeStore (storage backend)
+├── Provider (stateless LLM calls)
+│   └── quick_provider (optional, for simple tasks)
+└── ToolRegistry (tool execution)
 ```
 
-### 2. `openai_basic.rs` - Simple Chat Completion
+## Key Concepts
 
-Basic streaming chat without tools.
+### Tree-based History
+- Conversation stored as a tree, not a linear list
+- Support for branching and replaying alternative paths
+- Checkpoints summarize old conversation to reduce context
 
-```bash
-cargo run --example openai_basic --features openai
-```
+### Context Optimization
+1. **Tool Result Compression** (3 layers)
+   - Layer 1: Recent N turns - keep full
+   - Layer 2: Medium age - truncate large results
+   - Layer 3: Old - summarize, archive full content
 
-### 3. `openai_tools.rs` - Manual Tool Calling (Low-level API)
+2. **Checkpointing**
+   - Auto-checkpoint after N user turns
+   - Auto-checkpoint when context exceeds token limit
+   - Summary replaces old conversation
 
-Manual control over tool calling loop.
-
-```bash
-cargo run --example openai_tools --features openai
-```
-
-### 4. `openai_compact.rs` - History Compaction
-
-Demonstrates using OpenAI's Responses API to compress conversation history.
-
-```bash
-cargo run --example openai_compact --features openai
-```
-
-## Key Concepts Tested
-
-### History Management
-
-All examples demonstrate different aspects of history management:
-
-1. **Automatic Tool Pruning** (`simple_agent.rs`)
-   - Keeps last N tool call/result turns
-   - Configurable via `max_tool_turns`
-   - Prevents unbounded growth
-
-2. **History Retrieval** (`simple_agent.rs`)
-   - Use `get_history()` to retrieve conversation after completion
-   - Includes all messages after pruning
-   - Can be saved or used to continue conversation
-
-3. **Manual Compaction** (`openai_compact.rs`)
-   - Use `compact()` for long conversations
-   - Provider-specific compression
-   - Reduces tokens while preserving understanding
-
-### Tool Calling Patterns
-
-1. **High-level Helper** (`simple_agent.rs`)
-   - `chat_loop_with_tools()` - automatic tool execution
-   - Best for most use cases
-
-2. **Low-level Control** (`openai_tools.rs`)
-   - Manual `chat_loop()` with event handling
-   - Full control over tool execution
-   - Educational purposes
+### Quick Provider
+- Optional cheaper/faster model for internal tasks
+- Used for: checkpoint summaries, future compression tasks
+- Falls back to main provider if not set
 
 ## Troubleshooting
 
-**Error: OPENAI_API_KEY not set**
+**Error: API key not set**
 ```
-Set the environment variable before running
+Set the appropriate environment variable before running
 ```
 
 **Error: Model not supported**
 ```
-Only GPT-5+, o1, and gpt-4o models are supported
-Change to: gpt-5-nano, gpt-4o, o1-preview, etc.
-```
-
-**Timeout errors**
-```rust
-// Increase bash tool timeout
-let shell_tool = ShellTool::new().with_timeout(60); // 60 seconds
+Check the supported models for your provider
+OpenAI: gpt-4o, gpt-4o-mini, o1, etc.
+Gemini: gemini-2.0-flash, gemini-1.5-pro, etc.
 ```

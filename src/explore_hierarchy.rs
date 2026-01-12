@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 // check specific file exist in the input path, if not return path name
 //
 pub fn check_file_exist(file_name: &str, path: &Path) -> io::Result<Option<PathBuf>> {
-    for entry in fs::read_dir(&path)? {
+    for entry in fs::read_dir(path)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_file() && path.file_name().unwrap() == file_name {
@@ -224,12 +224,12 @@ pub fn format_map_as_markdown(dirs: &[DirectoryInfo], root_path: &Path) -> Strin
                     output.push_str(&format!(" - {}", desc));
                 }
             }
-            output.push_str("\n");
+            output.push('\n');
             continue;
         }
 
         // Create tree-like prefix based on depth
-        let prefix = format!("{}", "  ".repeat(dir_info.depth - 1));
+        let prefix = "  ".repeat(dir_info.depth - 1).to_string();
         let tree_char = "├─ ";
 
         // Extract folder name from path
@@ -260,7 +260,7 @@ pub fn format_map_as_markdown(dirs: &[DirectoryInfo], root_path: &Path) -> Strin
                 output.push_str(&format!(" - {}", desc));
             }
 
-            output.push_str("\n");
+            output.push('\n');
 
             // Add other metadata if present
             let mut other_fields = Vec::new();

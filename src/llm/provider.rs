@@ -26,7 +26,7 @@ pub trait LLMProvider: Send + Sync {
     fn config(&self) -> ProviderConfig;
 
     /// Update configuration using a closure
-    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig));
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>);
 
     /// Simple chat completion (single prompt -> response)
     /// Returns a stream of chunks for streaming responses
@@ -95,9 +95,6 @@ pub struct ProviderConfig {
     /// Enable thinking/reasoning mode (for supported providers like Claude)
     pub enable_reasoning: bool,
 
-    /// System prompt
-    pub system_prompt: Option<String>,
-
     /// Stop sequences
     pub stop_sequences: Vec<String>,
 
@@ -113,7 +110,6 @@ impl Default for ProviderConfig {
             top_p: None,
             top_k: None,
             enable_reasoning: false,
-            system_prompt: None,
             stop_sequences: Vec::new(),
             extra_options: HashMap::new(),
         }
@@ -290,9 +286,7 @@ impl ToolCallAssembler {
 
     /// Get all completed tool calls
     pub fn into_tool_calls(self) -> Result<Vec<ToolCall>, serde_json::Error> {
-        self.calls
-            .into_iter()
-            .map(|(_, partial)| {
+        self.calls.into_values().map(|partial| {
                 Ok(ToolCall {
                     id: partial.id,
                     name: partial.name.unwrap_or_default(),

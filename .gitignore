@@ -1,9 +1,52 @@
 # Rust
 target/
 debug/
-
 **/*.rs.bk
-
 *.pdb
-
 app.log
+
+# Data directory - NEVER commit user data
+/data/
+
+# Sensitive configuration files (NEVER commit these!)
+secrets.yaml
+.env
+.env.local
+.env.*.local
+
+# Key files directory
+keys/
+*.key
+
+# NOTE: config.yaml is NOT in .gitignore
+# It only contains references (env vars or file paths), not actual keys
+# It is SAFE to commit config.yaml
+
+# Frontend (Node.js / Vite)
+web/node_modules/
+web/dist/
+web/.vite/
+web/.env
+web/.env.local
+web/.env.*.local
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Development script
+.dev_pids.json
+
+# OS
+Thumbs.db

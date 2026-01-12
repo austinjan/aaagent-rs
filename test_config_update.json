@@ -1,0 +1,9 @@
+{
+  "preset": "coding",
+  "tools_enabled": true,
+  "intent": {
+    "creativity": 0.8,
+    "verbosity": "long",
+    "rounds": 50
+  }
+}

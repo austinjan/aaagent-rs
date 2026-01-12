@@ -38,6 +38,17 @@ log = "0.4"
 anyhow = "1.0.100"
 ulid = { version = "1.2.1", features = ["serde"] }
 
+# Security
+secrecy = "0.8"
+shellexpand = "3.1"
+
+# Web server (for chat UI)
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "sensitive-headers", "trace"] }
+rust-embed = "8"
+mime_guess = "2"
+
 [dev-dependencies]
 simplelog = "0.12"
 tempfile = "3"
@@ -47,6 +58,7 @@ default = ["openai", "anthropic", "gemini"]
 openai = []
 anthropic = []
 gemini = []
+dev-server = ["tower-http/cors"]
 
 [[bin]]
 name = "aaagent"

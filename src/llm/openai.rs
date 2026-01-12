@@ -252,9 +252,9 @@ impl OpenAIProvider {
                         // Combine all text parts
                         parts
                             .iter()
-                            .filter_map(|part| match part {
-                                ResponsesContentPart::InputText { text } => Some(text.as_str()),
-                                ResponsesContentPart::OutputText { text } => Some(text.as_str()),
+                            .map(|part| match part {
+                                ResponsesContentPart::InputText { text } => text.as_str(),
+                                ResponsesContentPart::OutputText { text } => text.as_str(),
                             })
                             .collect::<Vec<_>>()
                             .join("\n")
@@ -366,7 +366,7 @@ impl LLMProvider for OpenAIProvider {
         self.config.read().map(|c| c.clone()).unwrap_or_default()
     }
 
-    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig)) {
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>) {
         if let Ok(mut config) = self.config.write() {
             f(&mut config);
         }
@@ -382,17 +382,10 @@ impl LLMProvider for OpenAIProvider {
         let cfg = self.config();
 
         // Build messages
-        let mut messages = vec![];
-
-        if let Some(system_prompt) = &cfg.system_prompt {
-            messages.push(ChatMessage::System {
-                content: system_prompt.clone(),
-            });
-        }
-
-        messages.push(ChatMessage::User {
+        // Note: system_prompt is now handled by Session.get_context()
+        let messages = vec![ChatMessage::User {
             content: prompt.to_string(),
-        });
+        }];
 
         // Build request
         let request = ChatCompletionRequest {

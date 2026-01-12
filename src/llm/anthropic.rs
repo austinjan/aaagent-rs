@@ -223,7 +223,7 @@ impl LLMProvider for AnthropicProvider {
         self.config.read().map(|c| c.clone()).unwrap_or_default()
     }
 
-    fn update_config(&self, f: impl FnOnce(&mut ProviderConfig)) {
+    fn update_config(&self, f: Box<dyn FnOnce(&mut ProviderConfig) + Send>) {
         if let Ok(mut config) = self.config.write() {
             f(&mut config);
         }
@@ -237,23 +237,13 @@ impl LLMProvider for AnthropicProvider {
         ProviderError,
     > {
         let cfg = self.config();
-        let mut history = Vec::new();
-
-        if let Some(system_prompt) = &cfg.system_prompt {
-            history.push(Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
-
-        history.push(Message {
+        // Note: system_prompt is now handled by Session.get_context()
+        let history = vec![Message {
             role: Role::User,
             content: prompt.to_string(),
             tool_call_id: None,
             tool_calls: None,
-        });
+        }];
 
         let (messages, system) = self.build_request_body(&history, &cfg, None);
         let request_body = self.build_create_message_request(messages, system, None, &cfg, true);
@@ -303,12 +293,9 @@ impl LLMProvider for AnthropicProvider {
                         match event.event.as_str() {
                             "content_block_delta" => {
                                 if let Ok(delta) = serde_json::from_str::<ContentBlockDelta>(&event.data) {
-                                    match delta.delta {
-                                        ContentDelta::TextDelta { text } => {
-                                            full_content.push_str(&text);
-                                            yield Ok(StreamChunk::Content(text));
-                                        }
-                                        _ => {}
+                                    if let ContentDelta::TextDelta { text } = delta.delta {
+                                        full_content.push_str(&text);
+                                        yield Ok(StreamChunk::Content(text));
                                     }
                                 }
                             }
@@ -456,14 +443,13 @@ impl LLMProvider for AnthropicProvider {
                                     if let Ok(block_start) =
                                         serde_json::from_str::<ContentBlockStart>(&event.data)
                                     {
-                                        match block_start.content_block {
-                                            AnthropicContentBlock::ToolUse { id, name, input } => {
-                                                // Start collecting tool use
-                                                let input_str = serde_json::to_string(&input)
-                                                    .unwrap_or_else(|_| "{}".to_string());
-                                                current_tool_input = Some((id, name, input_str));
-                                            }
-                                            _ => {}
+                                        if let AnthropicContentBlock::ToolUse { id, name, input } =
+                                            block_start.content_block
+                                        {
+                                            // Start collecting tool use
+                                            let input_str = serde_json::to_string(&input)
+                                                .unwrap_or_else(|_| "{}".to_string());
+                                            current_tool_input = Some((id, name, input_str));
                                         }
                                     }
                                 }
@@ -849,6 +835,7 @@ struct ContentBlockDelta {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::enum_variant_names)]
 enum ContentDelta {
     #[serde(rename = "text_delta")]
     TextDelta { text: String },

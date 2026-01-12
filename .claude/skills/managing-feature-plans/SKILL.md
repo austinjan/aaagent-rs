@@ -1,6 +1,6 @@
 ---
 name: managing-feature-plans
-description: Creates or updates feature implementation plan documents in doc/plan. Use when planning a new software feature, refining feature scope/name, tracking TODO/DONE progress, or marking a plan as achieved.
+description: Comprehensive feature plan document, creation, editing, and archiving. When LLM needs to work with feature plan documents for (1) Starting a new feature, (2) Reviewing progress of a feature, (3) Reviewing an existing feature plan's requirements, references, and TODOs, or (4) Marking a plan as achieved.
 ---
 
 ## When to use this skill
