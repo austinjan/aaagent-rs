@@ -1,11 +1,13 @@
-pub mod types;
-pub mod presets;
-pub mod manager;
-pub mod resolver;
 pub mod keys;
+pub mod manager;
+pub mod presets;
+pub mod resolver;
+pub mod system_profiles;
+pub mod types;
 
-pub use types::*;
-pub use presets::*;
-pub use manager::ConfigManager;
-pub use resolver::ConfigResolver;
 pub use keys::*;
+pub use manager::ConfigManager;
+pub use presets::*;
+pub use resolver::ConfigResolver;
+pub use system_profiles::*;
+pub use types::*;

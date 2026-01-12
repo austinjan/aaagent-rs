@@ -8,6 +8,10 @@ app.log
 # Data directory - NEVER commit user data
 /data/
 
+# Testing and temporary files - NEVER commit these
+/testing/
+/temp-doc/
+
 # Sensitive configuration files (NEVER commit these!)
 secrets.yaml
 .env
@@ -45,7 +49,7 @@ web/pnpm-debug.log*
 *.sln
 *.sw?
 
-# Development script
+# Development script (legacy - now stored in temp-doc/)
 .dev_pids.json
 
 # OS

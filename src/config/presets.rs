@@ -60,12 +60,13 @@ impl PresetRegistry {
         presets.insert(
             "research".to_string(),
             Preset {
-                system_prompt: r#"You are a thorough research assistant specializing in systematic analysis.
+                system_prompt:
+                    r#"You are a thorough research assistant specializing in systematic analysis.
 - Break down complex problems into clear components
 - Use tools to search and analyze information
 - Provide evidence-based reasoning with citations when possible
 - Consider multiple perspectives and trade-offs"#
-                    .to_string(),
+                        .to_string(),
                 model: "gpt-5-mini".to_string(),
                 temperature: 1.0,
                 max_tokens: 32768,

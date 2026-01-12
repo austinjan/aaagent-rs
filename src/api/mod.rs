@@ -16,11 +16,9 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
-use aaagent::config::{
-    AgentConfig, ChatConfig, ChatIntent, ConfigResolver, ProviderConfig, ResolvedConfig,
-    SessionConfig,
-};
-use aaagent::storage::{FileSessionStore, SessionStore};
+use aaagent::config::{ChatConfig, ChatIntent, ConfigResolver, ResolvedConfig};
+use aaagent::storage::file_store::FileSessionStore;
+use aaagent::storage::SessionStore;
 
 // Shared application state
 #[derive(Clone)]
@@ -154,45 +152,26 @@ struct ConfigResponse {
 mod sessions {
     use super::*;
 
-    pub async fn list_sessions() -> Json<Value> {
-        // TODO: Load actual sessions from storage
-        Json(json!({
-            "sessions": [
-                {
-                    "session_id": "session-1",
-                    "name": "General Conversation",
-                    "created_at": 1704672000000_i64,
-                    "updated_at": 1704758400000_i64,
-                    "preset": "general",
-                    "message_count": 42
-                },
-                {
-                    "session_id": "session-2",
-                    "name": "Coding Project",
-                    "created_at": 1704585600000_i64,
-                    "updated_at": 1704672000000_i64,
-                    "preset": "coding",
-                    "message_count": 128
-                },
-                {
-                    "session_id": "session-3",
-                    "name": "Research Task",
-                    "created_at": 1704499200000_i64,
-                    "updated_at": 1704585600000_i64,
-                    "preset": "research",
-                    "message_count": 87
-                }
-            ],
-            "total": 3
-        }))
+    pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+        let sessions = state
+            .session_store
+            .list_sessions()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        Ok(Json(json!({
+            "sessions": sessions,
+            "total": sessions.len()
+        })))
     }
 
     pub async fn create_session(
         State(state): State<AppState>,
         Json(req): Json<Value>,
     ) -> Result<Json<Value>, ApiError> {
-        // TODO: Create actual session in storage
-        let session_id = format!("session-{}", ulid::Ulid::new());
+        use aaagent::history::{MemoryStore, Session};
+        use std::sync::Arc;
+
         let name = req
             .get("name")
             .and_then(|v| v.as_str())
@@ -202,8 +181,8 @@ mod sessions {
             .and_then(|v| v.as_str())
             .unwrap_or("general");
 
-        // Validate preset
-        let config = ChatConfig {
+        // Validate preset and resolve config
+        let chat_config = ChatConfig {
             preset: preset.to_string(),
             system_prompt: req
                 .get("system_prompt")
@@ -216,30 +195,73 @@ mod sessions {
 
         let resolved = state
             .config_resolver
-            .resolve(&config)
+            .resolve(&chat_config)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
+        // Create session with tree store (using MemoryStore for now)
+        let tree_store = Arc::new(MemoryStore::new());
+        let session_config = aaagent::history::SessionConfig {
+            system_prompt: resolved.session.system_prompt.clone().into(),
+            max_context_tokens: resolved.session.max_context_tokens,
+            ..Default::default()
+        };
+
+        let mut session = Session::new(tree_store, session_config)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Set session name and metadata
+        session.name = Some(name.to_string());
+        session.metadata = Some(json!({
+            "preset": preset,
+            "resolved_config": resolved,
+        }));
+
+        // Save to file storage
+        state
+            .session_store
+            .create_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
         Ok(Json(json!({
-            "session_id": session_id,
-            "name": name,
-            "created_at": chrono::Utc::now().timestamp_millis(),
-            "updated_at": chrono::Utc::now().timestamp_millis(),
+            "session_id": session.session_id,
+            "name": session.name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
             "resolved_config": resolved
         })))
     }
 
-    pub async fn get_session(Path(session_id): Path<String>) -> Json<Value> {
-        // TODO: Load actual session from storage
-        Json(json!({
-            "session_id": session_id,
-            "name": "Example Session",
-            "created_at": 1704672000000_i64,
-            "updated_at": 1704758400000_i64,
-            "preset": "general",
-            "message_count": 42,
-            "root_node_id": "node-root",
-            "active_leaf_id": "node-leaf-123"
-        }))
+    pub async fn get_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        // Extract preset from metadata if available
+        let preset = session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("preset"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("general");
+
+        Ok(Json(json!({
+            "session_id": session.session_id,
+            "name": session.name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "preset": preset,
+            "message_count": session.stats.total_nodes,
+            "root_node_id": session.root_node_id,
+            "active_leaf_id": session.active_leaf_id
+        })))
     }
 
     pub async fn chat(
@@ -297,35 +319,36 @@ mod sessions {
     }
 
     pub async fn get_config(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
     ) -> Result<Json<ConfigResponse>, ApiError> {
-        // TODO: Load actual session from storage and retrieve config from metadata
-        // For now, return a placeholder resolved config
+        let session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
 
-        // This would be loaded from session.metadata["resolved_config"]
-        let resolved_config = ResolvedConfig {
-            provider: ProviderConfig {
-                model: "gpt-5-mini".to_string(),
-                temperature: 1.0,
-                max_tokens: 16384,
-                top_p: None,
-                frequency_penalty: None,
-                presence_penalty: None,
-            },
-            agent: AgentConfig {
-                max_rounds: 30,
-                tools_enabled: true,
-            },
-            session: SessionConfig {
-                system_prompt: "You are a helpful, friendly assistant.".to_string(),
-                max_context_tokens: 200000,
-            },
-        };
+        // Load resolved config from session metadata
+        let resolved_config = session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("resolved_config"))
+            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
+
+        // Load preset from metadata
+        let preset = session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("preset"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("general")
+            .to_string();
 
         // Map resolved config back to editable ChatConfig
-        // Note: We derive intent fields from resolved values
         let editable_config = ChatConfig {
-            preset: "general".to_string(),
+            preset,
             system_prompt: None, // Immutable, shown separately
             tools_enabled: resolved_config.agent.tools_enabled,
             intent: ChatIntent {
@@ -348,30 +371,25 @@ mod sessions {
     }
 
     pub async fn update_config(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
         State(state): State<AppState>,
         Json(config): Json<ChatConfig>,
     ) -> Result<Json<ResolvedConfig>, ApiError> {
-        // Validate that system_prompt is not being changed
-        // TODO: Load existing session config from metadata
-        let existing_resolved = ResolvedConfig {
-            provider: ProviderConfig {
-                model: "gpt-5-mini".to_string(),
-                temperature: 1.0,
-                max_tokens: 16384,
-                top_p: None,
-                frequency_penalty: None,
-                presence_penalty: None,
-            },
-            agent: AgentConfig {
-                max_rounds: 30,
-                tools_enabled: true,
-            },
-            session: SessionConfig {
-                system_prompt: "You are a helpful, friendly assistant.".to_string(),
-                max_context_tokens: 200000,
-            },
-        };
+        // Load existing session
+        let mut session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        // Load existing resolved config
+        let existing_resolved = session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("resolved_config"))
+            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
 
         // Check immutable fields
         state
@@ -389,7 +407,20 @@ mod sessions {
         resolved.session.system_prompt = existing_resolved.session.system_prompt;
         resolved.session.max_context_tokens = existing_resolved.session.max_context_tokens;
 
-        // TODO: Save resolved config to session.metadata["resolved_config"]
+        // Update session metadata
+        if let Some(ref mut metadata) = session.metadata {
+            metadata["resolved_config"] =
+                serde_json::to_value(&resolved).map_err(|e| ApiError::Internal(e.to_string()))?;
+            metadata["preset"] = json!(config.preset);
+        }
+        session.updated_at = aaagent::history::node::now();
+
+        // Save updated session
+        state
+            .session_store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         Ok(Json(resolved))
     }
