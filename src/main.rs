@@ -153,7 +153,7 @@ async fn main() {
             println!("Starting aaagent-rs chat UI server...");
 
             // Create router
-            let app = api::create_router();
+            let app = api::create_router().await;
 
             // Start server
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

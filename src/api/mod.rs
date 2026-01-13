@@ -18,8 +18,6 @@ use tower_http::cors::CorsLayer;
 
 use aaagent::config::{ChatConfig, ChatIntent, ConfigResolver, ResolvedConfig};
 use aaagent::history::TreeStore;
-use aaagent::storage::file_store::FileSessionStore;
-use aaagent::storage::SessionStore;
 
 mod provider_factory;
 mod stream_manager;
@@ -30,19 +28,21 @@ use stream_manager::StreamManager;
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
-    pub session_store: Arc<dyn SessionStore>,
+    pub store: Arc<aaagent::history::MemoryStore>,
     pub stream_manager: Arc<StreamManager>,
-    pub tree_store: Arc<aaagent::history::MemoryStore>,
 }
 
 impl AppState {
-    pub fn new() -> anyhow::Result<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
         // Ensure data directories exist
-        std::fs::create_dir_all("data/sessions")?;
+        std::fs::create_dir_all("data")?;
         std::fs::create_dir_all("data/temp")?;
 
         // Load configuration
         let config_resolver = Arc::new(ConfigResolver::new()?);
+
+        // Initialize persistent store
+        let store = Arc::new(aaagent::history::MemoryStore::with_persistence("data".into()).await?);
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver
@@ -67,15 +67,16 @@ impl AppState {
 
         Ok(Self {
             config_resolver,
-            session_store: Arc::new(FileSessionStore::new("data/sessions")?),
+            store,
             stream_manager: Arc::new(StreamManager::new()),
-            tree_store: Arc::new(aaagent::history::MemoryStore::new()),
         })
     }
 }
 
-pub fn create_router() -> Router {
-    let state = AppState::new().expect("Failed to initialize app state");
+pub async fn create_router() -> Router {
+    let state = AppState::new()
+        .await
+        .expect("Failed to initialize app state");
 
     // Start background maintenance worker
     let maintenance_config = state
@@ -199,13 +200,35 @@ mod sessions {
 
     pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
         let sessions = state
-            .session_store
+            .store
             .list_sessions()
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
+        // Convert to session summaries
+        let summaries: Vec<_> = sessions
+            .iter()
+            .map(|s| {
+                let preset = s
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("preset"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("general");
+
+                json!({
+                    "session_id": s.session_id,
+                    "name": s.name,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
+                    "preset": preset,
+                    "message_count": s.stats.total_nodes,
+                })
+            })
+            .collect();
+
         Ok(Json(json!({
-            "sessions": sessions,
+            "sessions": summaries,
             "total": sessions.len()
         })))
     }
@@ -242,15 +265,15 @@ mod sessions {
             .resolve(&chat_config)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-        // Create session with tree store (using shared tree_store from state)
-        let tree_store = state.tree_store.clone();
+        // Create session with persistent store
+        let store = state.store.clone();
         let session_config = aaagent::history::SessionConfig {
             system_prompt: resolved.session.system_prompt.clone().into(),
             max_context_tokens: resolved.session.max_context_tokens,
             ..Default::default()
         };
 
-        let mut session = Session::new(tree_store, session_config)
+        let mut session = Session::new(store.clone(), session_config)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -261,10 +284,9 @@ mod sessions {
             "resolved_config": resolved,
         }));
 
-        // Save to file storage
-        state
-            .session_store
-            .create_session(&session)
+        // Save updated session with metadata
+        store
+            .update_session(&session)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -282,11 +304,11 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<Value>, ApiError> {
         let session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Extract preset from metadata if available
         let preset = session
@@ -322,11 +344,11 @@ mod sessions {
 
         // Load session from storage
         let stored_session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Get base resolved config from session metadata
         let base_resolved = stored_session
@@ -384,7 +406,7 @@ mod sessions {
         let config_manager = state.config_resolver.clone();
         let stream_id_clone = stream_id.clone();
         let resolved_for_task = resolved.clone();
-        let tree_store_for_task = state.tree_store.clone();
+        let store_for_task = state.store.clone();
 
         // Spawn background task to run Agent
         tokio::spawn(async move {
@@ -398,7 +420,7 @@ mod sessions {
                 message,
                 resolved_for_task,
                 config_manager,
-                tree_store_for_task,
+                store_for_task,
                 tx.clone(),
             )
             .await;
@@ -472,20 +494,17 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<Value>, ApiError> {
         // Load session
-        let mut session = state
-            .session_store
-            .get_session(&session_id)
+        let session = state
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
-
-        // Attach shared store
-        session.set_store(state.tree_store.clone());
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Get path nodes from active leaf to root
         let leaf_id = session.active_leaf_id.clone();
         let nodes = state
-            .tree_store
+            .store
             .get_path_to_root_internal(leaf_id)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -502,11 +521,11 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<Value>, ApiError> {
         let session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         Ok(Json(json!({
             "total_nodes": session.stats.total_nodes,
@@ -521,11 +540,11 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<Value>, ApiError> {
         let session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         Ok(Json(json!({ "checkpoints": session.checkpoints })))
     }
@@ -535,11 +554,11 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<Value>, ApiError> {
         let session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         Ok(Json(json!({
             "prompt": session.config.system_prompt.unwrap_or_default()
@@ -551,11 +570,11 @@ mod sessions {
         State(state): State<AppState>,
     ) -> Result<Json<ConfigResponse>, ApiError> {
         let session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Load resolved config from session metadata
         let resolved_config = session
@@ -605,11 +624,11 @@ mod sessions {
     ) -> Result<Json<ResolvedConfig>, ApiError> {
         // Load existing session
         let mut session = state
-            .session_store
-            .get_session(&session_id)
+            .store
+            .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
-            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Load existing resolved config
         let existing_resolved = session
@@ -643,9 +662,9 @@ mod sessions {
         }
         session.updated_at = aaagent::history::node::now();
 
-        // Save updated session
+        // Save updated session (automatically persisted by store)
         state
-            .session_store
+            .store
             .update_session(&session)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -660,21 +679,17 @@ async fn run_agent_chat(
     message: String,
     resolved_config: ResolvedConfig,
     config_manager: Arc<ConfigResolver>,
-    tree_store: Arc<aaagent::history::MemoryStore>,
+    store: Arc<aaagent::history::MemoryStore>,
     tx: tokio::sync::mpsc::Sender<aaagent::agent::AgentEvent>,
 ) -> anyhow::Result<()> {
     use aaagent::agent::{Agent, AgentConfig};
     use aaagent::llm::{LoopDetectorConfig, ToolRegistry};
 
-    aaagent::logger::log("run_agent_chat: Reconstructing session with tree store".to_string());
-    
-    // Attach the shared store to the session loaded from storage
-    let mut session = session;
-    session.set_store(tree_store.clone());
+    aaagent::logger::log("run_agent_chat: Using persistent store".to_string());
 
-    // Ensure session metadata exists in the tree store (in case of server restart)
-    // This allows the tree store to know about the session's active leaf etc.
-    let _ = tree_store.update_session(&session).await;
+    // Attach the shared store to the session
+    let mut session = session;
+    session.set_store(store.clone());
 
     aaagent::logger::log(format!(
         "run_agent_chat: Creating provider (model: {})",

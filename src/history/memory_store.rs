@@ -1,6 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -10,21 +11,174 @@ use super::storage::{NodeFilter, TreeStore};
 
 /// In-memory tree store implementation using HashMap
 ///
-/// This is the simplest implementation, good for testing and development.
-/// Data is not persisted and will be lost when the process exits.
+/// Supports optional persistence to disk for production use.
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
     nodes: Arc<RwLock<HashMap<NodeId, Node>>>,
     sessions: Arc<RwLock<HashMap<SessionId, Session>>>,
+    persistence_path: Option<PathBuf>,
 }
 
 impl MemoryStore {
-    /// Create a new empty memory store
+    /// Create a new empty memory store (no persistence)
     pub fn new() -> Self {
         Self {
             nodes: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            persistence_path: None,
         }
+    }
+
+    /// Create a new memory store with disk persistence
+    pub async fn with_persistence(base_path: PathBuf) -> Result<Self> {
+        // Create directory structure
+        let sessions_dir = base_path.join("sessions");
+        let nodes_dir = base_path.join("nodes");
+
+        tokio::fs::create_dir_all(&sessions_dir)
+            .await
+            .context(format!(
+                "Failed to create sessions directory: {}",
+                sessions_dir.display()
+            ))?;
+
+        tokio::fs::create_dir_all(&nodes_dir)
+            .await
+            .context(format!(
+                "Failed to create nodes directory: {}",
+                nodes_dir.display()
+            ))?;
+
+        let store = Self {
+            nodes: Arc::new(RwLock::new(HashMap::new())),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            persistence_path: Some(base_path),
+        };
+
+        // Load existing data from disk
+        store.load_from_disk().await?;
+
+        Ok(store)
+    }
+
+    /// Load all sessions and nodes from disk
+    async fn load_from_disk(&self) -> Result<()> {
+        if let Some(ref base_path) = self.persistence_path {
+            // Load sessions
+            let sessions_dir = base_path.join("sessions");
+            if sessions_dir.exists() {
+                let mut entries = tokio::fs::read_dir(&sessions_dir).await.context(format!(
+                    "Failed to read sessions directory: {}",
+                    sessions_dir.display()
+                ))?;
+
+                let mut sessions = self.sessions.write().await;
+                while let Some(entry) = entries.next_entry().await? {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                            if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                                sessions.insert(session.session_id.clone(), session);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Load nodes
+            let nodes_dir = base_path.join("nodes");
+            if nodes_dir.exists() {
+                let mut session_dirs = tokio::fs::read_dir(&nodes_dir).await.context(format!(
+                    "Failed to read nodes directory: {}",
+                    nodes_dir.display()
+                ))?;
+
+                let mut nodes = self.nodes.write().await;
+                while let Some(session_dir) = session_dirs.next_entry().await? {
+                    if session_dir.path().is_dir() {
+                        let mut node_files = tokio::fs::read_dir(session_dir.path()).await?;
+
+                        while let Some(node_file) = node_files.next_entry().await? {
+                            let path = node_file.path();
+                            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                                if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                                    if let Ok(node) = serde_json::from_str::<Node>(&content) {
+                                        nodes.insert(node.node_id.clone(), node);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let sessions_count = self.sessions.read().await.len();
+            let nodes_count = self.nodes.read().await.len();
+            crate::logger::log(format!(
+                "[MemoryStore] Loaded {} sessions and {} nodes from disk",
+                sessions_count, nodes_count
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Save a node to disk
+    async fn save_node_to_disk(&self, node: &Node) -> Result<()> {
+        if let Some(ref base_path) = self.persistence_path {
+            let node_dir = base_path.join("nodes").join(&node.session_id);
+            tokio::fs::create_dir_all(&node_dir).await.context(format!(
+                "Failed to create node directory: {}",
+                node_dir.display()
+            ))?;
+
+            let node_path = node_dir.join(format!("{}.json", node.node_id));
+            let json = serde_json::to_string_pretty(node).context("Failed to serialize node")?;
+
+            tokio::fs::write(&node_path, json).await.context(format!(
+                "Failed to write node file: {}",
+                node_path.display()
+            ))?;
+        }
+        Ok(())
+    }
+
+    /// Save a session to disk
+    async fn save_session_to_disk(&self, session: &Session) -> Result<()> {
+        if let Some(ref base_path) = self.persistence_path {
+            let session_path = base_path
+                .join("sessions")
+                .join(format!("{}.json", session.session_id));
+
+            let json =
+                serde_json::to_string_pretty(session).context("Failed to serialize session")?;
+
+            tokio::fs::write(&session_path, json)
+                .await
+                .context(format!(
+                    "Failed to write session file: {}",
+                    session_path.display()
+                ))?;
+        }
+        Ok(())
+    }
+
+    /// Delete a node from disk
+    async fn delete_node_from_disk(&self, session_id: &str, node_id: &str) -> Result<()> {
+        if let Some(ref base_path) = self.persistence_path {
+            let node_path = base_path
+                .join("nodes")
+                .join(session_id)
+                .join(format!("{}.json", node_id));
+
+            if node_path.exists() {
+                tokio::fs::remove_file(&node_path).await.context(format!(
+                    "Failed to delete node file: {}",
+                    node_path.display()
+                ))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -38,13 +192,19 @@ impl Default for MemoryStore {
 impl TreeStore for MemoryStore {
     async fn insert_node(&self, node: Node) -> Result<NodeId> {
         let node_id = node.node_id.clone();
-        let mut nodes = self.nodes.write().await;
 
-        if nodes.contains_key(&node_id) {
-            return Err(anyhow!("Node with id {} already exists", node_id));
+        // 1. Insert into memory
+        {
+            let mut nodes = self.nodes.write().await;
+            if nodes.contains_key(&node_id) {
+                return Err(anyhow!("Node with id {} already exists", node_id));
+            }
+            nodes.insert(node_id.clone(), node.clone());
         }
 
-        nodes.insert(node_id.clone(), node);
+        // 2. Persist to disk (if enabled)
+        self.save_node_to_disk(&node).await?;
+
         Ok(node_id)
     }
 
@@ -54,32 +214,47 @@ impl TreeStore for MemoryStore {
     }
 
     async fn update_node_flags(&self, node_id: NodeId, flags: NodeFlags) -> Result<()> {
-        let mut nodes = self.nodes.write().await;
+        let updated_node = {
+            let mut nodes = self.nodes.write().await;
+            let node = nodes
+                .get_mut(&node_id)
+                .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+            node.flags = flags;
+            node.clone()
+        };
 
-        let node = nodes
-            .get_mut(&node_id)
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
-        node.flags = flags;
+        // Persist to disk
+        self.save_node_to_disk(&updated_node).await?;
         Ok(())
     }
 
     async fn mark_node_pruned(&self, node_id: NodeId, pruned_at: i64) -> Result<()> {
-        let mut nodes = self.nodes.write().await;
+        let updated_node = {
+            let mut nodes = self.nodes.write().await;
+            let node = nodes
+                .get_mut(&node_id)
+                .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+            node.pruned_at = Some(pruned_at);
+            node.clone()
+        };
 
-        let node = nodes
-            .get_mut(&node_id)
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
-        node.pruned_at = Some(pruned_at);
+        // Persist to disk
+        self.save_node_to_disk(&updated_node).await?;
         Ok(())
     }
 
     async fn delete_node(&self, node_id: NodeId) -> Result<()> {
-        let mut nodes = self.nodes.write().await;
-        nodes
-            .remove(&node_id)
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+        let (session_id, node_id_str) = {
+            let mut nodes = self.nodes.write().await;
+            let node = nodes
+                .remove(&node_id)
+                .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+            (node.session_id.clone(), node.node_id.clone())
+        };
+
+        // Delete from disk
+        self.delete_node_from_disk(&session_id, &node_id_str)
+            .await?;
         Ok(())
     }
 
@@ -189,13 +364,19 @@ impl TreeStore for MemoryStore {
 
     async fn create_session(&self, session: Session) -> Result<SessionId> {
         let session_id = session.session_id.clone();
-        let mut sessions = self.sessions.write().await;
 
-        if sessions.contains_key(&session_id) {
-            return Err(anyhow!("Session with id {} already exists", session_id));
+        // 1. Insert into memory
+        {
+            let mut sessions = self.sessions.write().await;
+            if sessions.contains_key(&session_id) {
+                return Err(anyhow!("Session with id {} already exists", session_id));
+            }
+            sessions.insert(session_id.clone(), session.clone());
         }
 
-        sessions.insert(session_id.clone(), session);
+        // 2. Persist to disk
+        self.save_session_to_disk(&session).await?;
+
         Ok(session_id)
     }
 
@@ -205,13 +386,18 @@ impl TreeStore for MemoryStore {
     }
 
     async fn update_session(&self, session: &Session) -> Result<()> {
-        let mut sessions = self.sessions.write().await;
-
-        if !sessions.contains_key(&session.session_id) {
-            return Err(anyhow!("Session {} not found", session.session_id));
+        // 1. Update memory
+        {
+            let mut sessions = self.sessions.write().await;
+            if !sessions.contains_key(&session.session_id) {
+                return Err(anyhow!("Session {} not found", session.session_id));
+            }
+            sessions.insert(session.session_id.clone(), session.clone());
         }
 
-        sessions.insert(session.session_id.clone(), session.clone());
+        // 2. Persist to disk
+        self.save_session_to_disk(session).await?;
+
         Ok(())
     }
 
@@ -234,18 +420,24 @@ impl TreeStore for MemoryStore {
     }
 
     async fn insert_nodes_batch(&self, nodes_to_insert: Vec<Node>) -> Result<Vec<NodeId>> {
-        let mut nodes = self.nodes.write().await;
         let mut ids = Vec::new();
 
-        for node in nodes_to_insert {
-            let node_id = node.node_id.clone();
-
-            if nodes.contains_key(&node_id) {
-                return Err(anyhow!("Node with id {} already exists", node_id));
+        // 1. Insert all into memory
+        {
+            let mut nodes = self.nodes.write().await;
+            for node in &nodes_to_insert {
+                let node_id = node.node_id.clone();
+                if nodes.contains_key(&node_id) {
+                    return Err(anyhow!("Node with id {} already exists", node_id));
+                }
+                nodes.insert(node_id.clone(), node.clone());
+                ids.push(node_id);
             }
+        }
 
-            nodes.insert(node_id.clone(), node);
-            ids.push(node_id);
+        // 2. Persist all to disk
+        for node in &nodes_to_insert {
+            self.save_node_to_disk(node).await?;
         }
 
         Ok(ids)
