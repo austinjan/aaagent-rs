@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
 
-export interface ChatOverrides {
+export interface ChatOverrides extends Record<string, unknown> {
   model?: string;
   top_p?: number;
   frequency_penalty?: number;

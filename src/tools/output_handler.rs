@@ -4,8 +4,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Default threshold for large output (2KB)
-pub const DEFAULT_OUTPUT_THRESHOLD: usize = 2048;
+/// Default threshold for large output (4KB)
+pub const DEFAULT_OUTPUT_THRESHOLD: usize = 4096;
 
 /// Process tool output and write to temp file if too large
 ///

@@ -58,7 +58,7 @@ export function TemporaryConfigPanel({
     !SUPPORTED_MODELS.some((m) => m.value === config.overrides.model);
   const selectValue = isCustomModel
     ? CUSTOM_MODEL_VALUE
-    : config.overrides.model;
+    : config.overrides.model ?? "";
 
   const handleModelSelectChange = (value: string) => {
     if (value === CUSTOM_MODEL_VALUE) {

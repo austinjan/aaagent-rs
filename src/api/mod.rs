@@ -17,6 +17,7 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::cors::CorsLayer;
 
 use aaagent::config::{ChatConfig, ChatIntent, ConfigResolver, ResolvedConfig};
+use aaagent::history::TreeStore;
 use aaagent::storage::file_store::FileSessionStore;
 use aaagent::storage::SessionStore;
 
@@ -31,6 +32,7 @@ pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
     pub session_store: Arc<dyn SessionStore>,
     pub stream_manager: Arc<StreamManager>,
+    pub tree_store: Arc<aaagent::history::MemoryStore>,
 }
 
 impl AppState {
@@ -67,6 +69,7 @@ impl AppState {
             config_resolver,
             session_store: Arc::new(FileSessionStore::new("data/sessions")?),
             stream_manager: Arc::new(StreamManager::new()),
+            tree_store: Arc::new(aaagent::history::MemoryStore::new()),
         })
     }
 }
@@ -211,8 +214,7 @@ mod sessions {
         State(state): State<AppState>,
         Json(req): Json<Value>,
     ) -> Result<Json<Value>, ApiError> {
-        use aaagent::history::{MemoryStore, Session};
-        use std::sync::Arc;
+        use aaagent::history::Session;
 
         let name = req
             .get("name")
@@ -240,8 +242,8 @@ mod sessions {
             .resolve(&chat_config)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-        // Create session with tree store (using MemoryStore for now)
-        let tree_store = Arc::new(MemoryStore::new());
+        // Create session with tree store (using shared tree_store from state)
+        let tree_store = state.tree_store.clone();
         let session_config = aaagent::history::SessionConfig {
             system_prompt: resolved.session.system_prompt.clone().into(),
             max_context_tokens: resolved.session.max_context_tokens,
@@ -380,9 +382,9 @@ mod sessions {
         // Clone values for the background task
         let message = req.message.clone();
         let config_manager = state.config_resolver.clone();
-        let _session_store = state.session_store.clone();
         let stream_id_clone = stream_id.clone();
         let resolved_for_task = resolved.clone();
+        let tree_store_for_task = state.tree_store.clone();
 
         // Spawn background task to run Agent
         tokio::spawn(async move {
@@ -396,6 +398,7 @@ mod sessions {
                 message,
                 resolved_for_task,
                 config_manager,
+                tree_store_for_task,
                 tx.clone(),
             )
             .await;
@@ -464,20 +467,83 @@ mod sessions {
         }))
     }
 
-    pub async fn get_path() -> Json<Value> {
-        Json(json!({"nodes": []}))
+    pub async fn get_path(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        // Load session
+        let mut session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        // Attach shared store
+        session.set_store(state.tree_store.clone());
+
+        // Get path nodes from active leaf to root
+        let leaf_id = session.active_leaf_id.clone();
+        let nodes = state
+            .tree_store
+            .get_path_to_root_internal(leaf_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Reverse to get chronological order (root -> leaf)
+        let mut nodes = nodes;
+        nodes.reverse();
+
+        Ok(Json(json!({ "nodes": nodes })))
     }
 
-    pub async fn get_metadata() -> Json<Value> {
-        Json(json!({"total_nodes": 0}))
+    pub async fn get_metadata(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({
+            "total_nodes": session.stats.total_nodes,
+            "active_branches": session.stats.active_branches,
+            "total_checkpoints": session.stats.total_checkpoints,
+            "total_tokens_processed": session.stats.total_tokens_processed,
+        })))
     }
 
-    pub async fn get_checkpoints() -> Json<Value> {
-        Json(json!({"checkpoints": []}))
+    pub async fn get_checkpoints(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({ "checkpoints": session.checkpoints })))
     }
 
-    pub async fn get_system_prompt() -> Json<Value> {
-        Json(json!({"prompt": ""}))
+    pub async fn get_system_prompt(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .session_store
+            .get_session(&session_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({
+            "prompt": session.config.system_prompt.unwrap_or_default()
+        })))
     }
 
     pub async fn get_config(
@@ -594,23 +660,21 @@ async fn run_agent_chat(
     message: String,
     resolved_config: ResolvedConfig,
     config_manager: Arc<ConfigResolver>,
+    tree_store: Arc<aaagent::history::MemoryStore>,
     tx: tokio::sync::mpsc::Sender<aaagent::agent::AgentEvent>,
 ) -> anyhow::Result<()> {
-    use aaagent::agent::Agent;
-    use aaagent::history::MemoryStore;
-    use aaagent::llm::ToolRegistry;
+    use aaagent::agent::{Agent, AgentConfig};
+    use aaagent::llm::{LoopDetectorConfig, ToolRegistry};
 
-    aaagent::logger::log("run_agent_chat: Creating tree store".to_string());
-    // Create tree store for the session
-    // Note: The session loaded from file storage doesn't have a TreeStore attached
-    // We need to create one and populate it from the session data
-    let tree_store = Arc::new(MemoryStore::new());
+    aaagent::logger::log("run_agent_chat: Reconstructing session with tree store".to_string());
+    
+    // Attach the shared store to the session loaded from storage
+    let mut session = session;
+    session.set_store(tree_store.clone());
 
-    aaagent::logger::log("run_agent_chat: Creating new session".to_string());
-    // TODO: Properly reconstruct session with tree store
-    // For now, create a new session - this is a limitation we need to fix
-    let session =
-        aaagent::history::Session::new(tree_store.clone(), session.config.clone()).await?;
+    // Ensure session metadata exists in the tree store (in case of server restart)
+    // This allows the tree store to know about the session's active leaf etc.
+    let _ = tree_store.update_session(&session).await;
 
     aaagent::logger::log(format!(
         "run_agent_chat: Creating provider (model: {})",
@@ -627,6 +691,10 @@ async fn run_agent_chat(
     aaagent::logger::log("run_agent_chat: Creating agent".to_string());
     // Create agent
     let mut agent = Agent::new(session, provider, registry);
+    agent.set_config(AgentConfig {
+        max_rounds: resolved_config.agent.max_rounds as usize,
+        loop_detection: Some(LoopDetectorConfig::default()),
+    });
 
     aaagent::logger::log(format!(
         "run_agent_chat: Starting chat with message: {}",

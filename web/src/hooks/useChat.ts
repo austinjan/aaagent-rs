@@ -1,6 +1,7 @@
 // Hook for managing chat sessions with backend integration
+// Now using Zustand store for state management
 
-import { useState, useCallback } from "react";
+import React, { useCallback } from "react";
 import {
   createSession,
   sendChatMessage,
@@ -9,102 +10,96 @@ import {
 } from "../services/api";
 import { useSSEStream } from "./useSSEStream";
 import {
-  Role,
-  NodeKind,
-  type MessageData,
-  type CheckpointMessage,
-  type Node,
-} from "../types/backend";
+  useChatStore,
+  selectIsLoading,
+  selectError,
+} from "../store/useChatStore";
+import { useShallow } from "zustand/react/shallow";
+import { Role, NodeKind, type MessageData, type Node } from "../types/backend";
 
 export interface UseChatOptions {
   preset?: string;
   sessionName?: string;
 }
 
-export interface ChatState {
-  sessionId: string | null;
-  messages: MessageData[];
-  checkpoints: CheckpointMessage[];
-  isLoading: boolean;
-  error: Error | null;
-}
-
 export function useChat(options: UseChatOptions = {}) {
-  const [state, setState] = useState<ChatState>({
-    sessionId: null,
-    messages: [],
-    checkpoints: [],
-    isLoading: false,
-    error: null,
-  });
+  // Get store state and actions
+  const sessionId = useChatStore((state) => state.session.sessionId);
+  const messages = useChatStore((state) => state.messages);
+  const checkpoints = useChatStore(
+    useShallow((state) => Array.from(state.checkpoints.values())),
+  );
+  const isLoading = useChatStore(selectIsLoading);
+  const error = useChatStore(selectError);
 
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  // SSE stream URL (stored in local state since it changes per message)
+  const [streamUrl, setStreamUrl] = React.useState<string | null>(null);
+  const messageSequence = React.useRef(0);
+  const nextMessageId = useCallback((prefix: string, baseId?: string) => {
+    messageSequence.current += 1;
+    const base = baseId ? `${baseId}-` : "";
+    return `${prefix}-${base}${Date.now()}-${messageSequence.current}`;
+  }, []);
 
-  // Handle SSE events
-  const handleSSEEvent = useCallback((event: Record<string, unknown>) => {
-    switch (event.type) {
-      case "content":
-        // Create new Assistant message on first content, append to last Assistant message on subsequent events
-        setState((prev) => {
-          const lastMsg = prev.messages[prev.messages.length - 1];
+  // Handle SSE events - use store directly to avoid dependency issues
+  const handleSSEEvent = useCallback(
+    (event: Record<string, unknown>) => {
+      const store = useChatStore.getState();
+      const currentMessages = store.messages;
+
+      switch (event.type) {
+        case "content":
+          // Create new Assistant message on first content, append to last Assistant message on subsequent events
+          const lastMsg = currentMessages[currentMessages.length - 1];
 
           // If last message is streaming Assistant, append to it
           if (lastMsg?.role === Role.Assistant && lastMsg.isStreaming) {
-            return {
-              ...prev,
-              messages: [
-                ...prev.messages.slice(0, -1),
-                { ...lastMsg, content: lastMsg.content + event.content },
-              ],
+            store.updateMessage(lastMsg.id, {
+              content: lastMsg.content + event.content,
+            });
+          } else {
+            // Otherwise create new Assistant message
+            const newMsg: MessageData = {
+              id: `assistant-${Date.now()}`,
+              role: Role.Assistant,
+              content: event.content as string,
+              timestamp: new Date(),
+              isStreaming: true,
             };
+            store.addMessage(newMsg);
+            store.startStreaming(newMsg.id);
+          }
+          break;
+
+        case "thinking":
+          // Append to last Assistant message's thinking field
+          const lastMsgThinking = currentMessages[currentMessages.length - 1];
+          if (lastMsgThinking?.role === Role.Assistant) {
+            store.updateMessage(lastMsgThinking.id, {
+              thinking: (lastMsgThinking.thinking || "") + event.text,
+            });
+          }
+          break;
+
+        case "tool_calls":
+          // Mark last Assistant message as complete, create separate messages for each tool call
+          const lastMsgTools = currentMessages[currentMessages.length - 1];
+          if (lastMsgTools?.isStreaming) {
+            store.updateMessage(lastMsgTools.id, { isStreaming: false });
+            store.stopStreaming();
           }
 
-          // Otherwise create new Assistant message
-          const newMsg: MessageData = {
-            id: `assistant-${Date.now()}`,
-            role: Role.Assistant,
-            content: event.content as string,
-            timestamp: new Date(),
-            isStreaming: true,
-          };
-
-          return {
-            ...prev,
-            messages: [...prev.messages, newMsg],
-          };
-        });
-        break;
-
-      case "thinking":
-        // Append to last Assistant message's thinking field
-        setState((prev) => {
-          const lastMsg = prev.messages[prev.messages.length - 1];
-
-          if (lastMsg?.role === Role.Assistant) {
-            return {
-              ...prev,
-              messages: [
-                ...prev.messages.slice(0, -1),
-                { ...lastMsg, thinking: (lastMsg.thinking || "") + event.text },
-              ],
-            };
+          // Add tool calls to streaming state
+          if (lastMsgTools) {
+            store.addToolCalls(
+              lastMsgTools.id,
+              event.tool_calls as Array<{
+                id: string;
+                name: string;
+                arguments: Record<string, unknown>;
+              }>,
+            );
           }
-
-          return prev; // Ignore if no Assistant message
-        });
-        break;
-
-      case "tool_calls":
-        // Mark last Assistant message as complete, create separate messages for each tool call
-        setState((prev) => {
-          // Mark last Assistant message as complete
-          const lastMsg = prev.messages[prev.messages.length - 1];
-          const updatedMessages = lastMsg?.isStreaming
-            ? [
-                ...prev.messages.slice(0, -1),
-                { ...lastMsg, isStreaming: false },
-              ]
-            : prev.messages;
 
           // Create separate message for each tool call
           const toolCallMessages: MessageData[] = (
@@ -114,7 +109,7 @@ export function useChat(options: UseChatOptions = {}) {
               arguments: Record<string, unknown>;
             }>
           ).map((tc) => ({
-            id: tc.id,
+            id: nextMessageId("tool-call", tc.id),
             role: Role.Assistant,
             content: "",
             timestamp: new Date(),
@@ -126,107 +121,85 @@ export function useChat(options: UseChatOptions = {}) {
             isStreaming: false,
           }));
 
-          return {
-            ...prev,
-            messages: [...updatedMessages, ...toolCallMessages],
-          };
-        });
-        break;
+          toolCallMessages.forEach((msg) => store.addMessage(msg));
+          break;
 
-      case "tool_result": {
-        // Create separate message for tool result
-        const toolResultMessage: MessageData = {
-          id: `result-${event.tool_call_id}`,
-          role: Role.Tool,
-          content: event.result as string,
-          timestamp: new Date(),
-          toolResult: {
+        case "tool_result": {
+          // Create separate message for tool result
+          const toolResultData = {
             tool_call_id: event.tool_call_id as string,
             tool_name: event.tool_name as string,
             result: event.result as string,
             is_error: event.is_error as boolean,
-          },
-          isStreaming: false,
-        };
-
-        setState((prev) => ({
-          ...prev,
-          messages: [...prev.messages, toolResultMessage],
-        }));
-        break;
-      }
-
-      case "checkpoint": {
-        // Add checkpoint to the list
-        const checkpoint: CheckpointMessage = {
-          id: event.node_id as string,
-          summary: "Checkpoint created",
-          timestamp: new Date(),
-        };
-
-        setState((prev) => ({
-          ...prev,
-          checkpoints: [...prev.checkpoints, checkpoint],
-        }));
-        break;
-      }
-
-      case "done":
-        // Mark last message as complete, stop loading
-        setState((prev) => {
-          const lastMsg = prev.messages[prev.messages.length - 1];
-          const updatedMessages = lastMsg?.isStreaming
-            ? [
-                ...prev.messages.slice(0, -1),
-                { ...lastMsg, isStreaming: false },
-              ]
-            : prev.messages;
-
-          return {
-            ...prev,
-            isLoading: false,
-            messages: updatedMessages,
           };
-        });
-        break;
 
-      default:
-        console.warn("Unknown SSE event type:", event.type);
-    }
-  }, []);
+          const toolResultMessage: MessageData = {
+            id: nextMessageId("tool-result", event.tool_call_id as string),
+            role: Role.Tool,
+            content: event.result as string,
+            timestamp: new Date(),
+            toolResult: toolResultData,
+            isStreaming: false,
+          };
+
+          store.addMessage(toolResultMessage);
+          store.addToolResult(event.tool_call_id as string, toolResultData);
+          break;
+        }
+
+        case "checkpoint": {
+          // Add checkpoint to the store
+          store.addCheckpoint({
+            id: event.node_id as string,
+            summary: "Checkpoint created",
+            timestamp: new Date(),
+          });
+          break;
+        }
+
+        case "done":
+          // Mark last message as complete, stop loading
+          const currentMessagesForDone = useChatStore.getState().messages;
+          const lastMsgDone =
+            currentMessagesForDone[currentMessagesForDone.length - 1];
+          if (lastMsgDone?.isStreaming) {
+            store.updateMessage(lastMsgDone.id, { isStreaming: false });
+          }
+          store.stopStreaming();
+          store.setLoading(false);
+          break;
+
+        default:
+          console.warn("Unknown SSE event type:", event.type);
+      }
+    },
+    [], // No dependencies - we access store directly
+  );
 
   // Handle SSE errors - add error message to chat
-  const handleSSEError = useCallback((error: Error) => {
-    setState((prev) => {
-      // Check if we already have an error message in the last message (from Agent)
-      const lastMessage = prev.messages[prev.messages.length - 1];
-      const hasErrorContent = lastMessage?.content.startsWith("❌");
+  const handleSSEError = useCallback((err: Error) => {
+    const store = useChatStore.getState();
+    const currentMessages = store.messages;
 
-      // If Agent already sent an error, don't add another one
-      if (hasErrorContent) {
-        return {
-          ...prev,
-          error,
-          isLoading: false,
-        };
-      }
+    // Check if we already have an error message in the last message (from Agent)
+    const lastMessage = currentMessages[currentMessages.length - 1];
+    const hasErrorContent = lastMessage?.content.startsWith("❌");
 
-      // Otherwise, add generic SSE error
+    // If Agent already sent an error, don't add another one
+    if (!hasErrorContent) {
       const errorMessage: MessageData = {
         id: `error-${Date.now()}`,
         role: Role.Assistant,
-        content: `❌ Error: ${error.message}\n\nPlease check the server logs for more details.`,
+        content: `❌ Error: ${err.message}\n\nPlease check the server logs for more details.`,
         timestamp: new Date(),
         isStreaming: false,
       };
+      store.addMessage(errorMessage);
+    }
 
-      return {
-        ...prev,
-        error,
-        isLoading: false,
-        messages: [...prev.messages, errorMessage],
-      };
-    });
+    store.setError(err);
+    store.setLoading(false);
+    store.stopStreaming();
   }, []);
 
   // Initialize SSE stream (auto-connects when streamUrl changes)
@@ -234,52 +207,49 @@ export function useChat(options: UseChatOptions = {}) {
     onEvent: handleSSEEvent,
     onError: handleSSEError,
     onComplete: () => {
-      setState((prev) => ({
-        ...prev,
-        isLoading: false,
-      }));
+      const store = useChatStore.getState();
+      store.setLoading(false);
+      store.stopStreaming();
     },
     autoConnect: true, // Auto-connect when streamUrl is set
   });
 
   // Initialize a new session
-  const initializeSession = useCallback(async () => {
+  const handleInitializeSession = useCallback(async () => {
     try {
-      setState((prev) => ({ ...prev, isLoading: true, error: null }));
+      const store = useChatStore.getState();
+      store.resetStore();
+      store.setLoading(true);
+      store.setError(null);
 
       const response = await createSession({
         name: options.sessionName || "New Chat",
         preset: options.preset || "general",
       });
 
-      setState((prev) => ({
-        ...prev,
-        sessionId: response.session_id,
-        isLoading: false,
-      }));
+      store.initializeSession(response.session_id, response.session_id);
+      store.setLoading(false);
 
       return response.session_id;
     } catch (err) {
-      const error =
+      const store = useChatStore.getState();
+      const errorObj =
         err instanceof Error ? err : new Error("Failed to create session");
 
       // Add error message to chat history
       const errorMessage: MessageData = {
         id: `error-${Date.now()}`,
         role: Role.Assistant,
-        content: `❌ Failed to create session: ${error.message}\n\nPlease check:\n1. Backend server is running\n2. API keys are configured in secrets.yaml\n3. data/sessions directory exists`,
+        content: `❌ Failed to create session: ${errorObj.message}\n\nPlease check:\n1. Backend server is running\n2. API keys are configured in secrets.yaml\n3. data/sessions directory exists`,
         timestamp: new Date(),
         isStreaming: false,
       };
 
-      setState((prev) => ({
-        ...prev,
-        error,
-        isLoading: false,
-        messages: [errorMessage],
-      }));
+      store.addMessage(errorMessage);
+      store.setError(errorObj);
+      store.setLoading(false);
 
-      throw error;
+      throw errorObj;
     }
   }, [options.preset, options.sessionName]);
 
@@ -289,14 +259,18 @@ export function useChat(options: UseChatOptions = {}) {
       content: string,
       config?: { preset: string; overrides: Record<string, unknown> },
     ) => {
-      if (!state.sessionId) {
+      const store = useChatStore.getState();
+      const currentSessionId = store.session.sessionId;
+
+      if (!currentSessionId) {
         throw new Error("No active session");
       }
 
       try {
-        setState((prev) => ({ ...prev, isLoading: true, error: null }));
+        store.setLoading(true);
+        store.setError(null);
 
-        // Add user message immediately
+        // Add user message immediately (optimistic)
         const userMessage: MessageData = {
           id: `user-${Date.now()}`,
           role: Role.User,
@@ -305,65 +279,63 @@ export function useChat(options: UseChatOptions = {}) {
           isStreaming: false,
         };
 
-        setState((prev) => ({
-          ...prev,
-          messages: [...prev.messages, userMessage],
-        }));
+        store.addMessage(userMessage);
 
         // Send to backend with config
-        const response = await sendChatMessage(state.sessionId, {
+        const response = await sendChatMessage(currentSessionId, {
           message: content,
           temporary_config: config
             ? {
-                preset: config.preset,
-                tools_enabled: true,
-                intent: {
-                  creativity: 0.5,
-                  verbosity: "normal",
-                  rounds: 30,
-                },
-                overrides: config.overrides,
-              }
+              preset: config.preset,
+              tools_enabled: true,
+              intent: {
+                creativity: 0.5,
+                verbosity: "normal",
+                rounds: 30,
+              },
+              overrides: config.overrides,
+            }
             : undefined,
         });
 
         // Connect to SSE stream (first content event will create Assistant message)
-        setStreamUrl(getStreamUrl(state.sessionId, response.stream_id));
+        setStreamUrl(getStreamUrl(currentSessionId, response.stream_id));
       } catch (err) {
-        const error =
+        const store = useChatStore.getState();
+        const errorObj =
           err instanceof Error ? err : new Error("Failed to send message");
 
         // Add error message to chat history
         const errorMessage: MessageData = {
           id: `error-${Date.now()}`,
           role: Role.Assistant,
-          content: `❌ Error: ${error.message}`,
+          content: `❌ Error: ${errorObj.message}`,
           timestamp: new Date(),
           isStreaming: false,
         };
 
-        setState((prev) => ({
-          ...prev,
-          error,
-          isLoading: false,
-          messages: [...prev.messages, errorMessage],
-        }));
+        store.addMessage(errorMessage);
+        store.setError(errorObj);
+        store.setLoading(false);
 
-        throw error;
+        throw errorObj;
       }
     },
-    [state.sessionId],
+    [],
   );
 
   // Load session history
-  const loadHistory = useCallback(async (sessionId: string) => {
+  const loadHistory = useCallback(async (loadSessionId: string) => {
     try {
-      setState((prev) => ({ ...prev, isLoading: true, error: null }));
+      const store = useChatStore.getState();
+      store.resetStore();
+      store.setLoading(true);
+      store.setError(null);
 
-      const pathResponse = await getSessionPath(sessionId);
+      const pathResponse = await getSessionPath(loadSessionId);
 
       // Convert nodes to messages
-      const messages: MessageData[] = pathResponse.nodes
+      const loadedMessages: MessageData[] = pathResponse.nodes
         .filter((node: Node) => node.kind === NodeKind.Message)
         .map((node: Node) => ({
           id: node.node_id,
@@ -374,38 +346,51 @@ export function useChat(options: UseChatOptions = {}) {
           isStreaming: false,
         }));
 
-      setState((prev) => ({
-        ...prev,
-        sessionId,
-        messages,
-        isLoading: false,
-      }));
+      store.initializeSession(
+        loadSessionId,
+        pathResponse.nodes[0]?.node_id || loadSessionId,
+      );
+      store.setMessages(loadedMessages);
+      store.setLoading(false);
     } catch (err) {
-      const error =
+      const store = useChatStore.getState();
+      const errorObj =
         err instanceof Error ? err : new Error("Failed to load history");
-      setState((prev) => ({ ...prev, error, isLoading: false }));
-      throw error;
+      store.setError(errorObj);
+      store.setLoading(false);
+      throw errorObj;
     }
   }, []);
 
   // Reset chat (create new session)
   const resetChat = useCallback(async () => {
-    setState({
-      sessionId: null,
-      messages: [],
-      checkpoints: [],
-      isLoading: false,
-      error: null,
-    });
+    const store = useChatStore.getState();
+    store.resetStore();
+    return handleInitializeSession();
+  }, [handleInitializeSession]);
 
-    return initializeSession();
-  }, [initializeSession]);
-
-  return {
-    ...state,
-    initializeSession,
-    sendMessage,
-    loadHistory,
-    resetChat,
-  };
+  return React.useMemo(
+    () => ({
+      sessionId,
+      messages,
+      checkpoints,
+      isLoading,
+      error,
+      initializeSession: handleInitializeSession,
+      sendMessage,
+      loadHistory,
+      resetChat,
+    }),
+    [
+      sessionId,
+      messages,
+      checkpoints,
+      isLoading,
+      error,
+      handleInitializeSession,
+      sendMessage,
+      loadHistory,
+      resetChat,
+    ],
+  );
 }

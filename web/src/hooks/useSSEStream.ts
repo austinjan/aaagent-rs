@@ -49,6 +49,24 @@ export function useSSEStream(
   const isDoneRef = useRef<boolean>(false);
   const connectRef = useRef<(() => void) | null>(null);
 
+  // Store callbacks in refs to avoid recreating connect function
+  const onEventRef = useRef(onEvent);
+  const onErrorRef = useRef(onError);
+  const onCompleteRef = useRef(onComplete);
+
+  // Update refs when callbacks change
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
   // Calculate exponential backoff delay
   const getRetryDelay = useCallback(
     (retryCount: number): number => {
@@ -140,7 +158,7 @@ export function useSSEStream(
 
         const error = new Error("Stream connection failed");
         setState((prev) => ({ ...prev, isConnected: false, error }));
-        onError?.(error);
+        onErrorRef.current?.(error);
 
         // Close current connection
         if (eventSourceRef.current) {
@@ -156,22 +174,25 @@ export function useSSEStream(
       eventSource.addEventListener("content", (e) => {
         console.log("[SSE] Received content event:", e.data);
         const data = JSON.parse(e.data);
-        onEvent?.({ type: "content", content: data.content });
+        onEventRef.current?.({ type: "content", content: data.content });
       });
 
       eventSource.addEventListener("thinking", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({ type: "thinking", text: data.text });
+        onEventRef.current?.({ type: "thinking", text: data.text });
       });
 
       eventSource.addEventListener("tool_calls", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({ type: "tool_calls", tool_calls: data.tool_calls });
+        onEventRef.current?.({
+          type: "tool_calls",
+          tool_calls: data.tool_calls,
+        });
       });
 
       eventSource.addEventListener("tool_result", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({
+        onEventRef.current?.({
           type: "tool_result",
           tool_call_id: data.tool_call_id,
           tool_name: data.tool_name,
@@ -182,12 +203,15 @@ export function useSSEStream(
 
       eventSource.addEventListener("loop_detected", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({ type: "loop_detected", detection: data.detection });
+        onEventRef.current?.({
+          type: "loop_detected",
+          detection: data.detection,
+        });
       });
 
       eventSource.addEventListener("checkpoint", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({
+        onEventRef.current?.({
           type: "checkpoint",
           node_id: data.node_id,
           strategy: data.strategy,
@@ -196,7 +220,7 @@ export function useSSEStream(
 
       eventSource.addEventListener("done", (e) => {
         const data = JSON.parse(e.data);
-        onEvent?.({
+        onEventRef.current?.({
           type: "done",
           total_usage: data.total_usage,
           all_tool_calls: data.all_tool_calls,
@@ -206,19 +230,19 @@ export function useSSEStream(
         // Mark as done to prevent reconnection
         isDoneRef.current = true;
         setState((prev) => ({ ...prev, isDone: true }));
-        onComplete?.();
+        onCompleteRef.current?.();
         disconnect();
       });
     } catch (err) {
       const error =
         err instanceof Error ? err : new Error("Failed to connect to stream");
       setState((prev) => ({ ...prev, error }));
-      onError?.(error);
+      onErrorRef.current?.(error);
 
       // Schedule reconnection on connection error
       scheduleReconnect();
     }
-  }, [streamUrl, disconnect, onEvent, onError, onComplete, scheduleReconnect]);
+  }, [streamUrl, disconnect, scheduleReconnect]);
 
   // Auto-connect on mount or when URL changes
   useEffect(() => {
@@ -229,15 +253,13 @@ export function useSSEStream(
     retryCountRef.current = 0;
 
     if (autoConnect && streamUrl) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       connect();
     }
 
     return () => {
       disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamUrl, autoConnect]);
+  }, [streamUrl, autoConnect, connect, disconnect]);
 
   return {
     ...state,

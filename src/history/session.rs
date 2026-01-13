@@ -224,6 +224,11 @@ impl Session {
         Ok(session)
     }
 
+    /// Attach a store to an existing session
+    pub fn set_store(&mut self, store: Arc<dyn TreeStore>) {
+        self.store = Some(store);
+    }
+
     /// Get the store (helper method)
     fn store(&self) -> Result<&Arc<dyn TreeStore>> {
         self.store

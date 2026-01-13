@@ -44,6 +44,7 @@ impl StreamManager {
     /// Get a clone of the receiver without removing the stream
     /// This allows peeking at the stream without consuming it
     /// Returns None if stream doesn't exist
+    #[allow(dead_code)]
     pub async fn peek_stream(&self, stream_id: &str) -> Option<mpsc::Receiver<AgentEvent>> {
         // Note: We can't clone Receiver, so we still remove it
         // This is a limitation of mpsc::Receiver

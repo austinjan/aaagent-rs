@@ -80,7 +80,7 @@ export function SessionConfigPanel({
         tools_enabled: localConfig.toolsEnabled,
         intent: {
           creativity: localConfig.creativity,
-          verbosity: localConfig.verbosity,
+          verbosity: localConfig.verbosity as "short" | "normal" | "long",
           rounds: localConfig.maxRounds,
         },
         overrides: localConfig.overrides,

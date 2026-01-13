@@ -12,6 +12,7 @@ import {
 } from "../components/chat/TemporaryConfigPanel";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
+import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
 import { getConfig } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
@@ -38,6 +39,12 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
   };
 }
 
+const DEFAULT_OPTIONS = {
+  preset: "general",
+  sessionName: "New Chat",
+};
+const SESSION_STORAGE_KEY = "aaagent.session_id";
+
 export function Chat() {
   const {
     sessionId,
@@ -45,15 +52,13 @@ export function Chat() {
     isLoading,
     initializeSession,
     sendMessage,
+    loadHistory,
     resetChat,
-  } = useChat({
-    preset: "general",
-    sessionName: "New Chat",
-  });
+  } = useChat(DEFAULT_OPTIONS);
 
-  const [selectedMessageId, setSelectedMessageId] = useState<
-    string | undefined
-  >();
+  // Get selection from Zustand store
+  const selectedMessageId = useChatStore(selectSelectedNodeId);
+  const selectNode = useChatStore((state) => state.selectNode);
 
   // Session config (persistent)
   const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
@@ -70,12 +75,51 @@ export function Chat() {
     overrides: {},
   });
 
-  // Initialize session on mount
+  const persistSession = (sessionId: string) => {
+    localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", sessionId);
+    window.history.replaceState({}, "", url.toString());
+  };
+
+  // Initialize session on mount (URL > localStorage > new session)
   useEffect(() => {
-    initializeSession().catch((err) => {
-      console.error("Failed to initialize session:", err);
-    });
-  }, [initializeSession]);
+    let isActive = true;
+
+    const initSession = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlSessionId = params.get("session");
+      const storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
+      const preferredSessionId = urlSessionId || storedSessionId;
+
+      if (preferredSessionId) {
+        try {
+          await loadHistory(preferredSessionId);
+          if (isActive) {
+            persistSession(preferredSessionId);
+          }
+          return;
+        } catch (err) {
+          console.warn("Failed to load saved session, creating new:", err);
+        }
+      }
+
+      try {
+        const newSessionId = await initializeSession();
+        if (newSessionId && isActive) {
+          persistSession(newSessionId);
+        }
+      } catch (err) {
+        console.error("Failed to initialize session:", err);
+      }
+    };
+
+    initSession();
+
+    return () => {
+      isActive = false;
+    };
+  }, [initializeSession, loadHistory]);
 
   // Load config from backend when session is ready
   useEffect(() => {
@@ -118,13 +162,16 @@ export function Chat() {
   };
 
   const handleSelectMessage = (id: string) => {
-    setSelectedMessageId(id);
+    selectNode(id);
   };
 
   const handleNewSession = async () => {
     try {
-      await resetChat();
-      setSelectedMessageId(undefined);
+      const newSessionId = await resetChat();
+      if (newSessionId) {
+        persistSession(newSessionId);
+      }
+      selectNode(null); // Clear selection
       setTempConfig({ overrides: {} });
     } catch (err) {
       console.error("Failed to create new session:", err);
@@ -179,7 +226,7 @@ export function Chat() {
       {/* Chat Container */}
       <ChatContainer
         messages={messageCards}
-        selectedMessageId={selectedMessageId}
+        selectedMessageId={selectedMessageId || undefined}
         onSelectMessage={handleSelectMessage}
         isLoading={isLoading}
       />

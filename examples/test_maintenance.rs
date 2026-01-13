@@ -1,6 +1,6 @@
 //! Test maintenance module functionality
 
-use aaagent::maintenance::{run_cleanup_tasks, CleanupTask, MaintenanceConfig, TempFileCleanup};
+use aaagent::maintenance::{run_cleanup_tasks, CleanupTask, MaintenanceConfig};
 use std::fs;
 use std::path::PathBuf;
 use std::thread;
@@ -27,23 +27,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::write(&new_file, "This is a new file for testing")?;
     println!("   Created: {}\n", new_file.display());
-
-    // Test cleanup with very short retention (1 second)
-    println!("2. Running cleanup with 1 second retention...");
-    let config = MaintenanceConfig {
-        enabled: true,
-        interval_hours: 6,
-        tasks: aaagent::maintenance::MaintenanceTasksConfig {
-            temp_files: aaagent::maintenance::TempFileCleanupConfig {
-                enabled: true,
-                retention_hours: 0, // We'll manually set seconds
-            },
-        },
-    };
-
-    // Create custom config with 1 second retention
-    let mut test_config = config.clone();
-    test_config.tasks.temp_files.retention_hours = 0;
 
     // Run cleanup that should delete old_file but not new_file
     let task = aaagent::maintenance::TempFileCleanup::new(1); // 1 second retention
