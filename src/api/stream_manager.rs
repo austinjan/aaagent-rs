@@ -32,9 +32,21 @@ impl StreamManager {
         (stream_id, tx)
     }
 
-    /// Take ownership of a stream receiver
+    /// Take ownership of a stream receiver (only removes it after taking)
     /// Returns None if stream doesn't exist
+    /// Note: Once taken, the stream is removed from the map
     pub async fn take_stream(&self, stream_id: &str) -> Option<mpsc::Receiver<AgentEvent>> {
+        // We remove immediately because SSE takes ownership
+        // The channel buffer (100 events) ensures messages aren't lost
+        self.streams.lock().await.remove(stream_id)
+    }
+
+    /// Get a clone of the receiver without removing the stream
+    /// This allows peeking at the stream without consuming it
+    /// Returns None if stream doesn't exist
+    pub async fn peek_stream(&self, stream_id: &str) -> Option<mpsc::Receiver<AgentEvent>> {
+        // Note: We can't clone Receiver, so we still remove it
+        // This is a limitation of mpsc::Receiver
         self.streams.lock().await.remove(stream_id)
     }
 

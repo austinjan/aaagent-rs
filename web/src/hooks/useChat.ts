@@ -285,7 +285,10 @@ export function useChat(options: UseChatOptions = {}) {
 
   // Send a message
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (
+      content: string,
+      config?: { preset: string; overrides: Record<string, unknown> },
+    ) => {
       if (!state.sessionId) {
         throw new Error("No active session");
       }
@@ -307,9 +310,21 @@ export function useChat(options: UseChatOptions = {}) {
           messages: [...prev.messages, userMessage],
         }));
 
-        // Send to backend
+        // Send to backend with config
         const response = await sendChatMessage(state.sessionId, {
           message: content,
+          temporary_config: config
+            ? {
+                preset: config.preset,
+                tools_enabled: true,
+                intent: {
+                  creativity: 0.5,
+                  verbosity: "normal",
+                  rounds: 30,
+                },
+                overrides: config.overrides,
+              }
+            : undefined,
         });
 
         // Connect to SSE stream (first content event will create Assistant message)

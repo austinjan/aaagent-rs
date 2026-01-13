@@ -1,9 +1,27 @@
 # Chat UI Input Component Plan
 
 - Feature name: `chat-ui-input`
-- Status: Planning
+- Status: In Progress
 - Created: 2026-01-12
+- Updated: 2026-01-12
 - Parent plan: [chat-ui-component-plan.md](./chat-ui-component-plan.md)
+
+## Implementation Notes (2026-01-12)
+
+**Accepted Deviations from Original Plan:**
+- ✅ **Ctrl+Enter to send** - Keeping current behavior (not changing to Enter alone)
+- ✅ **Error display** - Already handled by MessageCard component, no need for duplicate error UI
+- ✅ **Streaming placeholder** - "Agent is responding..." text not needed
+
+**Current Progress:**
+- [x] Basic ChatInput with auto-resize textarea
+- [x] Ctrl+Enter send functionality
+- [x] Disabled state during streaming
+- [x] Character count display
+- [x] PresetSelector component created
+- [ ] ConfigOverrides component (in progress)
+- [ ] 10K character limit validation
+- [ ] Integration with config system
 
 ## 1) Overview
 
@@ -96,26 +114,26 @@ interface ChatInputProps {
 **Streaming (Disabled):**
 - Textarea: Gray text, disabled cursor
 - Send button: Gray background, disabled
-- Overlay text: "Agent is responding..."
+- ~~Overlay text: "Agent is responding..."~~ ❌ **NOT NEEDED** - Visual disabled state is enough
 
 **Error:**
-- Red border on textarea
-- Error message below input
-- Retry button available
+- ~~Red border on textarea~~ ❌ **NOT NEEDED** - Errors shown in MessageCard
+- ~~Error message below input~~ ❌ **NOT NEEDED** - Errors shown in MessageCard
+- ~~Retry button available~~ ❌ **NOT NEEDED**
 
 **Validation Error:**
-- Yellow border on textarea
-- Warning message below input
-- Example: "Message cannot be empty"
+- ~~Yellow border on textarea~~ ⚠️ **DEFERRED** - Basic validation only
+- ~~Warning message below input~~ ⚠️ **DEFERRED**
+- Empty message validation handled in code ✅
 
 ## 5) Input Behavior
 
 ### Keyboard Shortcuts
 
-- **Enter**: Send message (if not empty)
-- **Shift + Enter**: Insert newline
-- **Ctrl/Cmd + Enter**: Send message (alternative)
-- **Escape**: Clear input (if empty) or cancel edit (if editing)
+- ~~**Enter**: Send message (if not empty)~~ ❌ **REJECTED** - Too easy to accidentally send
+- ~~**Shift + Enter**: Insert newline~~ ❌ **NOT NEEDED** - Natural textarea behavior
+- **Ctrl/Cmd + Enter**: Send message ✅ **IMPLEMENTED**
+- ~~**Escape**: Clear input (if empty) or cancel edit (if editing)~~ ⚠️ **DEFERRED** - Not priority
 
 ### Auto-resize Logic
 

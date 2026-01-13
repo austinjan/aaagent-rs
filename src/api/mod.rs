@@ -293,13 +293,49 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::BadRequest(format!("Session {} not found", session_id)))?;
 
-        // Get resolved config from session metadata
-        let resolved = stored_session
+        // Get base resolved config from session metadata
+        let base_resolved = stored_session
             .metadata
             .as_ref()
             .and_then(|m| m.get("resolved_config"))
             .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
             .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
+
+        // If temporary_config is provided, resolve it and use that instead
+        let resolved = if let Some(temp_config) = req.temporary_config {
+            aaagent::logger::log(format!(
+                "Using temporary_config: preset={}, overrides={:?}",
+                temp_config.preset, temp_config.overrides
+            ));
+
+            let mut temp_resolved = state
+                .config_resolver
+                .resolve(&temp_config)
+                .map_err(|e| ApiError::BadRequest(format!("Invalid temporary_config: {}", e)))?;
+
+            // Preserve immutable session fields from base config
+            temp_resolved.session = base_resolved.session.clone();
+
+            temp_resolved
+        } else if let Some(config) = req.config {
+            // Validate config changes don't modify immutable fields
+            state
+                .config_resolver
+                .validate_immutable_fields(&config, &base_resolved)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+            let mut resolved = state
+                .config_resolver
+                .resolve(&config)
+                .map_err(|e| ApiError::BadRequest(format!("Invalid config: {}", e)))?;
+
+            // Preserve immutable session fields
+            resolved.session = base_resolved.session.clone();
+
+            resolved
+        } else {
+            base_resolved
+        };
 
         // Create stream
         let (stream_id, tx) = state.stream_manager.create_stream().await;
@@ -327,11 +363,11 @@ mod sessions {
                 message,
                 resolved_for_task,
                 config_manager,
-                tx,
+                tx.clone(),
             )
             .await;
 
-            // If agent failed, we should still save the session if possible
+            // If agent failed, send error to frontend
             match result {
                 Ok(_) => {
                     aaagent::logger::log(format!(
@@ -346,8 +382,42 @@ mod sessions {
                     ));
                     aaagent::logger::log(format!("ERROR: Error details: {:?}", e));
 
-                    // Note: tx was already moved into run_agent_chat, so we can't send error here
-                    // The SSE stream will close and frontend will show generic error
+                    // Send error message to frontend
+                    let error_msg = format!("❌ Agent Error: {}\n\nDetails: {}", e, e);
+                    aaagent::logger::log(format!("Sending error message to stream: {}", error_msg));
+
+                    match tx
+                        .send(aaagent::agent::AgentEvent::Content(error_msg.clone()))
+                        .await
+                    {
+                        Ok(_) => {
+                            aaagent::logger::log("Error message sent successfully".to_string())
+                        }
+                        Err(send_err) => aaagent::logger::log(format!(
+                            "ERROR: Failed to send error message: {}",
+                            send_err
+                        )),
+                    }
+
+                    // Send done event
+                    let _ = tx
+                        .send(aaagent::agent::AgentEvent::Done {
+                            total_usage: aaagent::llm::TokenUsage {
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                cached_tokens: 0,
+                            },
+                            all_tool_calls: vec![],
+                            rounds: 0,
+                        })
+                        .await;
+
+                    // Drop sender to close channel cleanly
+                    drop(tx);
+                    aaagent::logger::log("Sender dropped, channel closed cleanly".to_string());
+
+                    // Wait for SSE to read messages
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
 
@@ -548,11 +618,7 @@ async fn run_agent_chat(
             Ok(())
         }
         Err(e) => {
-            // Send error message to frontend before returning error
-            let error_msg = format!("❌ Agent Error: {}\n\nDetails logged in app.log", e);
-            let _ = tx
-                .send(aaagent::agent::AgentEvent::Content(error_msg))
-                .await;
+            // Just return the error - it will be handled by the spawned task
             Err(e)
         }
     }

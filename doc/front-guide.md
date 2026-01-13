@@ -224,7 +224,7 @@ import { Loader2 } from "lucide-react";
 
 #### 6. Icon Usage
 
-Use lucide-react for consistent icons:
+**IMPORTANT:** Always use **lucide-react** for consistent icons across the application. Never use emoji (💬🔬⚡) or other icon libraries.
 
 ```tsx
 import { Plus, Send, Check, X, Brain, Wrench } from "lucide-react";
@@ -242,7 +242,28 @@ import { Plus, Send, Check, X, Brain, Wrench } from "lucide-react";
 
 // Custom colored icon
 <Brain className="w-3.5 h-3.5 text-purple-600" />
+
+// Icon in select/dropdown (positioned absolutely)
+const SelectedIcon = MessageCircle;
+<div className="relative">
+  <SelectedIcon className="w-4 h-4 text-muted-foreground absolute left-3 pointer-events-none" />
+  <select className="pl-9">...</select>
+</div>
 ```
+
+**Common Icons:**
+- `MessageCircle` - General/chat
+- `Code` - Programming/coding
+- `FlaskConical` - Research/science
+- `Zap` - Quick/fast
+- `Brain` - Thinking/reasoning
+- `Wrench` - Tools
+- `Send` - Submit/send
+- `Loader2` - Loading (with animate-spin)
+- `Plus` - Add/create
+- `X` - Close/remove
+- `Check` - Success/confirm
+- `CheckCircle`, `XCircle` - Status indicators
 
 ### Layout Patterns
 

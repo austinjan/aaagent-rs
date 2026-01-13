@@ -2,8 +2,17 @@ import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
+import {
+  SessionConfigPanel,
+  type SessionConfig,
+} from "../components/chat/SessionConfigPanel";
+import {
+  TemporaryConfigPanel,
+  type TemporaryConfig,
+} from "../components/chat/TemporaryConfigPanel";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
+import { getConfig } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
@@ -46,6 +55,21 @@ export function Chat() {
     string | undefined
   >();
 
+  // Session config (persistent)
+  const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
+    preset: "general",
+    toolsEnabled: true,
+    creativity: 0.5,
+    verbosity: "normal",
+    maxRounds: 30,
+    overrides: {},
+  });
+
+  // Temporary config (per-message)
+  const [tempConfig, setTempConfig] = useState<TemporaryConfig>({
+    overrides: {},
+  });
+
   // Initialize session on mount
   useEffect(() => {
     initializeSession().catch((err) => {
@@ -53,9 +77,41 @@ export function Chat() {
     });
   }, [initializeSession]);
 
+  // Load config from backend when session is ready
+  useEffect(() => {
+    if (sessionId) {
+      getConfig(sessionId)
+        .then((response) => {
+          setSessionConfig({
+            preset: response.editable_config.preset,
+            toolsEnabled: response.editable_config.tools_enabled,
+            creativity: response.editable_config.intent?.creativity ?? 0.5,
+            verbosity: response.editable_config.intent?.verbosity ?? "normal",
+            maxRounds: response.editable_config.intent?.rounds ?? 30,
+            overrides: response.editable_config.overrides || {},
+          });
+        })
+        .catch((err) => {
+          console.error("Failed to load config:", err);
+        });
+    }
+  }, [sessionId]);
+
   const handleSendMessage = async (content: string) => {
     try {
-      await sendMessage(content);
+      // Merge session config with temporary overrides
+      const config = {
+        preset: sessionConfig.preset,
+        overrides: {
+          ...sessionConfig.overrides,
+          ...tempConfig.overrides, // Temporary overrides take precedence
+        },
+      };
+
+      await sendMessage(content, config);
+
+      // Clear temporary config after sending
+      setTempConfig({ overrides: {} });
     } catch (err) {
       console.error("Failed to send message:", err);
     }
@@ -69,6 +125,7 @@ export function Chat() {
     try {
       await resetChat();
       setSelectedMessageId(undefined);
+      setTempConfig({ overrides: {} });
     } catch (err) {
       console.error("Failed to create new session:", err);
     }
@@ -79,7 +136,7 @@ export function Chat() {
 
   return (
     <div className="chat-page flex flex-col h-screen bg-background">
-      {/* Header - Sticky with improved visual hierarchy */}
+      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -111,6 +168,14 @@ export function Chat() {
         </div>
       </header>
 
+      {/* Session Config Panel */}
+      <SessionConfigPanel
+        sessionId={sessionId}
+        config={sessionConfig}
+        onConfigChanged={setSessionConfig}
+        disabled={isLoading}
+      />
+
       {/* Chat Container */}
       <ChatContainer
         messages={messageCards}
@@ -119,8 +184,17 @@ export function Chat() {
         isLoading={isLoading}
       />
 
-      {/* Chat Input */}
-      <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+      {/* Chat Input with Temporary Config */}
+      <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
+          <TemporaryConfigPanel
+            config={tempConfig}
+            onChange={setTempConfig}
+            disabled={isLoading}
+          />
+          <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+        </div>
+      </div>
     </div>
   );
 }
