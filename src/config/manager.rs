@@ -200,6 +200,22 @@ system_llm_profiles:
     max_tokens: 4096
 
 # =============================================================================
+# MAINTENANCE CONFIGURATION
+# =============================================================================
+# Automatic maintenance and cleanup tasks
+# - Temp files: Cleans old temporary files created by tool outputs
+# - Future tasks: Log rotation, orphaned stream cleanup, etc.
+
+maintenance:
+  enabled: true           # Enable/disable maintenance worker
+  interval_hours: 6       # Run cleanup every 6 hours
+
+  tasks:
+    temp_files:
+      enabled: true       # Enable temp file cleanup
+      retention_hours: 6  # Delete files older than 6 hours
+
+# =============================================================================
 # RELOAD BEHAVIOR
 # =============================================================================
 # This configuration file can be hot-reloaded at runtime.
@@ -220,6 +236,10 @@ pub struct ConfigFile {
     /// Defaults to gpt-5-mini (standard) and gpt-5-nano (quick) if not specified
     #[serde(default)]
     pub system_llm_profiles: super::system_profiles::SystemLLMProfiles,
+
+    /// Maintenance configuration for periodic cleanup tasks
+    #[serde(default)]
+    pub maintenance: crate::maintenance::MaintenanceConfig,
 }
 
 pub struct ConfigManager {
@@ -431,6 +451,7 @@ mod tests {
             api_keys: None,
             temperature_profiles: TemperatureProfiles::default(),
             system_llm_profiles: SystemLLMProfiles::default(),
+            maintenance: crate::maintenance::MaintenanceConfig::default(),
         };
         let yaml = serde_yaml::to_string(&custom_config).unwrap();
         fs::write(&config_path, yaml).unwrap();

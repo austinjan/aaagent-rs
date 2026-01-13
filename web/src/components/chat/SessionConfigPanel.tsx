@@ -94,6 +94,7 @@ export function SessionConfigPanel({
 
       onConfigChanged(localConfig);
       setHasChanges(false);
+      setIsOpen(false); // Close the settings panel after successful save
     } catch (err) {
       console.error("Failed to save config:", err);
       const errorMessage = err instanceof Error ? err.message : String(err);

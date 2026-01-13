@@ -35,11 +35,33 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> anyhow::Result<Self> {
-        // Ensure data directory exists
+        // Ensure data directories exist
         std::fs::create_dir_all("data/sessions")?;
+        std::fs::create_dir_all("data/temp")?;
+
+        // Load configuration
+        let config_resolver = Arc::new(ConfigResolver::new()?);
+
+        // Run startup cleanup in background
+        let maintenance_config = config_resolver.get().maintenance.clone();
+        tokio::spawn(async move {
+            aaagent::logger::log("[Startup] Running initial cleanup...".to_string());
+            let results = aaagent::maintenance::run_cleanup_tasks(&maintenance_config).await;
+            for (task, result) in results {
+                match result {
+                    Ok(count) => aaagent::logger::log(format!(
+                        "[Startup] Cleanup '{}': {} items removed",
+                        task, count
+                    )),
+                    Err(e) => {
+                        aaagent::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
+                    }
+                }
+            }
+        });
 
         Ok(Self {
-            config_resolver: Arc::new(ConfigResolver::new()?),
+            config_resolver,
             session_store: Arc::new(FileSessionStore::new("data/sessions")?),
             stream_manager: Arc::new(StreamManager::new()),
         })
@@ -48,6 +70,10 @@ impl AppState {
 
 pub fn create_router() -> Router {
     let state = AppState::new().expect("Failed to initialize app state");
+
+    // Start background maintenance worker
+    let maintenance_config = state.config_resolver.get().maintenance.clone();
+    aaagent::maintenance::start_maintenance_worker(maintenance_config);
 
     // Define sensitive headers that should never be logged
     let sensitive_headers = vec![
