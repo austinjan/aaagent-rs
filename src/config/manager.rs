@@ -409,6 +409,11 @@ impl ConfigManager {
     pub fn system_profiles(&self) -> &super::system_profiles::SystemLLMProfiles {
         &self.config.system_llm_profiles
     }
+
+    /// Get maintenance configuration
+    pub fn maintenance_config(&self) -> &crate::maintenance::MaintenanceConfig {
+        &self.config.maintenance
+    }
 }
 
 #[cfg(test)]

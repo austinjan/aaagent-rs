@@ -43,7 +43,10 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Run startup cleanup in background
-        let maintenance_config = config_resolver.get().maintenance.clone();
+        let maintenance_config = config_resolver
+            .config_manager()
+            .maintenance_config()
+            .clone();
         tokio::spawn(async move {
             aaagent::logger::log("[Startup] Running initial cleanup...".to_string());
             let results = aaagent::maintenance::run_cleanup_tasks(&maintenance_config).await;
@@ -72,7 +75,11 @@ pub fn create_router() -> Router {
     let state = AppState::new().expect("Failed to initialize app state");
 
     // Start background maintenance worker
-    let maintenance_config = state.config_resolver.get().maintenance.clone();
+    let maintenance_config = state
+        .config_resolver
+        .config_manager()
+        .maintenance_config()
+        .clone();
     aaagent::maintenance::start_maintenance_worker(maintenance_config);
 
     // Define sensitive headers that should never be logged
