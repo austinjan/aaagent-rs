@@ -1,8 +1,9 @@
 # Chat UI Session Management Plan
 
 - Feature name: `chat-ui-session-management`
-- Status: Draft
+- Status: In Progress
 - Created: 2026-01-08
+- Last updated: 2026-01-13
 - Parent plan: [chat-ui-plan.md](./chat-ui-plan.md)
 
 ## 1) Overview
@@ -23,6 +24,12 @@ Implement session lifecycle management to create, load, persist, and manage conv
 - Session branching UI (covered by tree visualization)
 - Session export/import (future feature)
 - Session templates (future feature)
+
+## 1.2) Recent Progress (2026-01-13)
+
+- Implemented `SessionStore` trait and `FileSessionStore` with CRUD + list support in `src/storage/`.
+- Added unit tests covering file-based session persistence and listing.
+- Next: wire storage into API endpoints and add in-memory store for tests.
 
 ## 1.1) Data Directory Structure
 
@@ -1243,3 +1250,4 @@ cargo run -- data-info
 
 - 2026-01-08: Initial draft - session lifecycle management plan
 - 2026-01-08: Added data directory structure - all persistent data in `data/`
+- 2026-01-13: Added storage progress notes for FileSessionStore implementation and tests.
