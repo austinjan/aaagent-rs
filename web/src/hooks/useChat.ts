@@ -15,7 +15,7 @@ import {
   selectError,
 } from "../store/useChatStore";
 import { useShallow } from "zustand/react/shallow";
-import { Role, NodeKind, type MessageData, type Node } from "../types/backend";
+import { Role, NodeKind, type MessageData } from "../types/backend";
 
 export interface UseChatOptions {
   preset?: string;
@@ -338,17 +338,85 @@ export function useChat(options: UseChatOptions = {}) {
 
       const pathResponse = await getSessionPath(loadSessionId);
 
-      // Convert nodes to messages
-      const loadedMessages: MessageData[] = pathResponse.nodes
-        .filter((node: Node) => node.kind === NodeKind.Message)
-        .map((node: Node) => ({
-          id: node.node_id,
-          role: node.role || Role.User,
-          content: node.content,
-          timestamp: new Date(node.created_at * 1000),
-          toolCalls: node.tool_calls,
-          isStreaming: false,
-        }));
+      // Convert nodes to messages - handle tool calls and tool results properly
+      const loadedMessages: MessageData[] = [];
+
+      // Build a map of tool_call_id -> tool_name for quick lookup
+      const toolCallMap = new Map<string, string>();
+      for (const node of pathResponse.nodes) {
+        if (node.role === Role.Assistant && node.tool_calls) {
+          for (const tc of node.tool_calls) {
+            toolCallMap.set(tc.id, tc.name);
+          }
+        }
+      }
+
+      for (const node of pathResponse.nodes) {
+        if (node.kind !== NodeKind.Message) continue;
+
+        // Case 1: Assistant message with tool_calls - create base message + separate tool call messages
+        if (
+          node.role === Role.Assistant &&
+          node.tool_calls &&
+          node.tool_calls.length > 0
+        ) {
+          // Add base assistant message (if it has content)
+          if (node.content) {
+            loadedMessages.push({
+              id: node.node_id,
+              role: Role.Assistant,
+              content: node.content,
+              timestamp: new Date(node.created_at * 1000),
+              isStreaming: false,
+            });
+          }
+
+          // Add separate message for each tool call
+          for (const toolCall of node.tool_calls) {
+            loadedMessages.push({
+              id: `${node.node_id}-tc-${toolCall.id}`,
+              role: Role.Assistant,
+              content: "",
+              timestamp: new Date(node.created_at * 1000),
+              toolCall: {
+                id: toolCall.id,
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+              },
+              isStreaming: false,
+            });
+          }
+        }
+        // Case 2: Tool result message - create toolResult field
+        else if (node.role === Role.Tool && node.tool_call_id) {
+          // Look up tool name from the tool call map
+          const toolName = toolCallMap.get(node.tool_call_id) || "unknown";
+
+          loadedMessages.push({
+            id: node.node_id,
+            role: Role.Tool,
+            content: node.content,
+            timestamp: new Date(node.created_at * 1000),
+            toolResult: {
+              tool_call_id: node.tool_call_id,
+              tool_name: toolName,
+              result: node.content,
+              is_error: false, // Could check content for error markers
+            },
+            isStreaming: false,
+          });
+        }
+        // Case 3: Regular message (User, System, or Assistant without tool calls)
+        else {
+          loadedMessages.push({
+            id: node.node_id,
+            role: node.role || Role.User,
+            content: node.content,
+            timestamp: new Date(node.created_at * 1000),
+            isStreaming: false,
+          });
+        }
+      }
 
       store.initializeSession(
         loadSessionId,

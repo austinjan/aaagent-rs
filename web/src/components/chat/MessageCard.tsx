@@ -48,42 +48,28 @@ export function MessageCard({
   // Special handling for tool call/result messages
   if (toolCall) {
     return (
-      <div
-        id={`message-${id}`}
-        className="message-card rounded-lg border p-3 transition-all bg-[hsl(var(--role-assistant)/0.05)] border-[hsl(var(--role-assistant)/0.2)]"
-      >
-        <ToolCallCard
-          id={toolCall.id}
-          name={toolCall.name}
-          input={toolCall.arguments}
-          result={undefined}
-        />
-      </div>
+      <ToolCallCard
+        id={toolCall.id}
+        name={toolCall.name}
+        input={toolCall.arguments}
+        result={undefined}
+      />
     );
   }
 
   if (toolResult) {
     return (
-      <div
-        id={`message-${id}`}
-        className={`message-card rounded-lg border p-3 transition-all ${
-          toolResult.is_error
-            ? "bg-red-500/5 border-red-500/20"
-            : "bg-[hsl(var(--role-system)/0.05)] border-[hsl(var(--role-system)/0.2)]"
-        }`}
-      >
-        <ToolCallCard
-          id={toolResult.tool_call_id}
-          name={toolResult.tool_name}
-          input={undefined}
-          result={{
-            tool_call_id: toolResult.tool_call_id,
-            tool_name: toolResult.tool_name,
-            result: toolResult.result,
-            is_error: toolResult.is_error,
-          }}
-        />
-      </div>
+      <ToolCallCard
+        id={toolResult.tool_call_id}
+        name={toolResult.tool_name}
+        input={undefined}
+        result={{
+          tool_call_id: toolResult.tool_call_id,
+          tool_name: toolResult.tool_name,
+          result: toolResult.result,
+          is_error: toolResult.is_error,
+        }}
+      />
     );
   }
 
