@@ -169,27 +169,115 @@ const initialState = {
   isLoading: false,
 };
 
+const isDev = import.meta.env?.DEV ?? false;
+
+const validateState = (state: ChatStore, context: string) => {
+  if (!isDev) {
+    return;
+  }
+
+  const messageIds = new Set(state.messages.map((msg) => msg.id));
+
+  if (state.ui.selectedNodeId && !messageIds.has(state.ui.selectedNodeId)) {
+    console.warn(
+      "[ChatStore] selectedNodeId does not exist in messages:",
+      context,
+      state.ui.selectedNodeId,
+    );
+  }
+
+  if (state.streaming.isStreaming && state.streaming.currentMessageId) {
+    const currentMessage = state.messages.find(
+      (msg) => msg.id === state.streaming.currentMessageId,
+    );
+    if (!currentMessage) {
+      console.warn(
+        "[ChatStore] currentMessageId not found while streaming:",
+        context,
+        state.streaming.currentMessageId,
+      );
+    } else if (!currentMessage.isStreaming) {
+      console.warn(
+        "[ChatStore] currentMessageId is not marked streaming:",
+        context,
+        state.streaming.currentMessageId,
+      );
+    }
+  }
+
+  for (const [groupId, group] of state.streaming.toolPairGroups) {
+    for (const pair of group.pairs) {
+      if (!pair.toolCall?.id) {
+        console.warn(
+          "[ChatStore] tool pair missing toolCall:",
+          context,
+          groupId,
+        );
+      }
+      if (pair.state === "complete" && !pair.result) {
+        console.warn(
+          "[ChatStore] tool pair complete without result:",
+          context,
+          groupId,
+          pair.toolCall?.id,
+        );
+      }
+    }
+
+    const computed = {
+      total: group.pairs.length,
+      complete: group.pairs.filter((p) => p.state === "complete").length,
+      pending: group.pairs.filter(
+        (p) => p.state === "pending" || p.state === "slow",
+      ).length,
+      errors: group.pairs.filter(
+        (p) => p.state === "error" || p.state === "orphaned",
+      ).length,
+    };
+
+    if (
+      computed.total !== group.completionSummary.total ||
+      computed.complete !== group.completionSummary.complete ||
+      computed.pending !== group.completionSummary.pending ||
+      computed.errors !== group.completionSummary.errors
+    ) {
+      console.warn(
+        "[ChatStore] tool pair summary mismatch:",
+        context,
+        groupId,
+        { expected: computed, actual: group.completionSummary },
+      );
+    }
+  }
+};
+
+const validateAfter = (get: () => ChatStore, context: string) => {
+  validateState(get(), context);
+};
+
 // ============================================================================
 // Zustand Store Implementation
 // ============================================================================
 
 export const useChatStore = create<ChatStore>()(
   devtools(
-    (set) => ({
+    (set, get) => ({
       ...initialState,
 
       // ===== OPTIMISTIC ACTIONS =====
 
-      selectNode: (nodeId) =>
+      selectNode: (nodeId) => {
         set(
           (state) => ({
             ui: { ...state.ui, selectedNodeId: nodeId },
           }),
           false,
           "selectNode",
-        ),
+        );
+        validateAfter(get, "selectNode");
+      },
 
-      toggleToolPair: (toolPairId) =>
+      toggleToolPair: (toolPairId) => {
         set(
           (state) => {
             const expanded = new Set(state.ui.expandedToolPairs);
@@ -202,9 +290,11 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "toggleToolPair",
-        ),
+        );
+        validateAfter(get, "toggleToolPair");
+      },
 
-      toggleCheckpoint: (checkpointId) =>
+      toggleCheckpoint: (checkpointId) => {
         set(
           (state) => {
             const expanded = new Set(state.ui.expandedCheckpoints);
@@ -217,20 +307,24 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "toggleCheckpoint",
-        ),
+        );
+        validateAfter(get, "toggleCheckpoint");
+      },
 
-      updateScrollPosition: (offset) =>
+      updateScrollPosition: (offset) => {
         set(
           (state) => ({
             ui: { ...state.ui, scrollPosition: offset },
           }),
           false,
           "updateScrollPosition",
-        ),
+        );
+        validateAfter(get, "updateScrollPosition");
+      },
 
       // ===== SERVER-AUTHORITATIVE ACTIONS =====
 
-      initializeSession: (sessionId, rootNodeId) =>
+      initializeSession: (sessionId, rootNodeId) => {
         set(
           (state) => ({
             session: {
@@ -242,18 +336,22 @@ export const useChatStore = create<ChatStore>()(
           }),
           false,
           "initializeSession",
-        ),
+        );
+        validateAfter(get, "initializeSession");
+      },
 
-      addMessage: (message) =>
+      addMessage: (message) => {
         set(
           (state) => ({
             messages: [...state.messages, message],
           }),
           false,
           "addMessage",
-        ),
+        );
+        validateAfter(get, "addMessage");
+      },
 
-      updateMessage: (messageId, updates) =>
+      updateMessage: (messageId, updates) => {
         set(
           (state) => {
             const messages = state.messages.map((msg) =>
@@ -263,11 +361,16 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "updateMessage",
-        ),
+        );
+        validateAfter(get, "updateMessage");
+      },
 
-      setMessages: (messages) => set({ messages }, false, "setMessages"),
+      setMessages: (messages) => {
+        set({ messages }, false, "setMessages");
+        validateAfter(get, "setMessages");
+      },
 
-      addCheckpoint: (checkpoint) =>
+      addCheckpoint: (checkpoint) => {
         set(
           (state) => {
             const checkpoints = new Map(state.checkpoints);
@@ -276,11 +379,13 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "addCheckpoint",
-        ),
+        );
+        validateAfter(get, "addCheckpoint");
+      },
 
       // ===== STREAMING ACTIONS =====
 
-      startStreaming: (messageId) =>
+      startStreaming: (messageId) => {
         set(
           (state) => ({
             streaming: {
@@ -291,9 +396,11 @@ export const useChatStore = create<ChatStore>()(
           }),
           false,
           "startStreaming",
-        ),
+        );
+        validateAfter(get, "startStreaming");
+      },
 
-      stopStreaming: () =>
+      stopStreaming: () => {
         set(
           (state) => ({
             streaming: {
@@ -304,9 +411,11 @@ export const useChatStore = create<ChatStore>()(
           }),
           false,
           "stopStreaming",
-        ),
+        );
+        validateAfter(get, "stopStreaming");
+      },
 
-      addToolCalls: (messageId, toolCalls) =>
+      addToolCalls: (messageId, toolCalls) => {
         set(
           (state) => {
             const groups = new Map(state.streaming.toolPairGroups);
@@ -332,9 +441,11 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "addToolCalls",
-        ),
+        );
+        validateAfter(get, "addToolCalls");
+      },
 
-      addToolResult: (toolCallId, result) =>
+      addToolResult: (toolCallId, result) => {
         set(
           (state) => {
             const groups = new Map(state.streaming.toolPairGroups);
@@ -372,9 +483,11 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "addToolResult",
-        ),
+        );
+        validateAfter(get, "addToolResult");
+      },
 
-      updateToolPairState: (toolCallId, state, elapsedMs = 0) =>
+      updateToolPairState: (toolCallId, state, elapsedMs = 0) => {
         set(
           (prevState) => {
             const groups = new Map(prevState.streaming.toolPairGroups);
@@ -397,7 +510,9 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "updateToolPairState",
-        ),
+        );
+        validateAfter(get, "updateToolPairState");
+      },
 
       // ===== UTILITY ACTIONS =====
 
@@ -405,7 +520,7 @@ export const useChatStore = create<ChatStore>()(
 
       setLoading: (isLoading) => set({ isLoading }, false, "setLoading"),
 
-      resetStore: () =>
+      resetStore: () => {
         set(
           {
             session: initialState.session,
@@ -433,7 +548,9 @@ export const useChatStore = create<ChatStore>()(
           },
           false,
           "resetStore",
-        ),
+        );
+        validateAfter(get, "resetStore");
+      },
     }),
     { name: "ChatStore" },
   ),

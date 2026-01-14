@@ -41,14 +41,14 @@ export function useChat(options: UseChatOptions = {}) {
     return `${prefix}-${base}${Date.now()}-${messageSequence.current}`;
   }, []);
 
-  // Handle SSE events - use store directly to avoid dependency issues
+  // Handle SSE events
   const handleSSEEvent = useCallback(
     (event: Record<string, unknown>) => {
       const store = useChatStore.getState();
       const currentMessages = store.messages;
 
       switch (event.type) {
-        case "content":
+        case "content": {
           // Create new Assistant message on first content, append to last Assistant message on subsequent events
           const lastMsg = currentMessages[currentMessages.length - 1];
 
@@ -70,8 +70,9 @@ export function useChat(options: UseChatOptions = {}) {
             store.startStreaming(newMsg.id);
           }
           break;
+        }
 
-        case "thinking":
+        case "thinking": {
           // Append to last Assistant message's thinking field
           const lastMsgThinking = currentMessages[currentMessages.length - 1];
           if (lastMsgThinking?.role === Role.Assistant) {
@@ -80,8 +81,9 @@ export function useChat(options: UseChatOptions = {}) {
             });
           }
           break;
+        }
 
-        case "tool_calls":
+        case "tool_calls": {
           // Mark last Assistant message as complete, create separate messages for each tool call
           const lastMsgTools = currentMessages[currentMessages.length - 1];
           if (lastMsgTools?.isStreaming) {
@@ -123,6 +125,7 @@ export function useChat(options: UseChatOptions = {}) {
 
           toolCallMessages.forEach((msg) => store.addMessage(msg));
           break;
+        }
 
         case "tool_result": {
           // Create separate message for tool result
@@ -157,7 +160,7 @@ export function useChat(options: UseChatOptions = {}) {
           break;
         }
 
-        case "done":
+        case "done": {
           // Mark last message as complete, stop loading
           const currentMessagesForDone = useChatStore.getState().messages;
           const lastMsgDone =
@@ -168,6 +171,7 @@ export function useChat(options: UseChatOptions = {}) {
           store.stopStreaming();
           store.setLoading(false);
           break;
+        }
 
         default:
           console.warn("Unknown SSE event type:", event.type);
@@ -286,15 +290,15 @@ export function useChat(options: UseChatOptions = {}) {
           message: content,
           temporary_config: config
             ? {
-              preset: config.preset,
-              tools_enabled: true,
-              intent: {
-                creativity: 0.5,
-                verbosity: "normal",
-                rounds: 30,
-              },
-              overrides: config.overrides,
-            }
+                preset: config.preset,
+                tools_enabled: true,
+                intent: {
+                  creativity: 0.5,
+                  verbosity: "normal",
+                  rounds: 30,
+                },
+                overrides: config.overrides,
+              }
             : undefined,
         });
 

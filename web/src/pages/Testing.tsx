@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ConfigPanel } from "@/components/config/ConfigPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { runChatStoreSyncTests, type SyncTestResult } from "@/store/syncTests";
 
 interface ChatConfig {
   preset: string;
@@ -24,6 +25,7 @@ export function Testing() {
   const [submittedConfig, setSubmittedConfig] = useState<ChatConfig | null>(
     null,
   );
+  const [syncResults, setSyncResults] = useState<SyncTestResult[] | null>(null);
 
   const handleConfigSubmit = (config: ChatConfig) => {
     console.log("Config submitted:", config);
@@ -33,6 +35,11 @@ export function Testing() {
   const handleConfigReset = () => {
     console.log("Config reset");
     setSubmittedConfig(null);
+  };
+
+  const handleRunSyncTests = () => {
+    const results = runChatStoreSyncTests();
+    setSyncResults(results);
   };
 
   return (
@@ -98,6 +105,68 @@ export function Testing() {
               </Card>
             </div>
           </div>
+        </section>
+
+        <Separator className="bg-yellow-500/30" />
+
+        {/* Store Sync Tests */}
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-foreground">
+              Chat Store Sync Tests
+            </h2>
+            <p className="text-muted-foreground">
+              Run basic synchronization checks for the Zustand store
+            </p>
+          </div>
+
+          <Card className="bg-background border">
+            <CardHeader>
+              <CardTitle className="text-foreground">Sync Test Runner</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <button
+                type="button"
+                onClick={handleRunSyncTests}
+                className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-black transition hover:opacity-90"
+              >
+                Run Sync Tests
+              </button>
+
+              {syncResults ? (
+                <div className="space-y-2 text-sm">
+                  {syncResults.map((result) => (
+                    <div
+                      key={result.name}
+                      className="flex items-start justify-between gap-4 rounded border border-yellow-500/30 px-3 py-2"
+                    >
+                      <div>
+                        <p className="text-foreground">{result.name}</p>
+                        {result.details && (
+                          <p className="text-xs text-muted-foreground">
+                            {result.details}
+                          </p>
+                        )}
+                      </div>
+                      <span
+                        className={
+                          result.passed
+                            ? "text-green-400"
+                            : "text-red-400"
+                        }
+                      >
+                        {result.passed ? "PASS" : "FAIL"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Click "Run Sync Tests" to execute the checks.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         <Separator className="bg-yellow-500/30" />

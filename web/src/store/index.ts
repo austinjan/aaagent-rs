@@ -11,6 +11,8 @@ export {
   selectIsLoading,
 } from './useChatStore';
 
+export { runChatStoreSyncTests } from './syncTests';
+
 export type {
   ChatStore,
   SessionState,

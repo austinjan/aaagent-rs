@@ -242,16 +242,16 @@ This master plan is broken down into focused sub-plans:
 
 **Tasks** (see [chat-ui-state-management.md](./chat-ui-state-management.md)):
 - [x] Create Zustand store with full state structure
-- [ ] Implement event queue with ordering
+- [ ] Implement event queue with ordering (deferred; using SSE FIFO)
 - [x] Add optimistic actions (expand/collapse, select, scroll)
 - [x] Add server-authoritative actions (add node, update node)
 - [x] Integrate SSE handlers with store
-- [ ] Add state validation (dev mode)
+- [x] Add state validation (dev mode)
 
 **Acceptance Criteria**:
 - Single source of truth for selection
 - Selection syncs between mini map and chat
-- Event queue processes in order
+- Event ordering preserved during streaming (SSE FIFO)
 - Optimistic UI updates instantly
 - No lost SSE events
 
@@ -409,3 +409,6 @@ This master plan is broken down into focused sub-plans:
 - 2026-01-06: Broke down into 6 focused sub-plans for maintainability
 - 2026-01-08: Updated from daisyUI to shadcn/ui component library
 - 2026-01-13: Marked SSE streaming complete; updated config and state management progress.
+- 2026-01-13: Deferred EventQueue in favor of direct SSE FIFO processing.
+- 2026-01-13: Added dev-mode state validation to the chat store.
+- 2026-01-13: Added chat store sync test runner.

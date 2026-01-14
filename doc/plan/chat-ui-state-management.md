@@ -24,7 +24,7 @@ Establish clear state management patterns using Zustand to ensure consistency be
 2. **Server-Authoritative Data**: Backend owns conversation data
 3. **Client-Authoritative UI**: Frontend owns UI state (expand/collapse, scroll)
 4. **Optimistic Updates**: User actions update UI immediately
-5. **Event Ordering Guarantees**: Stream events applied in order via queue
+5. **Event Ordering Guarantees**: Stream events applied in order via SSE FIFO (event queue deferred)
 
 ## 2) State Structure
 
@@ -252,6 +252,8 @@ export { useChatStore };
 
 ## 4) Event Queue
 
+**Status**: Deferred (using direct SSE processing with FIFO ordering)
+
 ### Purpose
 - Ensure events processed in order (FIFO)
 - Prevent race conditions
@@ -469,8 +471,8 @@ function validateState(state: ChatUIState) {
 - [ ] Single source of truth for selectedNodeId
 - [ ] Optimistic actions update instantly
 - [ ] Server-authoritative waits for SSE
-- [ ] Event queue processes in order
-- [ ] Event queue yields to UI (60fps)
+- [x] Event ordering preserved during streaming (SSE FIFO)
+- [ ] UI remains responsive during event bursts
 - [ ] State validation passes all invariants
 
 **Sync Tests:**
@@ -483,7 +485,7 @@ function validateState(state: ChatUIState) {
 
 - [ ] Single source of truth for selection
 - [ ] Selection syncs between components
-- [ ] Event queue processes in order
+- [x] Event ordering preserved during streaming (SSE FIFO)
 - [x] Optimistic UI updates instantly
 - [ ] Server data waits for confirmation
 - [ ] State validation passes all checks
@@ -494,15 +496,18 @@ function validateState(state: ChatUIState) {
 - [x] Create Zustand store with full state
 - [x] Implement optimistic actions
 - [x] Implement server-authoritative actions
-- [ ] Build EventQueue class
-- [ ] Add state validation (dev mode)
+- [ ] Build EventQueue class (deferred; using direct SSE processing)
+- [x] Add state validation (dev mode)
 - [x] Integrate SSE handlers with store
-- [ ] Write synchronization tests
+- [x] Write synchronization tests
 
 ---
 
 ## Changelog
 - 2026-01-13: Added Zustand store implementation and SSE integration; event queue and validation still pending.
+- 2026-01-13: Deferred EventQueue in favor of direct SSE FIFO processing.
+- 2026-01-13: Added dev-mode state validation in the Zustand store.
+- 2026-01-13: Added sync test runner for the chat store.
 
 ---
 
