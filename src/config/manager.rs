@@ -5,12 +5,241 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Generate a well-documented default config.yaml for LLM readability
+fn generate_default_config_yaml() -> String {
+    r#"# aaagent-rs Configuration File
+# This file configures API keys and model-specific temperature profiles.
+# It is designed to be LLM-readable for easy modification without external documentation.
+
+# =============================================================================
+# API KEYS CONFIGURATION
+# =============================================================================
+# This section defines how to load API keys for different LLM providers.
+#
+# SECURITY BEST PRACTICES:
+# - NEVER put actual API keys directly in this file
+# - Use environment variables (recommended) or secrets.yaml (local dev only)
+# - This file is safe to commit to version control
+#
+# Three ways to provide API keys (in order of precedence):
+# 1. Environment variables: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY
+# 2. secrets.yaml file: api_keys.openai, api_keys.anthropic, api_keys.google
+# 3. Direct reference (UNSAFE - only for testing): key: "sk-..."
+#
+# Recommended configuration (uses environment variables):
+api_keys:
+  openai:
+    env: OPENAI_API_KEY
+  anthropic:
+    env: ANTHROPIC_API_KEY
+  google:
+    env: GEMINI_API_KEY
+
+# Alternative: Use secrets.yaml (local development only)
+# api_keys:
+#   openai:
+#     file: secrets.yaml
+#   anthropic:
+#     file: secrets.yaml
+#   google:
+#     file: secrets.yaml
+
+# =============================================================================
+# TEMPERATURE PROFILES
+# =============================================================================
+# Temperature profiles map creativity intent (0.0-1.0) to model-specific temperatures.
+# Different models have different "sweet spots" for temperature ranges.
+#
+# How it works:
+# - User specifies "creativity" as 0.0 (focused) to 1.0 (creative)
+# - System maps creativity to appropriate temperature for each model
+# - Some models (like GPT-5) have fixed temperatures that ignore creativity
+#
+# Profile types:
+# 1. Fixed temperature (ignore_creativity: true)
+#    - Always uses the same temperature regardless of creativity setting
+#    - Used for models that work best at a specific temperature
+#
+# 2. Linear mapping (min/max range)
+#    - Maps creativity linearly: creativity 0.0 → min, 1.0 → max
+#    - Most common approach for standard models
+#
+# 3. Exponential mapping (exponent parameter)
+#    - Maps creativity exponentially for finer control at low values
+#    - formula: min + (max - min) * (creativity ^ exponent)
+#    - exponent > 1: More conservative (slower ramp-up)
+#    - exponent < 1: More aggressive (faster ramp-up)
+
+temperature_profiles:
+  profiles:
+    # Default profile for unknown models (fallback)
+    # Uses standard 0.0-1.0 linear mapping
+    default:
+      creativity_map:
+        - [0.0, 0.0]
+        - [1.0, 1.0]
+
+    # GPT-5 (OpenAI): Fixed temperature
+    # Always runs at 1.0 for optimal performance
+    gpt-5:
+      fixed: 1.0
+      ignore_creativity: true
+
+    # GPT-5-mini: Reasoning model with fixed temperature
+    gpt-5-mini:
+      fixed: 1.0
+      ignore_creativity: true
+
+    # GPT-5.2 (OpenAI): Conservative mapping
+    # Creativity curve keeps temperature lower for balanced responses
+    # - creativity 0.0 → temperature 0.0
+    # - creativity 0.5 → temperature 0.35
+    # - creativity 1.0 → temperature 0.7
+    gpt-5.2:
+      creativity_map:
+        - [0.0, 0.0]
+        - [0.5, 0.35]
+        - [1.0, 0.7]
+
+    # Claude models (Anthropic): Standard linear mapping
+    # - creativity 0.0 → temperature 0.0
+    # - creativity 0.5 → temperature 0.5
+    # - creativity 1.0 → temperature 1.0
+    claude-3-5-sonnet-20241022:
+      creativity_map:
+        - [0.0, 0.0]
+        - [1.0, 1.0]
+
+    claude-3-5-haiku-20241022:
+      creativity_map:
+        - [0.0, 0.0]
+        - [1.0, 1.0]
+
+    # Gemini models (Google): Linear mapping with cap at 2.0
+    # Gemini supports higher temperatures than most models
+    gemini-2.0-flash-exp:
+      creativity_map:
+        - [0.0, 0.0]
+        - [1.0, 2.0]
+
+# =============================================================================
+# USAGE EXAMPLES FOR LLMs
+# =============================================================================
+#
+# Adding a new model with linear temperature mapping (0.0-1.5 range):
+# ```yaml
+# temperature_profiles:
+#   profiles:
+#     my-new-model:
+#       creativity_map:
+#         - [0.0, 0.0]
+#         - [1.0, 1.5]
+# ```
+#
+# Adding a model with custom curve (3 control points):
+# ```yaml
+# temperature_profiles:
+#   profiles:
+#     custom-model:
+#       creativity_map:
+#         - [0.0, 0.0]    # Low creativity → low temperature
+#         - [0.5, 0.3]    # Medium creativity → moderate temperature
+#         - [1.0, 1.2]    # High creativity → high temperature
+# ```
+#
+# Setting a fixed temperature for a reasoning model:
+# ```yaml
+# temperature_profiles:
+#   profiles:
+#     reasoning-model:
+#       fixed: 1.0
+#       ignore_creativity: true
+# ```
+#
+# Changing default fallback profile:
+# ```yaml
+# temperature_profiles:
+#   profiles:
+#     default:
+#       creativity_map:
+#         - [0.0, 0.2]  # Never go below 0.2
+#         - [1.0, 0.9]  # Never go above 0.9
+# ```
+#
+# =============================================================================
+# SYSTEM LLM PROFILES (Internal Use)
+# =============================================================================
+# These profiles are used by the system for automated internal tasks.
+# They are separate from user-facing presets to ensure consistent behavior.
+#
+# Use cases:
+# - Auto-compact: Compress long tool results automatically
+# - Auto-summary: Summarize conversation segments
+# - Background tasks: System maintenance, cleanup
+#
+# Why separate from presets?
+# - User presets may be customized in unpredictable ways
+# - System tasks need consistent, reliable behavior
+# - Tests need deterministic results regardless of user config
+#
+# Hardcoded defaults (used when not specified):
+# - default: gpt-5-mini (16K tokens) - General system tasks
+# - quick: gpt-5-nano (4K tokens) - Lightweight tasks (compact, summary)
+
+system_llm_profiles:
+  # Standard profile for general system tasks
+  default:
+    model: gpt-5-mini
+    temperature: 1.0
+    max_tokens: 16384
+
+  # Quick profile for lightweight tasks (compact, summary, format)
+  quick:
+    model: gpt-5-nano
+    temperature: 1.0
+    max_tokens: 4096
+
+# =============================================================================
+# MAINTENANCE CONFIGURATION
+# =============================================================================
+# Automatic maintenance and cleanup tasks
+# - Temp files: Cleans old temporary files created by tool outputs
+# - Future tasks: Log rotation, orphaned stream cleanup, etc.
+
+maintenance:
+  enabled: true           # Enable/disable maintenance worker
+  interval_hours: 6       # Run cleanup every 6 hours
+
+  tasks:
+    temp_files:
+      enabled: true       # Enable temp file cleanup
+      retention_hours: 6  # Delete files older than 6 hours
+
+# =============================================================================
+# RELOAD BEHAVIOR
+# =============================================================================
+# This configuration file can be hot-reloaded at runtime.
+# Changes to temperature profiles take effect immediately for new requests.
+# API key changes require application restart for security reasons.
+"#
+    .to_string()
+}
+
 /// Full configuration file structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_keys: Option<ApiKeyReferences>,
     pub temperature_profiles: TemperatureProfiles,
+
+    /// System LLM profiles for internal tasks (auto-compact, etc.)
+    /// Defaults to gpt-5-mini (standard) and gpt-5-nano (quick) if not specified
+    #[serde(default)]
+    pub system_llm_profiles: super::system_profiles::SystemLLMProfiles,
+
+    /// Maintenance configuration for periodic cleanup tasks
+    #[serde(default)]
+    pub maintenance: crate::maintenance::MaintenanceConfig,
 }
 
 pub struct ConfigManager {
@@ -47,14 +276,8 @@ impl ConfigManager {
             ))?;
             serde_yaml::from_str(&content).context("Failed to parse config.yaml")?
         } else {
-            // Create default config (with key references, not actual keys)
-            let default_config = ConfigFile {
-                api_keys: Some(ApiKeyReferences::default()),
-                temperature_profiles: TemperatureProfiles::default(),
-            };
-
-            let yaml = serde_yaml::to_string(&default_config)
-                .context("Failed to serialize default config")?;
+            // Create default config with comprehensive documentation for LLMs
+            let yaml = generate_default_config_yaml();
 
             fs::write(&config_path, yaml).context(format!(
                 "Failed to write default config to {}",
@@ -62,7 +285,10 @@ impl ConfigManager {
             ))?;
 
             println!("Created default config.yaml at {}", config_path.display());
-            default_config
+
+            // Parse the generated YAML to return as ConfigFile
+            serde_yaml::from_str(&generate_default_config_yaml())
+                .context("Failed to parse generated default config")?
         };
 
         // Load secrets.yaml if it exists
@@ -173,11 +399,27 @@ impl ConfigManager {
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
     }
+
+    /// Get system LLM profile by name
+    pub fn get_system_profile(&self, name: &str) -> &super::system_profiles::SystemLLMProfile {
+        self.config.system_llm_profiles.get(name)
+    }
+
+    /// Get all system LLM profiles
+    pub fn system_profiles(&self) -> &super::system_profiles::SystemLLMProfiles {
+        &self.config.system_llm_profiles
+    }
+
+    /// Get maintenance configuration
+    pub fn maintenance_config(&self) -> &crate::maintenance::MaintenanceConfig {
+        &self.config.maintenance
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SystemLLMProfiles;
     use secrecy::ExposeSecret;
     use std::fs;
     use tempfile::TempDir;
@@ -213,6 +455,8 @@ mod tests {
         let custom_config = ConfigFile {
             api_keys: None,
             temperature_profiles: TemperatureProfiles::default(),
+            system_llm_profiles: SystemLLMProfiles::default(),
+            maintenance: crate::maintenance::MaintenanceConfig::default(),
         };
         let yaml = serde_yaml::to_string(&custom_config).unwrap();
         fs::write(&config_path, yaml).unwrap();

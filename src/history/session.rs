@@ -104,8 +104,7 @@ impl Default for CheckpointConfig {
 
 /// Context optimization configuration
 /// Combines tool result compression and checkpoint strategies
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContextOptimizationConfig {
     /// Tool result compression settings
     pub compression: CompressionConfig,
@@ -113,7 +112,6 @@ pub struct ContextOptimizationConfig {
     /// Checkpoint settings for aggressive context reduction
     pub checkpoint: CheckpointConfig,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -224,6 +222,11 @@ impl Session {
         Ok(session)
     }
 
+    /// Attach a store to an existing session
+    pub fn set_store(&mut self, store: Arc<dyn TreeStore>) {
+        self.store = Some(store);
+    }
+
     /// Get the store (helper method)
     fn store(&self) -> Result<&Arc<dyn TreeStore>> {
         self.store
@@ -241,9 +244,16 @@ impl Session {
     pub async fn append_message_to(&mut self, parent_id: NodeId, msg: Message) -> Result<NodeId> {
         let store = self.store()?.clone();
 
-        // Get current parent's children to determine seq number
-        let children = store.get_children(parent_id.clone()).await?;
-        let seq = children.len() as u32 + 1;
+        // OPTIMIZATION: Count children without loading all nodes across all sessions
+        // We know parent_id is in this session, so use session-scoped query
+        let all_nodes = store
+            .find_nodes(self.session_id.clone(), Default::default())
+            .await?;
+        let children_count = all_nodes
+            .iter()
+            .filter(|n| n.parent_id.as_ref() == Some(&parent_id))
+            .count();
+        let seq = children_count as u32 + 1;
 
         // Create new node
         let node = Node {
@@ -289,14 +299,24 @@ impl Session {
     /// Extract linear context from specific leaf
     pub async fn get_context_from(&mut self, leaf_id: NodeId) -> Result<Vec<Message>> {
         let store = self.store()?;
+
+        // OPTIMIZATION: Load all nodes for this session once, instead of per-node lookups
+        // This changes O(N*M) to O(M) where M = nodes in this session
+        let all_nodes = store
+            .find_nodes(self.session_id.clone(), Default::default())
+            .await?;
+        let nodes_map: HashMap<NodeId, Node> = all_nodes
+            .into_iter()
+            .map(|n| (n.node_id.clone(), n))
+            .collect();
+
         let mut messages = Vec::new();
         let mut current_id = Some(leaf_id);
 
         // Step 1: Extract messages from tree
         while let Some(node_id) = current_id {
-            let node = store
-                .get_node(node_id.clone())
-                .await?
+            let node = nodes_map
+                .get(&node_id)
                 .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
 
             // Check if this node has a checkpoint
@@ -320,7 +340,7 @@ impl Session {
                 NodeKind::Root => break,
             }
 
-            current_id = node.parent_id;
+            current_id = node.parent_id.clone();
         }
 
         messages.reverse();
@@ -438,13 +458,22 @@ impl Session {
     /// Internal get_context without compression (for checkpoint checking)
     async fn get_context_internal(&self) -> Result<Vec<Message>> {
         let store = self.store()?;
+
+        // OPTIMIZATION: Load all nodes once
+        let all_nodes = store
+            .find_nodes(self.session_id.clone(), Default::default())
+            .await?;
+        let nodes_map: HashMap<NodeId, Node> = all_nodes
+            .into_iter()
+            .map(|n| (n.node_id.clone(), n))
+            .collect();
+
         let mut messages = Vec::new();
         let mut current_id = Some(self.active_leaf_id.clone());
 
         while let Some(node_id) = current_id {
-            let node = store
-                .get_node(node_id.clone())
-                .await?
+            let node = nodes_map
+                .get(&node_id)
                 .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
 
             if self.checkpoints.contains_key(&node_id) {
@@ -460,7 +489,7 @@ impl Session {
                 NodeKind::Root => break,
             }
 
-            current_id = node.parent_id;
+            current_id = node.parent_id.clone();
         }
 
         messages.reverse();
@@ -1308,7 +1337,9 @@ mod tests {
         assert!(session.get_metadata::<String>("test_key").is_none());
 
         // Set string metadata
-        session.set_metadata("test_key", &"test_value".to_string()).unwrap();
+        session
+            .set_metadata("test_key", &"test_value".to_string())
+            .unwrap();
         assert!(session.has_metadata("test_key"));
         let value: String = session.get_metadata("test_key").unwrap();
         assert_eq!(value, "test_value");

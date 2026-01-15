@@ -16,7 +16,10 @@ from pathlib import Path
 # Global flag to stop output threads gracefully
 _shutdown_flag = threading.Event()
 
-PID_FILE = ".dev_pids.json"
+# Use temp-doc directory for PID file (gitignored)
+TEMP_DIR = Path("temp-doc")
+TEMP_DIR.mkdir(exist_ok=True)
+PID_FILE = TEMP_DIR / "dev_pids.json"
 WEB_DIR = "web"
 VITE_PORT = 5173
 BACKEND_PORT = 3000
@@ -39,10 +42,10 @@ def print_error(msg):
 
 def read_pids():
     """Read PIDs from file"""
-    if not os.path.exists(PID_FILE):
+    if not PID_FILE.exists():
         return None
     try:
-        with open(PID_FILE, "r") as f:
+        with PID_FILE.open("r") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -55,7 +58,7 @@ def write_pids(frontend_pid, backend_pid):
         "backend": backend_pid,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    with open(PID_FILE, "w") as f:
+    with PID_FILE.open("w") as f:
         json.dump(data, f, indent=2)
 
 
@@ -265,8 +268,8 @@ def cmd_start():
         time.sleep(0.5)
 
         # Remove PID file
-        if os.path.exists(PID_FILE):
-            os.remove(PID_FILE)
+        if PID_FILE.exists():
+            PID_FILE.unlink()
 
         # Restore terminal on Windows
         if sys.platform == "win32":
@@ -328,8 +331,8 @@ def cmd_stop():
     kill_process(pids["backend"])
 
     # Remove PID file
-    if os.path.exists(PID_FILE):
-        os.remove(PID_FILE)
+    if PID_FILE.exists():
+        PID_FILE.unlink()
 
     print_success("Stopped")
 

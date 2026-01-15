@@ -82,11 +82,21 @@ impl ToolRegistry {
     pub async fn execute(&self, call: &ToolCall) -> Option<ToolResult> {
         let tool = self.tools.get(&call.name)?.clone();
         Some(match tool.execute(call).await {
-            Ok(output) => ToolResult {
-                tool_call_id: call.id.clone(),
-                content: output,
-                is_error: false,
-            },
+            Ok(output) => {
+                // Handle large outputs by writing to file if needed
+                let processed_output = crate::tools::handle_large_output(
+                    &output, &call.name, None, // Use default threshold (2KB)
+                )
+                .unwrap_or_else(|e| {
+                    format!("Error handling output: {}. Original output: {}", e, output)
+                });
+
+                ToolResult {
+                    tool_call_id: call.id.clone(),
+                    content: processed_output,
+                    is_error: false,
+                }
+            }
             Err(error) => ToolResult {
                 tool_call_id: call.id.clone(),
                 content: error,

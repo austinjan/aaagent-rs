@@ -3,9 +3,11 @@
 //! This module provides ready-to-use tools that can be used with any LLM provider.
 
 pub mod editor_edit;
+pub mod output_handler;
 pub mod shell;
 
 pub use editor_edit::EditorEditTool;
+pub use output_handler::{handle_large_output, DEFAULT_OUTPUT_THRESHOLD};
 pub use shell::ShellTool;
 
 use crate::llm::ToolCall;

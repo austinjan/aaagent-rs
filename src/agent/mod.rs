@@ -129,7 +129,7 @@ impl<P: LLMProvider> Agent<P> {
     /// 5. Adds assistant response to tree
     /// 6. Auto-checkpoints if needed
     pub async fn chat(&mut self, user_message: &str) -> Result<String> {
-        self.chat_with_callback(user_message, |_| {}).await
+        self.chat_with_callback(user_message, |_| async {}).await
     }
 
     /// Chat with callback for real-time event monitoring
@@ -142,13 +142,14 @@ impl<P: LLMProvider> Agent<P> {
     /// - `AgentEvent::LoopDetected` - when loop detection triggers
     /// - `AgentEvent::CheckpointCreated` - when a checkpoint is created
     /// - `AgentEvent::Done` - when chat completes with final stats
-    pub async fn chat_with_callback<F>(
+    pub async fn chat_with_callback<F, Fut>(
         &mut self,
         user_message: &str,
         mut on_event: F,
     ) -> Result<String>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: std::future::Future<Output = ()>,
     {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
@@ -188,11 +189,11 @@ impl<P: LLMProvider> Agent<P> {
         while let Some(event) = handle.next().await {
             match event? {
                 LoopStep::Thinking(thought) => {
-                    on_event(AgentEvent::Thinking(thought));
+                    on_event(AgentEvent::Thinking(thought)).await;
                 }
                 LoopStep::Content(text) => {
                     response_content.push_str(&text);
-                    on_event(AgentEvent::Content(text));
+                    on_event(AgentEvent::Content(text)).await;
                 }
                 LoopStep::ToolCallsRequested {
                     tool_calls,
@@ -216,7 +217,8 @@ impl<P: LLMProvider> Agent<P> {
                     // Emit tool calls event
                     on_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
-                    });
+                    })
+                    .await;
 
                     // Check for loops and collect warnings
                     let mut loop_warnings: HashMap<String, String> = HashMap::new();
@@ -226,7 +228,8 @@ impl<P: LLMProvider> Agent<P> {
                                 // Emit loop detection event
                                 on_event(AgentEvent::LoopDetected {
                                     detection: detection.clone(),
-                                });
+                                })
+                                .await;
 
                                 // Handle based on action
                                 match detection.action {
@@ -283,7 +286,8 @@ impl<P: LLMProvider> Agent<P> {
                             tool_name: call.name.clone(),
                             result: result.content.clone(),
                             is_error: result.is_error,
-                        });
+                        })
+                        .await;
 
                         results.push(result);
                     }
@@ -344,7 +348,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // 6. Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
-            on_event(AgentEvent::CheckpointCreated { node_id, strategy });
+            on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
         // 7. Emit done event with stats
@@ -352,7 +356,8 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
-        });
+        })
+        .await;
 
         Ok(response_content)
     }
@@ -363,7 +368,7 @@ impl<P: LLMProvider> Agent<P> {
         from_node_id: NodeId,
         new_user_message: &str,
     ) -> Result<String> {
-        self.branch_and_retry_with_callback(from_node_id, new_user_message, |_| {})
+        self.branch_and_retry_with_callback(from_node_id, new_user_message, |_| async {})
             .await
     }
 
@@ -376,14 +381,15 @@ impl<P: LLMProvider> Agent<P> {
     /// - Max rounds limit
     /// - Token usage tracking
     /// - All event callbacks
-    pub async fn branch_and_retry_with_callback<F>(
+    pub async fn branch_and_retry_with_callback<F, Fut>(
         &mut self,
         from_node_id: NodeId,
         new_user_message: &str,
         mut on_event: F,
     ) -> Result<String>
     where
-        F: FnMut(AgentEvent),
+        F: FnMut(AgentEvent) -> Fut,
+        Fut: std::future::Future<Output = ()>,
     {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
@@ -427,11 +433,11 @@ impl<P: LLMProvider> Agent<P> {
         while let Some(event) = handle.next().await {
             match event? {
                 LoopStep::Thinking(thought) => {
-                    on_event(AgentEvent::Thinking(thought));
+                    on_event(AgentEvent::Thinking(thought)).await;
                 }
                 LoopStep::Content(text) => {
                     response_content.push_str(&text);
-                    on_event(AgentEvent::Content(text));
+                    on_event(AgentEvent::Content(text)).await;
                 }
                 LoopStep::ToolCallsRequested {
                     tool_calls,
@@ -455,7 +461,8 @@ impl<P: LLMProvider> Agent<P> {
                     // Emit tool calls event
                     on_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
-                    });
+                    })
+                    .await;
 
                     // Check for loops and collect warnings
                     let mut loop_warnings: HashMap<String, String> = HashMap::new();
@@ -465,7 +472,8 @@ impl<P: LLMProvider> Agent<P> {
                                 // Emit loop detection event
                                 on_event(AgentEvent::LoopDetected {
                                     detection: detection.clone(),
-                                });
+                                })
+                                .await;
 
                                 // Handle based on action
                                 match detection.action {
@@ -522,7 +530,8 @@ impl<P: LLMProvider> Agent<P> {
                             tool_name: call.name.clone(),
                             result: result.content.clone(),
                             is_error: result.is_error,
-                        });
+                        })
+                        .await;
 
                         results.push(result);
                     }
@@ -583,7 +592,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
-            on_event(AgentEvent::CheckpointCreated { node_id, strategy });
+            on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
         // Emit done event with stats
@@ -591,7 +600,8 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
-        });
+        })
+        .await;
 
         Ok(response_content)
     }

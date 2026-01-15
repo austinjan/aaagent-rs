@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 const ANTHROPIC_API_BASE: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnthropicProvider {
     client: reqwest::Client,
     api_key: String,

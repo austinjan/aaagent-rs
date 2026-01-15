@@ -284,7 +284,7 @@ async fn run_agent_loop<P: LLMProvider>(
         use aaagent::agent::AgentEvent;
 
         let result = agent
-            .chat_with_callback(user_input, |event| {
+            .chat_with_callback(user_input, |event| async move {
                 match event {
                     AgentEvent::Content(text) => {
                         // Stream content as it arrives

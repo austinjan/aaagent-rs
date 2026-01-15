@@ -41,6 +41,7 @@ ulid = { version = "1.2.1", features = ["serde"] }
 # Security
 secrecy = "0.8"
 shellexpand = "3.1"
+dotenvy = "0.15"
 
 # Web server (for chat UI)
 axum = "0.7"

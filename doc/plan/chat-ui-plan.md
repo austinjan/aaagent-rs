@@ -3,7 +3,7 @@
 - Feature name: `chat-ui`
 - Status: Draft
 - Created: 2026-01-06
-- Last updated: 2026-01-08
+- Last updated: 2026-01-13
 
 ## 1) Overview
 
@@ -53,10 +53,10 @@ This master plan is broken down into focused sub-plans:
 - ✅ POST `/api/sessions/{id}/chat` with config support
 - ✅ Session metadata integration
 - [ ] API key management system ([api-key-management.md](./api-key-management.md))
-- [ ] Frontend config panel
+- ✅ Frontend config panel
 
 ### 2.2) Foundation ([chat-ui-foundation.md](./chat-ui-foundation.md))
-**Status**: Draft  
+**Status**: Completed  
 **Scope**: Architecture, tech stack, build process, deployment
 
 **Key Topics**:
@@ -74,7 +74,7 @@ This master plan is broken down into focused sub-plans:
 - Embedded asset serving
 
 ### 2.2) SSE Streaming ([chat-ui-sse-streaming.md](./chat-ui-sse-streaming.md))
-**Status**: Draft  
+**Status**: In Progress  
 **Scope**: Server-Sent Events transport, event types, reconnection strategy
 
 **Key Topics**:
@@ -204,12 +204,12 @@ This master plan is broken down into focused sub-plans:
 **Duration**: 1-2 weeks
 
 **Tasks** (see [chat-ui-sse-streaming.md](./chat-ui-sse-streaming.md)):
-- [ ] Implement POST `/api/sessions/{id}/chat` endpoint
-- [ ] Implement GET `/api/sessions/{id}/stream/{stream_id}` SSE endpoint
-- [ ] Map all `AgentEvent` types to SSE events
-- [ ] Build `ChatSSEClient` frontend class
-- [ ] Add event handlers for all types
-- [ ] Implement reconnection with exponential backoff
+- [x] Implement POST `/api/sessions/{id}/chat` endpoint
+- [x] Implement GET `/api/sessions/{id}/stream/{stream_id}` SSE endpoint
+- [x] Map all `AgentEvent` types to SSE events
+- [x] Build `ChatSSEClient` frontend class
+- [x] Add event handlers for all types
+- [x] Implement reconnection with exponential backoff
 
 **Acceptance Criteria**:
 - SSE stream delivers all event types
@@ -241,17 +241,17 @@ This master plan is broken down into focused sub-plans:
 **Duration**: 1 week
 
 **Tasks** (see [chat-ui-state-management.md](./chat-ui-state-management.md)):
-- [ ] Create Zustand store with full state structure
-- [ ] Implement event queue with ordering
-- [ ] Add optimistic actions (expand/collapse, select, scroll)
-- [ ] Add server-authoritative actions (add node, update node)
-- [ ] Integrate SSE handlers with store
-- [ ] Add state validation (dev mode)
+- [x] Create Zustand store with full state structure
+- [ ] Implement event queue with ordering (deferred; using SSE FIFO)
+- [x] Add optimistic actions (expand/collapse, select, scroll)
+- [x] Add server-authoritative actions (add node, update node)
+- [x] Integrate SSE handlers with store
+- [x] Add state validation (dev mode)
 
 **Acceptance Criteria**:
 - Single source of truth for selection
 - Selection syncs between mini map and chat
-- Event queue processes in order
+- Event ordering preserved during streaming (SSE FIFO)
 - Optimistic UI updates instantly
 - No lost SSE events
 
@@ -339,16 +339,16 @@ This master plan is broken down into focused sub-plans:
 - [ ] Production build completes successfully
 
 ### Streaming
-- [ ] All `AgentEvent` types stream to frontend
-- [ ] <100ms latency from backend to frontend
-- [ ] Automatic reconnection works
+- [x] All `AgentEvent` types stream to frontend
+- [x] <100ms latency from backend to frontend
+- [x] Automatic reconnection works
 
 ### UI Components
-- [ ] Cards render for all node types
+- [x] Cards render for all node types
 - [ ] Tool pairs collapse/expand
 - [ ] Timeout warnings show (slow, orphaned)
 - [ ] Error cards show AI explanations
-- [ ] Mini map syncs with chat container
+- [x] Mini map syncs with chat container
 
 ### State Management
 - [ ] Single source of truth for selection
@@ -408,3 +408,7 @@ This master plan is broken down into focused sub-plans:
 - 2026-01-06: Added single binary + embedded frontend architecture
 - 2026-01-06: Broke down into 6 focused sub-plans for maintainability
 - 2026-01-08: Updated from daisyUI to shadcn/ui component library
+- 2026-01-13: Marked SSE streaming complete; updated config and state management progress.
+- 2026-01-13: Deferred EventQueue in favor of direct SSE FIFO processing.
+- 2026-01-13: Added dev-mode state validation to the chat store.
+- 2026-01-13: Added chat store sync test runner.

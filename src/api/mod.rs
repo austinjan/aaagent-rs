@@ -16,27 +16,77 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
-use crate::config::{
-    AgentConfig, ChatConfig, ChatIntent, ConfigResolver, ProviderConfig, ResolvedConfig,
-    SessionConfig,
-};
+use crate::config::{ConfigResolver, SessionConfig};
+use crate::history::{SessionConfig as HistorySessionConfig, TreeStore};
+use crate::llm::LLMProvider;
+
+mod provider_factory;
+mod stream_manager;
+
+use stream_manager::StreamManager;
 
 // Shared application state
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
+    pub store: Arc<crate::history::JSONLStore>,
+    pub stream_manager: Arc<StreamManager>,
 }
 
 impl AppState {
-    pub fn new() -> anyhow::Result<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
+        // Ensure data directories exist
+        std::fs::create_dir_all("data")?;
+        std::fs::create_dir_all("data/temp")?;
+
+        // Load configuration
+        let config_resolver = Arc::new(ConfigResolver::new()?);
+
+        // Initialize JSONL store with lazy loading
+        crate::logger::log("[Startup] Initializing JSONL store...".to_string());
+        let store = Arc::new(crate::history::JSONLStore::new("data".into()).await?);
+
+        // Run startup cleanup in background
+        let maintenance_config = config_resolver
+            .config_manager()
+            .maintenance_config()
+            .clone();
+        tokio::spawn(async move {
+            crate::logger::log("[Startup] Running initial cleanup...".to_string());
+            let results = crate::maintenance::run_cleanup_tasks(&maintenance_config).await;
+            for (task, result) in results {
+                match result {
+                    Ok(count) => crate::logger::log(format!(
+                        "[Startup] Cleanup '{}': {} items removed",
+                        task, count
+                    )),
+                    Err(e) => {
+                        crate::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
+                    }
+                }
+            }
+        });
+
         Ok(Self {
-            config_resolver: Arc::new(ConfigResolver::new()?),
+            config_resolver,
+            store,
+            stream_manager: Arc::new(StreamManager::new()),
         })
     }
 }
 
-pub fn create_router() -> Router {
-    let state = AppState::new().expect("Failed to initialize app state");
+pub async fn create_router() -> Router {
+    let state = AppState::new()
+        .await
+        .expect("Failed to initialize app state");
+
+    // Start background maintenance worker
+    let maintenance_config = state
+        .config_resolver
+        .config_manager()
+        .maintenance_config()
+        .clone();
+    crate::maintenance::start_maintenance_worker(maintenance_config);
 
     // Define sensitive headers that should never be logged
     let sensitive_headers = vec![
@@ -102,6 +152,7 @@ async fn health() -> Json<Value> {
 // Error type for API responses
 enum ApiError {
     BadRequest(String),
+    NotFound(String),
     Internal(String),
 }
 
@@ -109,6 +160,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
@@ -126,276 +178,542 @@ impl From<anyhow::Error> for ApiError {
 #[derive(Debug, Serialize, Deserialize)]
 struct ChatRequest {
     message: String,
-    #[serde(default)]
-    config: Option<ChatConfig>,
-    #[serde(default)]
-    temporary_config: Option<ChatConfig>,
 }
 
 #[derive(Debug, Serialize)]
 struct ChatResponse {
     stream_id: String,
-    resolved_config: ResolvedConfig,
 }
 
 #[derive(Debug, Serialize)]
 struct ConfigResponse {
-    resolved_config: ResolvedConfig,
-    editable_config: ChatConfig,
+    session_config: SessionConfig,
 }
 
 // Placeholder handlers
 mod sessions {
     use super::*;
 
-    pub async fn list_sessions() -> Json<Value> {
-        // TODO: Load actual sessions from storage
-        Json(json!({
-            "sessions": [
-                {
-                    "session_id": "session-1",
-                    "name": "General Conversation",
-                    "created_at": 1704672000000_i64,
-                    "updated_at": 1704758400000_i64,
-                    "preset": "general",
-                    "message_count": 42
-                },
-                {
-                    "session_id": "session-2",
-                    "name": "Coding Project",
-                    "created_at": 1704585600000_i64,
-                    "updated_at": 1704672000000_i64,
-                    "preset": "coding",
-                    "message_count": 128
-                },
-                {
-                    "session_id": "session-3",
-                    "name": "Research Task",
-                    "created_at": 1704499200000_i64,
-                    "updated_at": 1704585600000_i64,
-                    "preset": "research",
-                    "message_count": 87
-                }
-            ],
-            "total": 3
-        }))
+    pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+        let sessions = state
+            .store
+            .list_sessions()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Convert to session summaries
+        let summaries: Vec<_> = sessions
+            .iter()
+            .map(|s| {
+                json!({
+                    "session_id": s.session_id,
+                    "name": s.name,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at,
+                    "message_count": s.stats.total_nodes,
+                })
+            })
+            .collect();
+
+        Ok(Json(json!({
+            "sessions": summaries,
+            "total": sessions.len()
+        })))
     }
 
     pub async fn create_session(
         State(state): State<AppState>,
         Json(req): Json<Value>,
     ) -> Result<Json<Value>, ApiError> {
-        // TODO: Create actual session in storage
-        let session_id = format!("session-{}", ulid::Ulid::new());
+        use crate::history::Session;
+
         let name = req
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("New Session");
-        let preset = req
-            .get("preset")
-            .and_then(|v| v.as_str())
-            .unwrap_or("general");
+        let session_config = state
+            .config_resolver
+            .default_session_config()
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // Validate preset
-        let config = ChatConfig {
-            preset: preset.to_string(),
-            system_prompt: req
-                .get("system_prompt")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            tools_enabled: true,
-            intent: Default::default(),
-            overrides: None,
+        // Create session with persistent store
+        let store = state.store.clone();
+        let session_config_for_history = HistorySessionConfig {
+            system_prompt: session_config.session.system_prompt.clone().into(),
+            max_context_tokens: session_config.session.max_context_tokens,
+            ..Default::default()
         };
 
-        let resolved = state
-            .config_resolver
-            .resolve(&config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let mut session = Session::new(store.clone(), session_config_for_history)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Set session name and metadata
+        session.name = Some(name.to_string());
+        session.metadata = Some(json!({
+            "session_config": session_config,
+        }));
+
+        // Save updated session with metadata
+        store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         Ok(Json(json!({
-            "session_id": session_id,
-            "name": name,
-            "created_at": chrono::Utc::now().timestamp_millis(),
-            "updated_at": chrono::Utc::now().timestamp_millis(),
-            "resolved_config": resolved
+            "session_id": session.session_id,
+            "name": session.name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "session_config": session_config
         })))
     }
 
-    pub async fn get_session(Path(session_id): Path<String>) -> Json<Value> {
-        // TODO: Load actual session from storage
-        Json(json!({
-            "session_id": session_id,
-            "name": "Example Session",
-            "created_at": 1704672000000_i64,
-            "updated_at": 1704758400000_i64,
-            "preset": "general",
-            "message_count": 42,
-            "root_node_id": "node-root",
-            "active_leaf_id": "node-leaf-123"
-        }))
+    pub async fn get_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Extract preset from metadata if available
+        Ok(Json(json!({
+            "session_id": session.session_id,
+            "name": session.name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "message_count": session.stats.total_nodes,
+            "root_node_id": session.root_node_id,
+            "active_leaf_id": session.active_leaf_id
+        })))
     }
 
     pub async fn chat(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
         State(state): State<AppState>,
         Json(req): Json<ChatRequest>,
     ) -> Result<Json<ChatResponse>, ApiError> {
+        crate::logger::log(format!("Chat request received for session: {}", session_id));
+
         // Validate request
         if req.message.trim().is_empty() {
             return Err(ApiError::BadRequest("message cannot be empty".to_string()));
         }
 
-        // Use temporary config if provided, otherwise use persistent config
-        let config = req
-            .temporary_config
-            .or(req.config)
-            .unwrap_or_else(|| ChatConfig {
-                preset: "general".to_string(),
-                system_prompt: None,
-                tools_enabled: true,
-                intent: Default::default(),
-                overrides: None,
-            });
+        // Load session from storage
+        let stored_session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // Resolve configuration
-        let resolved = state
-            .config_resolver
-            .resolve(&config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let session_config = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
-        // TODO: Actually process the chat request with Agent
-        // For now, just return the resolved config
-        let stream_id = format!("stream-{}", ulid::Ulid::new());
+        // Create stream
+        let (stream_id, tx) = state.stream_manager.create_stream().await;
+        crate::logger::log(format!(
+            "Created stream: {} for session: {}",
+            stream_id, session_id
+        ));
 
-        Ok(Json(ChatResponse {
-            stream_id,
-            resolved_config: resolved,
-        }))
+        // Clone values for the background task
+        let message = req.message.clone();
+        let config_manager = state.config_resolver.clone();
+        let stream_id_clone = stream_id.clone();
+        let session_config_for_task = session_config.clone();
+        let store_for_task = state.store.clone();
+
+        // Spawn background task to run Agent
+        tokio::spawn(async move {
+            crate::logger::log(format!(
+                "Starting agent chat for stream: {}",
+                stream_id_clone
+            ));
+
+            let result = run_agent_chat(
+                stored_session,
+                message,
+                session_config_for_task,
+                config_manager,
+                store_for_task,
+                tx.clone(),
+            )
+            .await;
+
+            // If agent failed, send error to frontend
+            match result {
+                Ok(_) => {
+                    crate::logger::log(format!(
+                        "Agent chat completed successfully for stream: {}",
+                        stream_id_clone
+                    ));
+                }
+                Err(e) => {
+                    crate::logger::log(format!(
+                        "ERROR: Agent chat failed for stream {}: {}",
+                        stream_id_clone, e
+                    ));
+                    crate::logger::log(format!("ERROR: Error details: {:?}", e));
+
+                    // Send error message to frontend
+                    let error_msg = format!("❌ Agent Error: {}\n\nDetails: {}", e, e);
+                    crate::logger::log(format!("Sending error message to stream: {}", error_msg));
+
+                    match tx
+                        .send(crate::agent::AgentEvent::Content(error_msg.clone()))
+                        .await
+                    {
+                        Ok(_) => {
+                            crate::logger::log("Error message sent successfully".to_string())
+                        }
+                        Err(send_err) => crate::logger::log(format!(
+                            "ERROR: Failed to send error message: {}",
+                            send_err
+                        )),
+                    }
+
+                    // Send done event
+                    let _ = tx
+                        .send(crate::agent::AgentEvent::Done {
+                            total_usage: crate::llm::TokenUsage {
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                cached_tokens: 0,
+                            },
+                            all_tool_calls: vec![],
+                            rounds: 0,
+                        })
+                        .await;
+
+                    // Drop sender to close channel cleanly
+                    drop(tx);
+                    crate::logger::log("Sender dropped, channel closed cleanly".to_string());
+
+                    // Wait for SSE to read messages
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                }
+            }
+
+            // TODO: Save updated session back to storage
+            // For now, sessions are not persisted after chat
+        });
+
+        Ok(Json(ChatResponse { stream_id }))
     }
 
-    pub async fn get_path() -> Json<Value> {
-        Json(json!({"nodes": []}))
+    pub async fn get_path(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        // Load session
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get path nodes from active leaf to root
+        let leaf_id = session.active_leaf_id.clone();
+        let nodes = state
+            .store
+            .get_path_to_root_internal(leaf_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Reverse to get chronological order (root -> leaf)
+        let mut nodes = nodes;
+        nodes.reverse();
+
+        Ok(Json(json!({ "nodes": nodes })))
     }
 
-    pub async fn get_metadata() -> Json<Value> {
-        Json(json!({"total_nodes": 0}))
+    pub async fn get_metadata(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({
+            "total_nodes": session.stats.total_nodes,
+            "active_branches": session.stats.active_branches,
+            "total_checkpoints": session.stats.total_checkpoints,
+            "total_tokens_processed": session.stats.total_tokens_processed,
+        })))
     }
 
-    pub async fn get_checkpoints() -> Json<Value> {
-        Json(json!({"checkpoints": []}))
+    pub async fn get_checkpoints(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({ "checkpoints": session.checkpoints })))
     }
 
-    pub async fn get_system_prompt() -> Json<Value> {
-        Json(json!({"prompt": ""}))
+    pub async fn get_system_prompt(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        Ok(Json(json!({
+            "prompt": session.config.system_prompt.unwrap_or_default()
+        })))
     }
 
     pub async fn get_config(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
     ) -> Result<Json<ConfigResponse>, ApiError> {
-        // TODO: Load actual session from storage and retrieve config from metadata
-        // For now, return a placeholder resolved config
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // This would be loaded from session.metadata["resolved_config"]
-        let resolved_config = ResolvedConfig {
-            provider: ProviderConfig {
-                model: "gpt-5-mini".to_string(),
-                temperature: 1.0,
-                max_tokens: 16384,
-                top_p: None,
-                frequency_penalty: None,
-                presence_penalty: None,
-            },
-            agent: AgentConfig {
-                max_rounds: 30,
-                tools_enabled: true,
-            },
-            session: SessionConfig {
-                system_prompt: "You are a helpful, friendly assistant.".to_string(),
-                max_context_tokens: 200000,
-            },
-        };
+        let session_config = session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
-        // Map resolved config back to editable ChatConfig
-        // Note: We derive intent fields from resolved values
-        let editable_config = ChatConfig {
-            preset: "general".to_string(),
-            system_prompt: None, // Immutable, shown separately
-            tools_enabled: resolved_config.agent.tools_enabled,
-            intent: ChatIntent {
-                creativity: 0.5, // TODO: Reverse-map from temperature
-                verbosity: match resolved_config.provider.max_tokens {
-                    8192 => "short".to_string(),
-                    16384 => "normal".to_string(),
-                    32768 => "long".to_string(),
-                    _ => "normal".to_string(),
-                },
-                rounds: resolved_config.agent.max_rounds,
-            },
-            overrides: None,
-        };
-
-        Ok(Json(ConfigResponse {
-            resolved_config,
-            editable_config,
-        }))
+        Ok(Json(ConfigResponse { session_config }))
     }
 
     pub async fn update_config(
-        Path(_session_id): Path<String>,
+        Path(session_id): Path<String>,
         State(state): State<AppState>,
-        Json(config): Json<ChatConfig>,
-    ) -> Result<Json<ResolvedConfig>, ApiError> {
-        // Validate that system_prompt is not being changed
-        // TODO: Load existing session config from metadata
-        let existing_resolved = ResolvedConfig {
-            provider: ProviderConfig {
-                model: "gpt-5-mini".to_string(),
-                temperature: 1.0,
-                max_tokens: 16384,
-                top_p: None,
-                frequency_penalty: None,
-                presence_penalty: None,
-            },
-            agent: AgentConfig {
-                max_rounds: 30,
-                tools_enabled: true,
-            },
-            session: SessionConfig {
-                system_prompt: "You are a helpful, friendly assistant.".to_string(),
-                max_context_tokens: 200000,
-            },
-        };
+        Json(config): Json<SessionConfig>,
+    ) -> Result<Json<SessionConfig>, ApiError> {
+        // Load existing session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // Check immutable fields
         state
             .config_resolver
-            .validate_immutable_fields(&config, &existing_resolved)
+            .validate(&config)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-        // Resolve new configuration
-        let mut resolved = state
-            .config_resolver
-            .resolve(&config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        // Update session metadata
+        if let Some(ref mut metadata) = session.metadata {
+            metadata["session_config"] =
+                serde_json::to_value(&config).map_err(|e| ApiError::Internal(e.to_string()))?;
+        } else {
+            session.metadata = Some(json!({
+                "session_config": config,
+            }));
+        }
+        session.config.system_prompt = Some(config.session.system_prompt.clone());
+        session.config.max_context_tokens = config.session.max_context_tokens;
+        session.updated_at = crate::history::node::now();
 
-        // Preserve immutable fields from existing config
-        resolved.session.system_prompt = existing_resolved.session.system_prompt;
-        resolved.session.max_context_tokens = existing_resolved.session.max_context_tokens;
+        // Save updated session (automatically persisted by store)
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // TODO: Save resolved config to session.metadata["resolved_config"]
+        Ok(Json(config))
+    }
+}
 
-        Ok(Json(resolved))
+/// Run agent chat in background task
+async fn run_agent_chat(
+    session: crate::history::Session,
+    message: String,
+    session_config: SessionConfig,
+    config_manager: Arc<ConfigResolver>,
+    store: Arc<crate::history::JSONLStore>,
+    tx: tokio::sync::mpsc::Sender<crate::agent::AgentEvent>,
+) -> anyhow::Result<()> {
+    use crate::agent::{Agent, AgentConfig};
+    use crate::llm::{LoopDetectorConfig, ToolRegistry};
+
+    crate::logger::log("run_agent_chat: Using persistent store".to_string());
+
+    // Attach the shared store to the session
+    let mut session = session;
+    session.set_store(store.clone());
+
+    crate::logger::log(format!(
+        "run_agent_chat: Creating provider (model: {})",
+        session_config.provider.model
+    ));
+    // Create provider from resolved config
+    let provider =
+        provider_factory::create_provider(&session_config, config_manager.config_manager())?;
+
+    provider.update_config(Box::new({
+        let provider_config = session_config.provider.clone();
+        move |cfg| {
+            cfg.temperature = provider_config.temperature;
+            cfg.max_tokens = provider_config.max_tokens;
+            cfg.top_p = provider_config.top_p;
+        }
+    }));
+
+    crate::logger::log("run_agent_chat: Creating tool registry".to_string());
+    // Create tool registry
+    let registry = ToolRegistry::new().register_all_builtin();
+
+    crate::logger::log("run_agent_chat: Creating agent".to_string());
+    // Create agent
+    let mut agent = Agent::new(session, provider, registry);
+    agent.set_config(AgentConfig {
+        max_rounds: session_config.agent.max_rounds as usize,
+        loop_detection: Some(LoopDetectorConfig::default()),
+    });
+
+    crate::logger::log(format!(
+        "run_agent_chat: Starting chat with message: {}",
+        message
+    ));
+    // Run chat with callback to stream events
+    let result = agent
+        .chat_with_callback(&message, |event| {
+            let tx = tx.clone();
+            async move {
+                // Debug logging disabled for performance
+                // crate::logger::log(format!("DEBUG: Sending event: {:?}", event));
+                // Send event through channel (ignore if channel is closed)
+                let _ = tx.send(event).await;
+            }
+        })
+        .await;
+
+    match result {
+        Ok(_) => {
+            crate::logger::log("run_agent_chat: Chat completed successfully".to_string());
+            Ok(())
+        }
+        Err(e) => {
+            // Just return the error - it will be handled by the spawned task
+            Err(e)
+        }
     }
 }
 
 mod sse {
-    use axum::response::sse::Event;
-    use futures::stream;
-    use std::convert::Infallible;
+    use super::{ApiError, AppState};
+    use axum::{
+        extract::{Path, State},
+        response::sse::{Event, Sse},
+    };
+    use futures::stream::Stream;
+    use std::{convert::Infallible, time::Duration};
+    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::StreamExt;
 
-    pub async fn stream() -> impl axum::response::IntoResponse {
-        // Placeholder
-        axum::response::sse::Sse::new(stream::empty::<Result<Event, Infallible>>())
+    pub async fn stream(
+        Path((_session_id, stream_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+        crate::logger::log(format!("SSE stream requested: {}", stream_id));
+
+        // Take the stream from the manager
+        let receiver = state
+            .stream_manager
+            .take_stream(&stream_id)
+            .await
+            .ok_or_else(|| {
+                crate::logger::log(format!("ERROR: Stream {} not found", stream_id));
+                ApiError::NotFound(format!("Stream {} not found", stream_id))
+            })?;
+
+        crate::logger::log(format!("SSE stream connection established: {}", stream_id));
+
+        // Convert mpsc::Receiver to Stream
+        let event_stream = ReceiverStream::new(receiver).map(|agent_event| {
+            // Convert AgentEvent to SSE Event
+            let (event_type, data) = match agent_event {
+                crate::agent::AgentEvent::Content(content) => {
+                    ("content", serde_json::json!({ "content": content }))
+                }
+                crate::agent::AgentEvent::Thinking(text) => {
+                    ("thinking", serde_json::json!({ "text": text }))
+                }
+                crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
+                    "tool_calls",
+                    serde_json::json!({ "tool_calls": tool_calls }),
+                ),
+                crate::agent::AgentEvent::ToolResult {
+                    tool_call_id,
+                    tool_name,
+                    result,
+                    is_error,
+                } => (
+                    "tool_result",
+                    serde_json::json!({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "result": result,
+                        "is_error": is_error
+                    }),
+                ),
+                crate::agent::AgentEvent::LoopDetected { detection } => (
+                    "loop_detected",
+                    serde_json::json!({ "detection": format!("{:?}", detection) }),
+                ),
+                crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
+                    "checkpoint",
+                    serde_json::json!({ "node_id": node_id, "strategy": strategy }),
+                ),
+                crate::agent::AgentEvent::Done {
+                    total_usage,
+                    all_tool_calls,
+                    rounds,
+                } => (
+                    "done",
+                    serde_json::json!({
+                        "total_usage": total_usage,
+                        "all_tool_calls": all_tool_calls,
+                        "rounds": rounds
+                    }),
+                ),
+            };
+
+            // Create SSE event
+            Ok(Event::default().event(event_type).data(data.to_string()))
+        });
+
+        // Create SSE response with keepalive
+        Ok(Sse::new(event_stream).keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        ))
     }
 }

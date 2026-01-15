@@ -28,6 +28,17 @@
 - Prefer small, focused tests for provider behavior and history utilities.
 - Example programs are for manual verification and may require API keys; they are not part of `cargo test`.
 
+### Testing and Temporary Files
+
+**CRITICAL**: Do NOT create test or temporary files in the project root directory.
+
+- ✅ **Use `testing/`** for test files, sample data, or test scripts
+- ✅ **Use `temp-doc/`** for temporary documentation, notes, or scratch files
+- ❌ **NEVER** create `test_*.json`, `*.log`, `server.log`, or similar files in root
+- ❌ **NEVER** write temporary files to working directory
+
+Both `testing/` and `temp-doc/` directories are gitignored and should be used for any non-permanent files during development.
+
 ## Commit & Pull Request Guidelines
 
 - Follow the existing history pattern: short, imperative summaries with optional prefixes like `feat:` or `chore:`.

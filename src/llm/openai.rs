@@ -15,7 +15,7 @@ const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
 const OPENAI_RESPONSES_API_BASE: &str = "https://api.openai.com/v1/responses";
 
 /// OpenAI provider implementation
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OpenAIProvider {
     client: reqwest::Client,
     api_key: String,

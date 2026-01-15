@@ -236,6 +236,25 @@ project_root/
 - Integration tests use `MemoryStore` for in-memory history
 - Mock providers for testing Agent without real API calls
 
+### Testing and Temporary Files
+
+**CRITICAL**: Do NOT create test or temporary files in the project root directory.
+
+**Rules**:
+- ✅ **Use `testing/`** for test files, sample data, or test scripts
+- ✅ **Use `temp-doc/`** for temporary documentation, notes, or scratch files
+- ❌ **NEVER** create `test_*.json`, `*.log`, `server.log`, or similar files in root
+- ❌ **NEVER** write temporary files to working directory
+
+**Implementation**:
+```
+project_root/
+├── testing/              # Test files, sample data (gitignored)
+└── temp-doc/             # Temporary docs, notes (gitignored)
+```
+
+Both directories are gitignored and should be used for any non-permanent files during development.
+
 ## Frontend Styling (Tailwind v4)
 
 - Use Tailwind v4 CSS-first setup in `web/src/index.css` with `@import "tailwindcss";` first and `@config "../tailwind.config.js";` immediately after; do not place other at-rules before `@import`.
