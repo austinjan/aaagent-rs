@@ -169,7 +169,7 @@ def start_backend():
     # Start backend
     if sys.platform == "win32":
         process = subprocess.Popen(
-            "cargo run --features dev-server -- serve",
+            "cargo run --bin aaagent-serve --features dev-server",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             shell=True,

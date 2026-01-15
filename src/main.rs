@@ -29,7 +29,7 @@ fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
 }
 
 #[derive(Parser)]
-#[command(name = "aaagent")]
+#[command(name = "km")]
 #[command(author, version, about = "A collection of CLI tools for LLM agent development", long_about = None)]
 struct Cli {
     /// Enable verbose output
@@ -70,7 +70,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Start the chat UI web server
+    /// Start the web server for chat UI
     Serve {
         /// Port to listen on
         #[arg(short, long, default_value = "3000")]

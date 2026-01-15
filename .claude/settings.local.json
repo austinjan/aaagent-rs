@@ -3,6 +3,11 @@
     "allow": [
       "Skill(managing-feature-plans)",
       "Bash(npm install:*)",
+      "Bash(cargo check:*)",
+      "Bash(./target/debug/aaagent-serve:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(./target/debug/km:*)",
       "mcp__acp__Bash",
       "mcp__acp__Write",
       "mcp__acp__Edit"
