@@ -6,10 +6,7 @@ import {
   SessionConfigPanel,
   type SessionConfig,
 } from "../components/chat/SessionConfigPanel";
-import {
-  TemporaryConfigPanel,
-  type TemporaryConfig,
-} from "../components/chat/TemporaryConfigPanel";
+import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
@@ -32,15 +29,15 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
             : "system",
     content: msg.content,
     thinking: msg.thinking,
-    toolCall: msg.toolCall,
-    toolResult: msg.toolResult,
+    tool_calls: msg.tool_calls,
+    tool_call_id: msg.tool_call_id,
+    is_error: msg.is_error,
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
   };
 }
 
 const DEFAULT_OPTIONS = {
-  preset: "general",
   sessionName: "New Chat",
 };
 const SESSION_STORAGE_KEY = "aaagent.session_id";
@@ -50,6 +47,8 @@ export function Chat() {
     sessionId,
     messages,
     isLoading,
+    treeNodes,
+    activeLeafId,
     initializeSession,
     sendMessage,
     loadHistory,
@@ -62,17 +61,22 @@ export function Chat() {
 
   // Session config (persistent)
   const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
-    preset: "general",
-    toolsEnabled: true,
-    creativity: 0.5,
-    verbosity: "normal",
-    maxRounds: 30,
-    overrides: {},
-  });
-
-  // Temporary config (per-message)
-  const [tempConfig, setTempConfig] = useState<TemporaryConfig>({
-    overrides: {},
+    provider: {
+      model: "gpt-5-mini",
+      temperature: 1.0,
+      max_tokens: 16384,
+      top_p: undefined,
+      frequency_penalty: undefined,
+      presence_penalty: undefined,
+    },
+    agent: {
+      max_rounds: 30,
+      tools_enabled: true,
+    },
+    session: {
+      system_prompt: "You are a helpful, friendly assistant.",
+      max_context_tokens: 200000,
+    },
   });
 
   const persistSession = (sessionId: string) => {
@@ -126,14 +130,7 @@ export function Chat() {
     if (sessionId) {
       getConfig(sessionId)
         .then((response) => {
-          setSessionConfig({
-            preset: response.editable_config.preset,
-            toolsEnabled: response.editable_config.tools_enabled,
-            creativity: response.editable_config.intent?.creativity ?? 0.5,
-            verbosity: response.editable_config.intent?.verbosity ?? "normal",
-            maxRounds: response.editable_config.intent?.rounds ?? 30,
-            overrides: response.editable_config.overrides || {},
-          });
+          setSessionConfig(response.session_config);
         })
         .catch((err) => {
           console.error("Failed to load config:", err);
@@ -143,19 +140,7 @@ export function Chat() {
 
   const handleSendMessage = async (content: string) => {
     try {
-      // Merge session config with temporary overrides
-      const config = {
-        preset: sessionConfig.preset,
-        overrides: {
-          ...sessionConfig.overrides,
-          ...tempConfig.overrides, // Temporary overrides take precedence
-        },
-      };
-
-      await sendMessage(content, config);
-
-      // Clear temporary config after sending
-      setTempConfig({ overrides: {} });
+      await sendMessage(content);
     } catch (err) {
       console.error("Failed to send message:", err);
     }
@@ -172,7 +157,6 @@ export function Chat() {
         persistSession(newSessionId);
       }
       selectNode(null); // Clear selection
-      setTempConfig({ overrides: {} });
     } catch (err) {
       console.error("Failed to create new session:", err);
     }
@@ -185,7 +169,7 @@ export function Chat() {
     <div className="chat-page flex flex-col h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-4xl mx-auto px-4 py-4">
+        <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -215,31 +199,42 @@ export function Chat() {
         </div>
       </header>
 
-      {/* Session Config Panel */}
-      <SessionConfigPanel
-        sessionId={sessionId}
-        config={sessionConfig}
-        onConfigChanged={setSessionConfig}
-        disabled={isLoading}
-      />
+      {/* Main Content: Tree Panel + Chat */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Tree Navigation Panel (Left Sidebar) */}
+        <div className="w-80 border-r border-border flex-shrink-0">
+          <TreeNavigationPanel
+            nodes={treeNodes}
+            activeLeafId={activeLeafId}
+            selectedNodeId={selectedMessageId}
+            onNodeSelect={handleSelectMessage}
+          />
+        </div>
 
-      {/* Chat Container */}
-      <ChatContainer
-        messages={messageCards}
-        selectedMessageId={selectedMessageId || undefined}
-        onSelectMessage={handleSelectMessage}
-        isLoading={isLoading}
-      />
-
-      {/* Chat Input with Temporary Config */}
-      <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
-          <TemporaryConfigPanel
-            config={tempConfig}
-            onChange={setTempConfig}
+        {/* Chat Area (Right Side) */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Session Config Panel */}
+          <SessionConfigPanel
+            sessionId={sessionId}
+            config={sessionConfig}
+            onConfigChanged={setSessionConfig}
             disabled={isLoading}
           />
-          <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+
+          {/* Chat Container */}
+          <ChatContainer
+            messages={messageCards}
+            selectedMessageId={selectedMessageId || undefined}
+            onSelectMessage={handleSelectMessage}
+            isLoading={isLoading}
+          />
+
+          {/* Chat Input */}
+          <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+            <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
+              <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+            </div>
+          </div>
         </div>
       </div>
     </div>

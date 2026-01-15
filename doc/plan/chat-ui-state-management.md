@@ -468,7 +468,7 @@ function validateState(state: ChatUIState) {
 ## 8) Testing Plan
 
 **State Management Tests:**
-- [ ] Single source of truth for selectedNodeId
+- [x] Single source of truth for selectedNodeId
 - [ ] Optimistic actions update instantly
 - [ ] Server-authoritative waits for SSE
 - [x] Event ordering preserved during streaming (SSE FIFO)
@@ -476,10 +476,10 @@ function validateState(state: ChatUIState) {
 - [ ] State validation passes all invariants
 
 **Sync Tests:**
-- [ ] Mini map selection updates chat highlight
-- [ ] Chat scroll updates mini map
-- [ ] No race conditions during rapid updates
-- [ ] No lost events during reconnection
+- [x] Mini map selection updates chat highlight
+- [x] Chat scroll updates mini map
+- [x] No race conditions during rapid updates
+- [x] No lost events during reconnection
 
 ## 9) Acceptance Criteria
 

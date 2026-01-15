@@ -57,6 +57,7 @@ export interface SessionState {
 export interface UIState {
   selectedNodeId: NodeId | null;
   expandedToolPairs: Set<string>;
+  expandedToolCalls: Set<string>;
   expandedCheckpoints: Set<string>;
   scrollPosition: number;
   visibleRange: { start: number; end: number };
@@ -105,6 +106,7 @@ export interface ChatStore {
   selectNode: (nodeId: NodeId | null) => void;
   toggleToolPair: (toolPairId: string) => void;
   toggleCheckpoint: (checkpointId: string) => void;
+  toggleToolCalls: (messageId: string) => void;
   updateScrollPosition: (offset: number) => void;
 
   // ===== SERVER-AUTHORITATIVE ACTIONS (wait for SSE) =====
@@ -150,6 +152,7 @@ const initialState = {
     selectedNodeId: null,
     expandedToolPairs: new Set(),
     expandedCheckpoints: new Set(),
+    expandedToolCalls: new Set(),
     scrollPosition: 0,
     visibleRange: { start: 0, end: 50 },
     loadedChunks: new Set(),
@@ -311,6 +314,23 @@ export const useChatStore = create<ChatStore>()(
         validateAfter(get, "toggleCheckpoint");
       },
 
+      toggleToolCalls: (messageId) => {
+        set(
+          (state) => {
+            const expanded = new Set(state.ui.expandedToolCalls);
+            if (expanded.has(messageId)) {
+              expanded.delete(messageId);
+            } else {
+              expanded.add(messageId);
+            }
+            return { ui: { ...state.ui, expandedToolCalls: expanded } };
+          },
+          false,
+          "toggleToolCalls",
+        );
+        validateAfter(get, "toggleToolCalls");
+      },
+
       updateScrollPosition: (offset) => {
         set(
           (state) => ({
@@ -435,8 +455,12 @@ export const useChatStore = create<ChatStore>()(
                 errors: 0,
               },
             });
+            // Auto-expand tool calls section when added
+            const expanded = new Set(state.ui.expandedToolCalls);
+            expanded.add(messageId);
             return {
               streaming: { ...state.streaming, toolPairGroups: groups },
+              ui: { ...state.ui, expandedToolCalls: expanded },
             };
           },
           false,
@@ -532,6 +556,7 @@ export const useChatStore = create<ChatStore>()(
               selectedNodeId: null,
               expandedToolPairs: new Set<string>(),
               expandedCheckpoints: new Set<string>(),
+              expandedToolCalls: new Set<string>(),
               scrollPosition: 0,
               visibleRange: { start: 0, end: 50 },
               loadedChunks: new Set<string>(),

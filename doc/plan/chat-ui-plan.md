@@ -344,11 +344,11 @@ This master plan is broken down into focused sub-plans:
 - [x] Automatic reconnection works
 
 ### UI Components
-- [ ] Cards render for all node types
+- [x] Cards render for all node types
 - [ ] Tool pairs collapse/expand
 - [ ] Timeout warnings show (slow, orphaned)
 - [ ] Error cards show AI explanations
-- [ ] Mini map syncs with chat container
+- [x] Mini map syncs with chat container
 
 ### State Management
 - [ ] Single source of truth for selection

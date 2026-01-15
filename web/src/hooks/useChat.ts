@@ -1,7 +1,7 @@
 // Hook for managing chat sessions with backend integration
 // Now using Zustand store for state management
 
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import {
   createSession,
   sendChatMessage,
@@ -16,9 +16,10 @@ import {
 } from "../store/useChatStore";
 import { useShallow } from "zustand/react/shallow";
 import { Role, NodeKind, type MessageData } from "../types/backend";
+import { messagesToTreeNodes } from "../components/tree/treeHelpers";
+import type { TreeNode } from "../components/tree/treeLayout";
 
 export interface UseChatOptions {
-  preset?: string;
   sessionName?: string;
 }
 
@@ -115,11 +116,13 @@ export function useChat(options: UseChatOptions = {}) {
             role: Role.Assistant,
             content: "",
             timestamp: new Date(),
-            toolCall: {
-              id: tc.id,
-              name: tc.name,
-              arguments: tc.arguments,
-            },
+            tool_calls: [
+              {
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+              },
+            ],
             isStreaming: false,
           }));
 
@@ -141,7 +144,8 @@ export function useChat(options: UseChatOptions = {}) {
             role: Role.Tool,
             content: event.result as string,
             timestamp: new Date(),
-            toolResult: toolResultData,
+            tool_call_id: event.tool_call_id as string,
+            is_error: event.is_error as boolean,
             isStreaming: false,
           };
 
@@ -228,7 +232,6 @@ export function useChat(options: UseChatOptions = {}) {
 
       const response = await createSession({
         name: options.sessionName || "New Chat",
-        preset: options.preset || "general",
       });
 
       store.initializeSession(response.session_id, response.session_id);
@@ -255,78 +258,60 @@ export function useChat(options: UseChatOptions = {}) {
 
       throw errorObj;
     }
-  }, [options.preset, options.sessionName]);
+  }, [options.sessionName]);
 
   // Send a message
-  const sendMessage = useCallback(
-    async (
-      content: string,
-      config?: { preset: string; overrides: Record<string, unknown> },
-    ) => {
+  const sendMessage = useCallback(async (content: string) => {
+    const store = useChatStore.getState();
+    const currentSessionId = store.session.sessionId;
+
+    if (!currentSessionId) {
+      throw new Error("No active session");
+    }
+
+    try {
+      store.setLoading(true);
+      store.setError(null);
+
+      // Add user message immediately (optimistic)
+      const userMessage: MessageData = {
+        id: `user-${Date.now()}`,
+        role: Role.User,
+        content,
+        timestamp: new Date(),
+        isStreaming: false,
+      };
+
+      store.addMessage(userMessage);
+
+      // Send to backend
+      const response = await sendChatMessage(currentSessionId, {
+        message: content,
+      });
+
+      // Connect to SSE stream (first content event will create Assistant message)
+      setStreamUrl(getStreamUrl(currentSessionId, response.stream_id));
+    } catch (err) {
       const store = useChatStore.getState();
-      const currentSessionId = store.session.sessionId;
+      const errorObj =
+        err instanceof Error ? err : new Error("Failed to send message");
 
-      if (!currentSessionId) {
-        throw new Error("No active session");
-      }
+      // Add error message to chat history
+      const errorMessage: MessageData = {
+        id: `error-${Date.now()}`,
+        role: Role.Assistant,
+        content: `❌ Error: ${errorObj.message}`,
+        timestamp: new Date(),
+        isStreaming: false,
+      };
 
-      try {
-        store.setLoading(true);
-        store.setError(null);
+      store.addMessage(errorMessage);
+      store.setError(errorObj);
+      store.setLoading(false);
 
-        // Add user message immediately (optimistic)
-        const userMessage: MessageData = {
-          id: `user-${Date.now()}`,
-          role: Role.User,
-          content,
-          timestamp: new Date(),
-          isStreaming: false,
-        };
-
-        store.addMessage(userMessage);
-
-        // Send to backend with config
-        const response = await sendChatMessage(currentSessionId, {
-          message: content,
-          temporary_config: config
-            ? {
-                preset: config.preset,
-                tools_enabled: true,
-                intent: {
-                  creativity: 0.5,
-                  verbosity: "normal",
-                  rounds: 30,
-                },
-                overrides: config.overrides,
-              }
-            : undefined,
-        });
-
-        // Connect to SSE stream (first content event will create Assistant message)
-        setStreamUrl(getStreamUrl(currentSessionId, response.stream_id));
-      } catch (err) {
-        const store = useChatStore.getState();
-        const errorObj =
-          err instanceof Error ? err : new Error("Failed to send message");
-
-        // Add error message to chat history
-        const errorMessage: MessageData = {
-          id: `error-${Date.now()}`,
-          role: Role.Assistant,
-          content: `❌ Error: ${errorObj.message}`,
-          timestamp: new Date(),
-          isStreaming: false,
-        };
-
-        store.addMessage(errorMessage);
-        store.setError(errorObj);
-        store.setLoading(false);
-
-        throw errorObj;
-      }
-    },
-    [],
-  );
+      throw errorObj;
+    }
+  }, []);
 
   // Load session history
   const loadHistory = useCallback(async (loadSessionId: string) => {
@@ -378,31 +363,26 @@ export function useChat(options: UseChatOptions = {}) {
               role: Role.Assistant,
               content: "",
               timestamp: new Date(node.created_at * 1000),
-              toolCall: {
-                id: toolCall.id,
-                name: toolCall.name,
-                arguments: toolCall.arguments,
-              },
+              tool_calls: [
+                {
+                  id: toolCall.id,
+                  name: toolCall.name,
+                  arguments: toolCall.arguments,
+                },
+              ],
               isStreaming: false,
             });
           }
         }
-        // Case 2: Tool result message - create toolResult field
+        // Case 2: Tool result message
         else if (node.role === Role.Tool && node.tool_call_id) {
-          // Look up tool name from the tool call map
-          const toolName = toolCallMap.get(node.tool_call_id) || "unknown";
-
           loadedMessages.push({
             id: node.node_id,
             role: Role.Tool,
             content: node.content,
             timestamp: new Date(node.created_at * 1000),
-            toolResult: {
-              tool_call_id: node.tool_call_id,
-              tool_name: toolName,
-              result: node.content,
-              is_error: false, // Could check content for error markers
-            },
+            tool_call_id: node.tool_call_id,
+            is_error: false, // Could check content for error markers
             isStreaming: false,
           });
         }
@@ -441,6 +421,17 @@ export function useChat(options: UseChatOptions = {}) {
     return handleInitializeSession();
   }, [handleInitializeSession]);
 
+  // Convert messages to tree nodes for visualization
+  const treeNodes = useMemo<TreeNode[]>(() => {
+    return messagesToTreeNodes(messages);
+  }, [messages]);
+
+  // Get active leaf ID (last message in the conversation)
+  const activeLeafId = useMemo(() => {
+    if (messages.length === 0) return "";
+    return messages[messages.length - 1].id;
+  }, [messages]);
+
   return React.useMemo(
     () => ({
       sessionId,
@@ -448,6 +439,8 @@ export function useChat(options: UseChatOptions = {}) {
       checkpoints,
       isLoading,
       error,
+      treeNodes,
+      activeLeafId,
       initializeSession: handleInitializeSession,
       sendMessage,
       loadHistory,
@@ -459,6 +452,8 @@ export function useChat(options: UseChatOptions = {}) {
       checkpoints,
       isLoading,
       error,
+      treeNodes,
+      activeLeafId,
       handleInitializeSession,
       sendMessage,
       loadHistory,

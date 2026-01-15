@@ -1,9 +1,7 @@
-// SessionConfigPanel - Comprehensive persistent session-level configuration
+// SessionConfigPanel - persistent session configuration
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Settings2, Save, RotateCcw } from "lucide-react";
-import { PresetSelector } from "./PresetSelector";
-import { type ChatOverrides } from "./OverrideSettings";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -21,16 +19,27 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Textarea } from "@/components/ui/textarea";
 import { updateConfig } from "@/services/api";
 import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
 
 export interface SessionConfig {
-  preset: string;
-  toolsEnabled: boolean;
-  creativity: number;
-  verbosity: string;
-  maxRounds: number;
-  overrides: ChatOverrides;
+  provider: {
+    model: string;
+    temperature: number;
+    max_tokens: number;
+    top_p?: number;
+    frequency_penalty?: number;
+    presence_penalty?: number;
+  };
+  agent: {
+    max_rounds: number;
+    tools_enabled: boolean;
+  };
+  session: {
+    system_prompt: string;
+    max_context_tokens: number;
+  };
 }
 
 export interface SessionConfigPanelProps {
@@ -51,22 +60,35 @@ export function SessionConfigPanel({
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
-  const hasOverrides = Object.keys(localConfig.overrides).length > 0;
+  useEffect(() => {
+    setLocalConfig(config);
+    setHasChanges(false);
+  }, [config]);
 
-  const handleConfigChange = (updates: Partial<SessionConfig>) => {
-    const newConfig = { ...localConfig, ...updates };
-    setLocalConfig(newConfig);
-    setHasChanges(JSON.stringify(newConfig) !== JSON.stringify(config));
+  const updateConfigState = (nextConfig: SessionConfig) => {
+    setLocalConfig(nextConfig);
+    setHasChanges(JSON.stringify(nextConfig) !== JSON.stringify(config));
   };
 
-  const handleOverrideChange = (key: keyof ChatOverrides, value: any) => {
-    const newOverrides = { ...localConfig.overrides };
-    if (value === undefined || value === "") {
-      delete newOverrides[key];
-    } else {
-      newOverrides[key] = value;
-    }
-    handleConfigChange({ overrides: newOverrides });
+  const updateProvider = (updates: Partial<SessionConfig["provider"]>) => {
+    updateConfigState({
+      ...localConfig,
+      provider: { ...localConfig.provider, ...updates },
+    });
+  };
+
+  const updateAgent = (updates: Partial<SessionConfig["agent"]>) => {
+    updateConfigState({
+      ...localConfig,
+      agent: { ...localConfig.agent, ...updates },
+    });
+  };
+
+  const updateSession = (updates: Partial<SessionConfig["session"]>) => {
+    updateConfigState({
+      ...localConfig,
+      session: { ...localConfig.session, ...updates },
+    });
   };
 
   const handleSave = async () => {
@@ -74,27 +96,10 @@ export function SessionConfigPanel({
 
     try {
       setIsSaving(true);
-
-      const configToSave = {
-        preset: localConfig.preset,
-        tools_enabled: localConfig.toolsEnabled,
-        intent: {
-          creativity: localConfig.creativity,
-          verbosity: localConfig.verbosity as "short" | "normal" | "long",
-          rounds: localConfig.maxRounds,
-        },
-        overrides: localConfig.overrides,
-      };
-
-      console.log("Saving config:", configToSave);
-
-      const result = await updateConfig(sessionId, configToSave);
-
-      console.log("Config saved successfully:", result);
-
-      onConfigChanged(localConfig);
+      const result = await updateConfig(sessionId, localConfig);
+      onConfigChanged(result);
       setHasChanges(false);
-      setIsOpen(false); // Close the settings panel after successful save
+      setIsOpen(false);
     } catch (err) {
       console.error("Failed to save config:", err);
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -109,23 +114,20 @@ export function SessionConfigPanel({
     setHasChanges(false);
   };
 
-  // Determine if current model is in the supported list
   const isCustomModel =
-    localConfig.overrides.model &&
-    !SUPPORTED_MODELS.some((m) => m.value === localConfig.overrides.model);
+    localConfig.provider.model &&
+    !SUPPORTED_MODELS.some((m) => m.value === localConfig.provider.model);
   const selectValue = isCustomModel
     ? CUSTOM_MODEL_VALUE
-    : localConfig.overrides.model;
+    : localConfig.provider.model;
 
   const handleModelSelectChange = (value: string) => {
     if (value === CUSTOM_MODEL_VALUE) {
-      // Switch to custom input, keep current value if it's custom
       if (!isCustomModel) {
-        handleOverrideChange("model", "");
+        updateProvider({ model: "" });
       }
     } else {
-      // Use selected model from dropdown
-      handleOverrideChange("model", value);
+      updateProvider({ model: value });
     }
   };
 
@@ -133,7 +135,7 @@ export function SessionConfigPanel({
     <div className="border-b border-border bg-muted/30 py-2">
       <div className="max-w-4xl mx-auto px-4">
         <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
               <CollapsibleTrigger asChild>
                 <Button
@@ -143,16 +145,46 @@ export function SessionConfigPanel({
                   disabled={disabled || isSaving}
                 >
                   <Settings2 className="w-4 h-4" />
-                  <span className="text-sm font-medium">
-                    Session Settings{" "}
-                    {hasOverrides &&
-                      `(${Object.keys(localConfig.overrides).length} overrides)`}
-                  </span>
+                  <span className="text-sm font-medium">Session Settings</span>
                 </Button>
               </CollapsibleTrigger>
               <span className="text-xs text-muted-foreground">
                 (applies to all messages in this session)
               </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label htmlFor="quick-model" className="text-xs">
+                Model
+              </Label>
+              <Select
+                value={selectValue}
+                onValueChange={handleModelSelectChange}
+                disabled={disabled || isSaving}
+              >
+                <SelectTrigger id="quick-model" className="h-8 min-w-[12rem]">
+                  <SelectValue placeholder="Select a model..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {SUPPORTED_MODELS.map((model) => (
+                    <SelectItem key={model.value} value={model.value}>
+                      {model.label}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value={CUSTOM_MODEL_VALUE}>Custom Model...</SelectItem>
+                </SelectContent>
+              </Select>
+              {(isCustomModel || selectValue === CUSTOM_MODEL_VALUE) && (
+                <Input
+                  id="quick-model-custom"
+                  type="text"
+                  placeholder="custom-model"
+                  value={localConfig.provider.model || ""}
+                  onChange={(e) => updateProvider({ model: e.target.value })}
+                  disabled={disabled || isSaving}
+                  className="h-8"
+                />
+              )}
             </div>
 
             {hasChanges && (
@@ -186,90 +218,144 @@ export function SessionConfigPanel({
 
           <CollapsibleContent className="pt-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 rounded-lg border border-border bg-background">
-              {/* Left Column - Basic Settings */}
               <div className="space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold mb-3">Basic Settings</h3>
+                  <h3 className="text-sm font-semibold mb-3">Provider</h3>
                   <div className="space-y-4">
-                    {/* Preset */}
-                    <PresetSelector
-                      value={localConfig.preset}
-                      onChange={(preset) => handleConfigChange({ preset })}
-                      disabled={disabled || isSaving}
-                    />
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="temperature" className="text-sm">
+                          Temperature
+                        </Label>
+                        <span className="text-xs text-muted-foreground">
+                          {localConfig.provider.temperature.toFixed(2)}
+                        </span>
+                      </div>
+                      <Slider
+                        id="temperature"
+                        min={0}
+                        max={2}
+                        step={0.05}
+                        value={[localConfig.provider.temperature]}
+                        onValueChange={([temperature]) =>
+                          updateProvider({ temperature })
+                        }
+                        disabled={disabled || isSaving}
+                      />
+                    </div>
 
-                    {/* Tools Enabled */}
+                    <div className="space-y-2">
+                      <Label htmlFor="max-tokens" className="text-sm">
+                        Max Tokens
+                      </Label>
+                      <Input
+                        id="max-tokens"
+                        type="number"
+                        min={1}
+                        value={localConfig.provider.max_tokens}
+                        onChange={(e) =>
+                          updateProvider({
+                            max_tokens: parseInt(e.target.value) || 1,
+                          })
+                        }
+                        disabled={disabled || isSaving}
+                        className="h-9"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="top-p" className="text-sm">
+                        Top P
+                      </Label>
+                      <Input
+                        id="top-p"
+                        type="number"
+                        step={0.05}
+                        min={0}
+                        max={1}
+                        value={localConfig.provider.top_p ?? ""}
+                        onChange={(e) =>
+                          updateProvider({
+                            top_p:
+                              e.target.value === ""
+                                ? undefined
+                                : parseFloat(e.target.value),
+                          })
+                        }
+                        disabled={disabled || isSaving}
+                        className="h-9"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="freq-penalty" className="text-sm">
+                        Frequency Penalty
+                      </Label>
+                      <Input
+                        id="freq-penalty"
+                        type="number"
+                        step={0.1}
+                        min={-2}
+                        max={2}
+                        value={localConfig.provider.frequency_penalty ?? ""}
+                        onChange={(e) =>
+                          updateProvider({
+                            frequency_penalty:
+                              e.target.value === ""
+                                ? undefined
+                                : parseFloat(e.target.value),
+                          })
+                        }
+                        disabled={disabled || isSaving}
+                        className="h-9"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="presence-penalty" className="text-sm">
+                        Presence Penalty
+                      </Label>
+                      <Input
+                        id="presence-penalty"
+                        type="number"
+                        step={0.1}
+                        min={-2}
+                        max={2}
+                        value={localConfig.provider.presence_penalty ?? ""}
+                        onChange={(e) =>
+                          updateProvider({
+                            presence_penalty:
+                              e.target.value === ""
+                                ? undefined
+                                : parseFloat(e.target.value),
+                          })
+                        }
+                        disabled={disabled || isSaving}
+                        className="h-9"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold mb-3">Agent</h3>
+                  <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <Label htmlFor="tools-enabled" className="text-sm">
                         Enable Tools
                       </Label>
                       <Switch
                         id="tools-enabled"
-                        checked={localConfig.toolsEnabled}
-                        onCheckedChange={(toolsEnabled) =>
-                          handleConfigChange({ toolsEnabled })
+                        checked={localConfig.agent.tools_enabled}
+                        onCheckedChange={(tools_enabled) =>
+                          updateAgent({ tools_enabled })
                         }
                         disabled={disabled || isSaving}
                       />
                     </div>
 
-                    {/* Creativity */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="creativity" className="text-sm">
-                          Creativity
-                        </Label>
-                        <span className="text-xs text-muted-foreground">
-                          {localConfig.creativity.toFixed(2)}
-                        </span>
-                      </div>
-                      <Slider
-                        id="creativity"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={[localConfig.creativity]}
-                        onValueChange={([creativity]) =>
-                          handleConfigChange({ creativity })
-                        }
-                        disabled={disabled || isSaving}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Lower values are more focused, higher values are more
-                        creative
-                      </p>
-                    </div>
-
-                    {/* Verbosity */}
-                    <div className="space-y-2">
-                      <Label htmlFor="verbosity" className="text-sm">
-                        Verbosity
-                      </Label>
-                      <Select
-                        value={localConfig.verbosity}
-                        onValueChange={(verbosity) =>
-                          handleConfigChange({ verbosity })
-                        }
-                        disabled={disabled || isSaving}
-                      >
-                        <SelectTrigger id="verbosity" className="h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="short">
-                            Short (concise responses)
-                          </SelectItem>
-                          <SelectItem value="normal">
-                            Normal (balanced)
-                          </SelectItem>
-                          <SelectItem value="long">
-                            Long (detailed responses)
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Max Rounds */}
                     <div className="space-y-2">
                       <Label htmlFor="max-rounds" className="text-sm">
                         Max Tool Rounds
@@ -279,243 +365,55 @@ export function SessionConfigPanel({
                         type="number"
                         min={1}
                         max={100}
-                        value={localConfig.maxRounds}
+                        value={localConfig.agent.max_rounds}
                         onChange={(e) =>
-                          handleConfigChange({
-                            maxRounds: parseInt(e.target.value) || 30,
+                          updateAgent({
+                            max_rounds: parseInt(e.target.value) || 1,
                           })
                         }
                         disabled={disabled || isSaving}
                         className="h-9"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Maximum number of tool calling rounds (1-100)
-                      </p>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Right Column - Advanced Overrides */}
-              <div className="space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold mb-3">
-                    Advanced Overrides
-                  </h3>
+                  <h3 className="text-sm font-semibold mb-3">Session</h3>
                   <div className="space-y-4">
-                    {/* Model Override */}
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="model-override" className="text-sm">
-                          Model Override
-                        </Label>
-                        {localConfig.overrides.model && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              handleOverrideChange("model", undefined)
-                            }
-                            disabled={disabled || isSaving}
-                            className="h-6 px-2 text-xs"
-                          >
-                            Clear
-                          </Button>
-                        )}
-                      </div>
-
-                      {/* Model Selector */}
-                      <Select
-                        value={selectValue}
-                        onValueChange={handleModelSelectChange}
-                        disabled={disabled || isSaving}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Select a model..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SUPPORTED_MODELS.map((model) => (
-                            <SelectItem key={model.value} value={model.value}>
-                              {model.label}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value={CUSTOM_MODEL_VALUE}>
-                            Custom Model...
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-
-                      {/* Custom Model Input */}
-                      {(isCustomModel ||
-                        selectValue === CUSTOM_MODEL_VALUE) && (
-                        <Input
-                          id="model-override"
-                          type="text"
-                          placeholder="e.g., gpt-4, claude-3-opus-20240229"
-                          value={localConfig.overrides.model || ""}
-                          onChange={(e) =>
-                            handleOverrideChange(
-                              "model",
-                              e.target.value || undefined,
-                            )
-                          }
-                          disabled={disabled || isSaving}
-                          className="h-9"
-                        />
-                      )}
-                    </div>
-
-                    {/* Top P */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="top-p" className="text-sm">
-                          Top P
-                          {localConfig.overrides.top_p !== undefined && (
-                            <span className="ml-2 text-muted-foreground font-normal">
-                              {localConfig.overrides.top_p.toFixed(2)}
-                            </span>
-                          )}
-                        </Label>
-                        {localConfig.overrides.top_p !== undefined && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              handleOverrideChange("top_p", undefined)
-                            }
-                            disabled={disabled || isSaving}
-                            className="h-6 px-2 text-xs"
-                          >
-                            Clear
-                          </Button>
-                        )}
-                      </div>
-                      <Slider
-                        id="top-p"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={[localConfig.overrides.top_p ?? 0.9]}
-                        onValueChange={([value]) =>
-                          handleOverrideChange("top_p", value)
+                      <Label htmlFor="system-prompt" className="text-sm">
+                        System Prompt
+                      </Label>
+                      <Textarea
+                        id="system-prompt"
+                        value={localConfig.session.system_prompt}
+                        onChange={(e) =>
+                          updateSession({ system_prompt: e.target.value })
                         }
                         disabled={disabled || isSaving}
+                        className="min-h-[120px]"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Nucleus sampling (0.0-1.0)
-                      </p>
                     </div>
 
-                    {/* Frequency Penalty */}
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="freq-penalty" className="text-sm">
-                          Frequency Penalty
-                          {localConfig.overrides.frequency_penalty !==
-                            undefined && (
-                            <span className="ml-2 text-muted-foreground font-normal">
-                              {localConfig.overrides.frequency_penalty.toFixed(
-                                2,
-                              )}
-                            </span>
-                          )}
-                        </Label>
-                        {localConfig.overrides.frequency_penalty !==
-                          undefined && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              handleOverrideChange(
-                                "frequency_penalty",
-                                undefined,
-                              )
-                            }
-                            disabled={disabled || isSaving}
-                            className="h-6 px-2 text-xs"
-                          >
-                            Clear
-                          </Button>
-                        )}
-                      </div>
-                      <Slider
-                        id="freq-penalty"
-                        min={-2}
-                        max={2}
-                        step={0.1}
-                        value={[localConfig.overrides.frequency_penalty ?? 0]}
-                        onValueChange={([value]) =>
-                          handleOverrideChange("frequency_penalty", value)
+                      <Label htmlFor="max-context" className="text-sm">
+                        Max Context Tokens
+                      </Label>
+                      <Input
+                        id="max-context"
+                        type="number"
+                        min={1}
+                        value={localConfig.session.max_context_tokens}
+                        onChange={(e) =>
+                          updateSession({
+                            max_context_tokens: parseInt(e.target.value) || 1,
+                          })
                         }
                         disabled={disabled || isSaving}
+                        className="h-9"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Reduce repetition (-2.0 to 2.0)
-                      </p>
                     </div>
-
-                    {/* Presence Penalty */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="presence-penalty" className="text-sm">
-                          Presence Penalty
-                          {localConfig.overrides.presence_penalty !==
-                            undefined && (
-                            <span className="ml-2 text-muted-foreground font-normal">
-                              {localConfig.overrides.presence_penalty.toFixed(
-                                2,
-                              )}
-                            </span>
-                          )}
-                        </Label>
-                        {localConfig.overrides.presence_penalty !==
-                          undefined && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              handleOverrideChange(
-                                "presence_penalty",
-                                undefined,
-                              )
-                            }
-                            disabled={disabled || isSaving}
-                            className="h-6 px-2 text-xs"
-                          >
-                            Clear
-                          </Button>
-                        )}
-                      </div>
-                      <Slider
-                        id="presence-penalty"
-                        min={-2}
-                        max={2}
-                        step={0.1}
-                        value={[localConfig.overrides.presence_penalty ?? 0]}
-                        onValueChange={([value]) =>
-                          handleOverrideChange("presence_penalty", value)
-                        }
-                        disabled={disabled || isSaving}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Encourage new topics (-2.0 to 2.0)
-                      </p>
-                    </div>
-
-                    {/* Clear All Overrides */}
-                    {hasOverrides && (
-                      <div className="pt-2 border-t border-border">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleConfigChange({ overrides: {} })}
-                          disabled={disabled || isSaving}
-                          className="w-full"
-                        >
-                          Clear All Overrides
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>

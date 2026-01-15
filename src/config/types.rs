@@ -1,75 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// API request configuration
+/// Unified session configuration (stored in session metadata)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatConfig {
-    #[serde(default = "default_preset")]
-    pub preset: String,
-    pub system_prompt: Option<String>,
-    #[serde(default = "default_tools_enabled")]
-    pub tools_enabled: bool,
-    #[serde(default)]
-    pub intent: ChatIntent,
-    pub overrides: Option<ChatOverrides>,
-}
-
-fn default_preset() -> String {
-    "general".to_string()
-}
-
-fn default_tools_enabled() -> bool {
-    true
-}
-
-/// Intent-based configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatIntent {
-    #[serde(default = "default_creativity")]
-    pub creativity: f32,
-    #[serde(default = "default_verbosity")]
-    pub verbosity: String,
-    #[serde(default = "default_rounds")]
-    pub rounds: u32,
-}
-
-impl Default for ChatIntent {
-    fn default() -> Self {
-        Self {
-            creativity: default_creativity(),
-            verbosity: default_verbosity(),
-            rounds: default_rounds(),
-        }
-    }
-}
-
-fn default_creativity() -> f32 {
-    0.5
-}
-
-fn default_verbosity() -> String {
-    "normal".to_string()
-}
-
-fn default_rounds() -> u32 {
-    30
-}
-
-/// Power user overrides (whitelist)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatOverrides {
-    pub model: Option<String>,
-    pub top_p: Option<f32>,
-    pub frequency_penalty: Option<f32>,
-    pub presence_penalty: Option<f32>,
-}
-
-/// Resolved configuration (stored in session metadata)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResolvedConfig {
+pub struct SessionConfig {
     pub provider: ProviderConfig,
     pub agent: AgentConfig,
-    pub session: SessionConfig,
+    pub session: SessionRuntimeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +29,7 @@ pub struct AgentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionConfig {
+pub struct SessionRuntimeConfig {
     pub system_prompt: String,
     pub max_context_tokens: u32,
 }

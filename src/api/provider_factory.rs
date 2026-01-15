@@ -1,7 +1,7 @@
 //! Provider Factory
-//! Creates LLM providers based on ResolvedConfig
+//! Creates LLM providers based on SessionConfig
 
-use aaagent::config::{ConfigManager, ResolvedConfig};
+use aaagent::config::{ConfigManager, SessionConfig};
 use aaagent::llm::{ActiveProvider, LLMProvider};
 use anyhow::{bail, Result};
 use secrecy::ExposeSecret;
@@ -17,7 +17,7 @@ use aaagent::llm::GeminiProvider;
 
 /// Create a provider from resolved config
 pub fn create_provider(
-    config: &ResolvedConfig,
+    config: &SessionConfig,
     config_manager: &ConfigManager,
 ) -> Result<ActiveProvider> {
     let model = &config.provider.model;

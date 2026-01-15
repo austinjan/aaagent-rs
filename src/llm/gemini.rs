@@ -195,10 +195,18 @@ impl GeminiProvider {
     }
 
     fn parse_tool_response_json(payload: &str) -> serde_json::Value {
-        serde_json::from_str(payload).unwrap_or_else(|_| {
-            serde_json::json!({
-                "result": payload
-            })
+        // Try to parse as JSON first
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) {
+            // If it's already a JSON object/array, use it directly
+            if value.is_object() || value.is_array() {
+                return value;
+            }
+        }
+
+        // For non-JSON content (plain text), wrap it safely
+        // Gemini's Protobuf Struct has limitations - keep it simple
+        serde_json::json!({
+            "text": payload.chars().take(10000).collect::<String>()
         })
     }
 

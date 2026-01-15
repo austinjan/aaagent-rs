@@ -45,6 +45,13 @@ export interface ToolCall {
   arguments: Record<string, unknown>; // JSON object
 }
 
+export interface ToolResultData {
+  tool_call_id: string;
+  tool_name: string;
+  result: string;
+  is_error: boolean;
+}
+
 export interface Node {
   node_id: NodeId;
   session_id: SessionId;
@@ -117,7 +124,6 @@ export interface SessionInfo {
   name: string | null;
   created_at: number;
   updated_at: number;
-  preset: string;
   message_count: number;
   root_node_id: NodeId;
   active_leaf_id: NodeId;
@@ -135,21 +141,7 @@ export interface SessionMetadata {
 // Config Types
 // ============================================================================
 
-export interface ChatIntent {
-  creativity: number; // 0.0-1.0
-  verbosity: "short" | "normal" | "long";
-  rounds: number;
-}
-
-export interface ChatConfig {
-  preset: string;
-  system_prompt?: string;
-  tools_enabled: boolean;
-  intent: ChatIntent;
-  overrides?: Record<string, unknown>;
-}
-
-export interface SessionConfig {
+export interface SessionRuntimeConfig {
   system_prompt: string;
   max_context_tokens: number;
   max_history_length?: number;
@@ -164,13 +156,12 @@ export interface SessionConfig {
 }
 
 export interface ProviderConfig {
-  provider: "openai" | "anthropic" | "gemini";
   model: string;
   temperature: number;
   max_tokens: number;
   top_p?: number;
-  top_k?: number;
-  enable_reasoning: boolean;
+  frequency_penalty?: number;
+  presence_penalty?: number;
 }
 
 export interface AgentConfig {
@@ -183,15 +174,10 @@ export interface AgentConfig {
   };
 }
 
-export interface ResolvedConfig {
-  session: SessionConfig;
+export interface SessionConfig {
   provider: ProviderConfig;
   agent: AgentConfig;
-}
-
-export interface ConfigResponse {
-  resolved_config: ResolvedConfig;
-  editable_config: ChatConfig;
+  session: SessionRuntimeConfig;
 }
 
 // ============================================================================
@@ -200,19 +186,18 @@ export interface ConfigResponse {
 
 export interface ChatRequest {
   message: string;
-  config?: ChatConfig;
-  temporary_config?: ChatConfig;
 }
 
 export interface ChatResponse {
   stream_id: string;
-  resolved_config: ResolvedConfig;
+}
+
+export interface ConfigResponse {
+  session_config: SessionConfig;
 }
 
 export interface CreateSessionRequest {
   name?: string;
-  preset?: string;
-  system_prompt?: string;
 }
 
 export interface CreateSessionResponse {
@@ -220,7 +205,7 @@ export interface CreateSessionResponse {
   name: string | null;
   created_at: number;
   updated_at: number;
-  resolved_config: ResolvedConfig;
+  session_config: SessionConfig;
 }
 
 export interface ListSessionsResponse {
@@ -238,29 +223,22 @@ export interface HealthResponse {
 // Helper Types for Frontend
 // ============================================================================
 
-// Convert Node to MessageCard format
+// Convert Node to MessageCard format - matches backend structure exactly
 export interface MessageData {
   id: NodeId;
   role: Role;
   content: string;
   timestamp: Date;
   thinking?: string;
-  toolCall?: ToolCallData; // Single tool call for ToolCall role
-  toolResult?: ToolResultData; // Single tool result for Tool role
+
+  // For Assistant messages with tool calls
+  tool_calls?: ToolCall[];
+
+  // For Tool messages (tool results)
+  tool_call_id?: string;
+  is_error?: boolean;
+
   isStreaming?: boolean;
-}
-
-export interface ToolCallData {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-
-export interface ToolResultData {
-  tool_call_id: string;
-  tool_name: string;
-  result: string;
-  is_error: boolean;
 }
 
 // Convert CheckpointData to CheckpointCard format

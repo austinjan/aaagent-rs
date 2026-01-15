@@ -5,7 +5,6 @@ pub mod history;
 pub mod llm;
 pub mod logger;
 pub mod maintenance;
-pub mod storage;
 pub mod tools;
 
 // Re-export commonly used items for convenience

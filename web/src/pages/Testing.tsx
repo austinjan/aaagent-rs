@@ -3,31 +3,15 @@ import { ConfigPanel } from "@/components/config/ConfigPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { runChatStoreSyncTests, type SyncTestResult } from "@/store/syncTests";
-
-interface ChatConfig {
-  preset: string;
-  system_prompt?: string;
-  tools_enabled: boolean;
-  intent: {
-    creativity: number;
-    verbosity: string;
-    rounds: number;
-  };
-  overrides?: {
-    model?: string;
-    top_p?: number;
-    frequency_penalty?: number;
-    presence_penalty?: number;
-  };
-}
+import type { SessionConfig } from "@/lib/api";
 
 export function Testing() {
-  const [submittedConfig, setSubmittedConfig] = useState<ChatConfig | null>(
+  const [submittedConfig, setSubmittedConfig] = useState<SessionConfig | null>(
     null,
   );
   const [syncResults, setSyncResults] = useState<SyncTestResult[] | null>(null);
 
-  const handleConfigSubmit = (config: ChatConfig) => {
+  const handleConfigSubmit = (config: SessionConfig) => {
     console.log("Config submitted:", config);
     setSubmittedConfig(config);
   };
@@ -178,14 +162,14 @@ export function Testing() {
               Existing Session Mode
             </h2>
             <p className="text-muted-foreground">
-              System prompt is locked (read-only)
+              Validate that existing sessions load editable config
             </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div>
               <h3 className="text-lg font-semibold text-foreground mb-4">
-                With Locked System Prompt
+                Existing Session
               </h3>
               <ConfigPanel
                 sessionId="test-session-123"
@@ -205,7 +189,7 @@ export function Testing() {
                     max_context_tokens: 200000,
                   },
                 }}
-                onSubmit={(config: ChatConfig) =>
+                onSubmit={(config: SessionConfig) =>
                   console.log("Existing session config:", config)
                 }
                 onReset={() => console.log("Existing session reset")}
@@ -226,13 +210,11 @@ export function Testing() {
                     </h4>
                     <ul className="list-disc list-inside space-y-1 text-muted-foreground">
                       <li>System prompt should be editable</li>
-                      <li>All presets change system prompt when selected</li>
-                      <li>Character counter updates (max 10,000)</li>
-                      <li>Creativity slider works (0.0 - 1.0)</li>
-                      <li>Verbosity dropdown (short/normal/long)</li>
+                      <li>Model selector updates provider.model</li>
+                      <li>Temperature slider works (0.0 - 2.0)</li>
+                      <li>Max tokens input accepts numbers</li>
                       <li>Rounds input accepts numbers (1-100)</li>
                       <li>Tools toggle switches on/off</li>
-                      <li>Advanced panel collapses/expands</li>
                       <li>Submit shows JSON output</li>
                     </ul>
                   </div>
@@ -242,13 +224,9 @@ export function Testing() {
                       Existing Session Mode (Right Panel)
                     </h4>
                     <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                      <li>System prompt should be grayed out (read-only)</li>
-                      <li>Lock icon visible next to "System Prompt" label</li>
-                      <li>Warning message below system prompt textarea</li>
-                      <li>All other controls should work normally</li>
-                      <li>
-                        Config submission should NOT include system_prompt field
-                      </li>
+                      <li>All fields should be editable</li>
+                      <li>Saving updates the backend config</li>
+                      <li>Reloading should keep the saved values</li>
                     </ul>
                   </div>
                   <Separator className="bg-yellow-500/30" />

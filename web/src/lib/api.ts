@@ -2,24 +2,7 @@
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
 
-export interface ChatConfig {
-  preset: string;
-  system_prompt?: string;
-  tools_enabled: boolean;
-  intent: {
-    creativity: number;
-    verbosity: string;
-    rounds: number;
-  };
-  overrides?: {
-    model?: string;
-    top_p?: number;
-    frequency_penalty?: number;
-    presence_penalty?: number;
-  };
-}
-
-export interface ResolvedConfig {
+export interface SessionConfig {
   provider: {
     model: string;
     temperature: number;
@@ -39,8 +22,7 @@ export interface ResolvedConfig {
 }
 
 export interface ConfigResponse {
-  resolved_config: ResolvedConfig;
-  editable_config: ChatConfig;
+  session_config: SessionConfig;
 }
 
 export interface ApiError {
@@ -63,12 +45,12 @@ export async function getSessionConfig(sessionId: string): Promise<ConfigRespons
 
 /**
  * Update session configuration
- * Note: system_prompt cannot be changed after session creation
+ * Update session configuration
  */
 export async function updateSessionConfig(
   sessionId: string,
-  config: ChatConfig
-): Promise<ResolvedConfig> {
+  config: SessionConfig
+): Promise<SessionConfig> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/config`, {
     method: 'PATCH',
     headers: {
@@ -90,20 +72,14 @@ export async function updateSessionConfig(
  */
 export async function sendChatMessage(
   sessionId: string,
-  message: string,
-  config?: ChatConfig,
-  temporaryConfig?: ChatConfig
-): Promise<{ stream_id: string; resolved_config: ResolvedConfig }> {
+  message: string
+): Promise<{ stream_id: string }> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      message,
-      config,
-      temporary_config: temporaryConfig,
-    }),
+    body: JSON.stringify({ message }),
   });
 
   if (!response.ok) {

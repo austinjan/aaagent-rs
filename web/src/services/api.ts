@@ -9,8 +9,7 @@ import type {
   SessionInfo,
   SessionPath,
   ConfigResponse,
-  ChatConfig,
-  ResolvedConfig,
+  SessionConfig,
   HealthResponse,
 } from "../types/backend";
 
@@ -126,14 +125,14 @@ export async function getConfig(sessionId: string): Promise<ConfigResponse> {
 
 export async function updateConfig(
   sessionId: string,
-  config: ChatConfig,
-): Promise<ResolvedConfig> {
+  config: SessionConfig,
+): Promise<SessionConfig> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/config`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
-  return handleResponse<ResolvedConfig>(response);
+  return handleResponse<SessionConfig>(response);
 }
 
 // ============================================================================

@@ -16,8 +16,9 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
-use aaagent::config::{ChatConfig, ChatIntent, ConfigResolver, ResolvedConfig};
-use aaagent::history::TreeStore;
+use aaagent::config::{ConfigResolver, SessionConfig};
+use aaagent::history::{SessionConfig as HistorySessionConfig, TreeStore};
+use aaagent::llm::LLMProvider;
 
 mod provider_factory;
 mod stream_manager;
@@ -28,7 +29,7 @@ use stream_manager::StreamManager;
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
-    pub store: Arc<aaagent::history::MemoryStore>,
+    pub store: Arc<aaagent::history::JSONLStore>,
     pub stream_manager: Arc<StreamManager>,
 }
 
@@ -41,8 +42,9 @@ impl AppState {
         // Load configuration
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
-        // Initialize persistent store
-        let store = Arc::new(aaagent::history::MemoryStore::with_persistence("data".into()).await?);
+        // Initialize JSONL store with lazy loading
+        aaagent::logger::log("[Startup] Initializing JSONL store...".to_string());
+        let store = Arc::new(aaagent::history::JSONLStore::new("data".into()).await?);
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver
@@ -176,22 +178,16 @@ impl From<anyhow::Error> for ApiError {
 #[derive(Debug, Serialize, Deserialize)]
 struct ChatRequest {
     message: String,
-    #[serde(default)]
-    config: Option<ChatConfig>,
-    #[serde(default)]
-    temporary_config: Option<ChatConfig>,
 }
 
 #[derive(Debug, Serialize)]
 struct ChatResponse {
     stream_id: String,
-    resolved_config: ResolvedConfig,
 }
 
 #[derive(Debug, Serialize)]
 struct ConfigResponse {
-    resolved_config: ResolvedConfig,
-    editable_config: ChatConfig,
+    session_config: SessionConfig,
 }
 
 // Placeholder handlers
@@ -209,19 +205,11 @@ mod sessions {
         let summaries: Vec<_> = sessions
             .iter()
             .map(|s| {
-                let preset = s
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("preset"))
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("general");
-
                 json!({
                     "session_id": s.session_id,
                     "name": s.name,
                     "created_at": s.created_at,
                     "updated_at": s.updated_at,
-                    "preset": preset,
                     "message_count": s.stats.total_nodes,
                 })
             })
@@ -243,45 +231,27 @@ mod sessions {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("New Session");
-        let preset = req
-            .get("preset")
-            .and_then(|v| v.as_str())
-            .unwrap_or("general");
-
-        // Validate preset and resolve config
-        let chat_config = ChatConfig {
-            preset: preset.to_string(),
-            system_prompt: req
-                .get("system_prompt")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            tools_enabled: true,
-            intent: Default::default(),
-            overrides: None,
-        };
-
-        let resolved = state
+        let session_config = state
             .config_resolver
-            .resolve(&chat_config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            .default_session_config()
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         // Create session with persistent store
         let store = state.store.clone();
-        let session_config = aaagent::history::SessionConfig {
-            system_prompt: resolved.session.system_prompt.clone().into(),
-            max_context_tokens: resolved.session.max_context_tokens,
+        let session_config_for_history = HistorySessionConfig {
+            system_prompt: session_config.session.system_prompt.clone().into(),
+            max_context_tokens: session_config.session.max_context_tokens,
             ..Default::default()
         };
 
-        let mut session = Session::new(store.clone(), session_config)
+        let mut session = Session::new(store.clone(), session_config_for_history)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         // Set session name and metadata
         session.name = Some(name.to_string());
         session.metadata = Some(json!({
-            "preset": preset,
-            "resolved_config": resolved,
+            "session_config": session_config,
         }));
 
         // Save updated session with metadata
@@ -295,7 +265,7 @@ mod sessions {
             "name": session.name,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
-            "resolved_config": resolved
+            "session_config": session_config
         })))
     }
 
@@ -311,19 +281,11 @@ mod sessions {
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Extract preset from metadata if available
-        let preset = session
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("preset"))
-            .and_then(|p| p.as_str())
-            .unwrap_or("general");
-
         Ok(Json(json!({
             "session_id": session.session_id,
             "name": session.name,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
-            "preset": preset,
             "message_count": session.stats.total_nodes,
             "root_node_id": session.root_node_id,
             "active_leaf_id": session.active_leaf_id
@@ -350,49 +312,12 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // Get base resolved config from session metadata
-        let base_resolved = stored_session
+        let session_config = stored_session
             .metadata
             .as_ref()
-            .and_then(|m| m.get("resolved_config"))
-            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
-            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
-
-        // If temporary_config is provided, resolve it and use that instead
-        let resolved = if let Some(temp_config) = req.temporary_config {
-            aaagent::logger::log(format!(
-                "Using temporary_config: preset={}, overrides={:?}",
-                temp_config.preset, temp_config.overrides
-            ));
-
-            let mut temp_resolved = state
-                .config_resolver
-                .resolve(&temp_config)
-                .map_err(|e| ApiError::BadRequest(format!("Invalid temporary_config: {}", e)))?;
-
-            // Preserve immutable session fields from base config
-            temp_resolved.session = base_resolved.session.clone();
-
-            temp_resolved
-        } else if let Some(config) = req.config {
-            // Validate config changes don't modify immutable fields
-            state
-                .config_resolver
-                .validate_immutable_fields(&config, &base_resolved)
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
-            let mut resolved = state
-                .config_resolver
-                .resolve(&config)
-                .map_err(|e| ApiError::BadRequest(format!("Invalid config: {}", e)))?;
-
-            // Preserve immutable session fields
-            resolved.session = base_resolved.session.clone();
-
-            resolved
-        } else {
-            base_resolved
-        };
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
         // Create stream
         let (stream_id, tx) = state.stream_manager.create_stream().await;
@@ -405,7 +330,7 @@ mod sessions {
         let message = req.message.clone();
         let config_manager = state.config_resolver.clone();
         let stream_id_clone = stream_id.clone();
-        let resolved_for_task = resolved.clone();
+        let session_config_for_task = session_config.clone();
         let store_for_task = state.store.clone();
 
         // Spawn background task to run Agent
@@ -418,7 +343,7 @@ mod sessions {
             let result = run_agent_chat(
                 stored_session,
                 message,
-                resolved_for_task,
+                session_config_for_task,
                 config_manager,
                 store_for_task,
                 tx.clone(),
@@ -483,10 +408,7 @@ mod sessions {
             // For now, sessions are not persisted after chat
         });
 
-        Ok(Json(ChatResponse {
-            stream_id,
-            resolved_config: resolved,
-        }))
+        Ok(Json(ChatResponse { stream_id }))
     }
 
     pub async fn get_path(
@@ -576,52 +498,21 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // Load resolved config from session metadata
-        let resolved_config = session
+        let session_config = session
             .metadata
             .as_ref()
-            .and_then(|m| m.get("resolved_config"))
-            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
-            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
-        // Load preset from metadata
-        let preset = session
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("preset"))
-            .and_then(|p| p.as_str())
-            .unwrap_or("general")
-            .to_string();
-
-        // Map resolved config back to editable ChatConfig
-        let editable_config = ChatConfig {
-            preset,
-            system_prompt: None, // Immutable, shown separately
-            tools_enabled: resolved_config.agent.tools_enabled,
-            intent: ChatIntent {
-                creativity: 0.5, // TODO: Reverse-map from temperature
-                verbosity: match resolved_config.provider.max_tokens {
-                    8192 => "short".to_string(),
-                    16384 => "normal".to_string(),
-                    32768 => "long".to_string(),
-                    _ => "normal".to_string(),
-                },
-                rounds: resolved_config.agent.max_rounds,
-            },
-            overrides: None,
-        };
-
-        Ok(Json(ConfigResponse {
-            resolved_config,
-            editable_config,
-        }))
+        Ok(Json(ConfigResponse { session_config }))
     }
 
     pub async fn update_config(
         Path(session_id): Path<String>,
         State(state): State<AppState>,
-        Json(config): Json<ChatConfig>,
-    ) -> Result<Json<ResolvedConfig>, ApiError> {
+        Json(config): Json<SessionConfig>,
+    ) -> Result<Json<SessionConfig>, ApiError> {
         // Load existing session
         let mut session = state
             .store
@@ -630,36 +521,22 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
-        // Load existing resolved config
-        let existing_resolved = session
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("resolved_config"))
-            .and_then(|c| serde_json::from_value::<ResolvedConfig>(c.clone()).ok())
-            .ok_or_else(|| ApiError::Internal("Session missing resolved_config".to_string()))?;
-
-        // Check immutable fields
         state
             .config_resolver
-            .validate_immutable_fields(&config, &existing_resolved)
+            .validate(&config)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
-        // Resolve new configuration
-        let mut resolved = state
-            .config_resolver
-            .resolve(&config)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
-        // Preserve immutable fields from existing config
-        resolved.session.system_prompt = existing_resolved.session.system_prompt;
-        resolved.session.max_context_tokens = existing_resolved.session.max_context_tokens;
 
         // Update session metadata
         if let Some(ref mut metadata) = session.metadata {
-            metadata["resolved_config"] =
-                serde_json::to_value(&resolved).map_err(|e| ApiError::Internal(e.to_string()))?;
-            metadata["preset"] = json!(config.preset);
+            metadata["session_config"] =
+                serde_json::to_value(&config).map_err(|e| ApiError::Internal(e.to_string()))?;
+        } else {
+            session.metadata = Some(json!({
+                "session_config": config,
+            }));
         }
+        session.config.system_prompt = Some(config.session.system_prompt.clone());
+        session.config.max_context_tokens = config.session.max_context_tokens;
         session.updated_at = aaagent::history::node::now();
 
         // Save updated session (automatically persisted by store)
@@ -669,7 +546,7 @@ mod sessions {
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        Ok(Json(resolved))
+        Ok(Json(config))
     }
 }
 
@@ -677,9 +554,9 @@ mod sessions {
 async fn run_agent_chat(
     session: aaagent::history::Session,
     message: String,
-    resolved_config: ResolvedConfig,
+    session_config: SessionConfig,
     config_manager: Arc<ConfigResolver>,
-    store: Arc<aaagent::history::MemoryStore>,
+    store: Arc<aaagent::history::JSONLStore>,
     tx: tokio::sync::mpsc::Sender<aaagent::agent::AgentEvent>,
 ) -> anyhow::Result<()> {
     use aaagent::agent::{Agent, AgentConfig};
@@ -693,11 +570,20 @@ async fn run_agent_chat(
 
     aaagent::logger::log(format!(
         "run_agent_chat: Creating provider (model: {})",
-        resolved_config.provider.model
+        session_config.provider.model
     ));
     // Create provider from resolved config
     let provider =
-        provider_factory::create_provider(&resolved_config, config_manager.config_manager())?;
+        provider_factory::create_provider(&session_config, config_manager.config_manager())?;
+
+    provider.update_config(Box::new({
+        let provider_config = session_config.provider.clone();
+        move |cfg| {
+            cfg.temperature = provider_config.temperature;
+            cfg.max_tokens = provider_config.max_tokens;
+            cfg.top_p = provider_config.top_p;
+        }
+    }));
 
     aaagent::logger::log("run_agent_chat: Creating tool registry".to_string());
     // Create tool registry
@@ -707,7 +593,7 @@ async fn run_agent_chat(
     // Create agent
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
-        max_rounds: resolved_config.agent.max_rounds as usize,
+        max_rounds: session_config.agent.max_rounds as usize,
         loop_detection: Some(LoopDetectorConfig::default()),
     });
 

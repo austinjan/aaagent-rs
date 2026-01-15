@@ -20,12 +20,12 @@ export function ChatContainer({
   const containerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive (only if not manually selecting)
   useEffect(() => {
-    if (autoScroll && messagesEndRef.current) {
+    if (autoScroll && !selectedMessageId && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, autoScroll]);
+  }, [messages.length, autoScroll, selectedMessageId]);
 
   const handleSelectMessage = (id: string) => {
     if (onSelectMessage) {

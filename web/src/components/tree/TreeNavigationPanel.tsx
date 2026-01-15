@@ -1,0 +1,90 @@
+// TreeNavigationPanel - Main component for tree-based conversation navigation
+
+import { useState, useRef } from "react";
+import { TreeVisualization } from "./TreeVisualization";
+import { TreeControls } from "./TreeControls";
+import type { TreeNode } from "./treeLayout";
+
+export interface TreeNavigationPanelProps {
+  nodes: TreeNode[];
+  activeLeafId: string;
+  selectedNodeId?: string | null;
+  onNodeSelect?: (nodeId: string) => void;
+}
+
+export function TreeNavigationPanel({
+  nodes,
+  activeLeafId,
+  selectedNodeId,
+  onNodeSelect,
+}: TreeNavigationPanelProps) {
+  const [showInactive, setShowInactive] = useState(true);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleCenterTree = () => {
+    if (containerRef.current) {
+      const svg = containerRef.current.querySelector("svg");
+      if (svg) {
+        // Reset viewBox to show entire tree
+        // The TreeVisualization component handles viewBox calculation
+        // This triggers a re-center by scrolling to top-left
+        containerRef.current.scrollTo({
+          top: 0,
+          left: 0,
+          behavior: "smooth",
+        });
+      }
+    }
+  };
+
+  const handleNodeSelect = (nodeId: string) => {
+    onNodeSelect?.(nodeId);
+
+    // Scroll message card into view in the chat container
+    setTimeout(() => {
+      const messageCard = document.getElementById(`message-${nodeId}`);
+      const chatContainer = document.querySelector(".chat-container");
+
+      if (messageCard && chatContainer) {
+        const containerRect = chatContainer.getBoundingClientRect();
+        const cardRect = messageCard.getBoundingClientRect();
+        const scrollTop = chatContainer.scrollTop;
+
+        // Calculate position to center the card in the container
+        const targetScroll =
+          scrollTop +
+          cardRect.top -
+          containerRect.top -
+          containerRect.height / 2 +
+          cardRect.height / 2;
+
+        chatContainer.scrollTo({
+          top: targetScroll,
+          behavior: "smooth",
+        });
+      }
+    }, 100);
+  };
+
+  return (
+    <div className="tree-panel h-full flex flex-col bg-background border-r border-border">
+      {/* Controls */}
+      <TreeControls
+        showInactive={showInactive}
+        onToggleInactive={() => setShowInactive(!showInactive)}
+        onCenterTree={handleCenterTree}
+      />
+
+      {/* Visualization */}
+      <div ref={containerRef} className="flex-1 overflow-auto bg-background">
+        <TreeVisualization
+          nodes={nodes}
+          activeLeafId={activeLeafId}
+          selectedNodeId={selectedNodeId}
+          showInactive={showInactive}
+          onNodeSelect={handleNodeSelect}
+        />
+      </div>
+    </div>
+  );
+}
