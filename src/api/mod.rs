@@ -16,9 +16,9 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
-use aaagent::config::{ConfigResolver, SessionConfig};
-use aaagent::history::{SessionConfig as HistorySessionConfig, TreeStore};
-use aaagent::llm::LLMProvider;
+use crate::config::{ConfigResolver, SessionConfig};
+use crate::history::{SessionConfig as HistorySessionConfig, TreeStore};
+use crate::llm::LLMProvider;
 
 mod provider_factory;
 mod stream_manager;
@@ -29,7 +29,7 @@ use stream_manager::StreamManager;
 #[derive(Clone)]
 pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
-    pub store: Arc<aaagent::history::JSONLStore>,
+    pub store: Arc<crate::history::JSONLStore>,
     pub stream_manager: Arc<StreamManager>,
 }
 
@@ -43,8 +43,8 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Initialize JSONL store with lazy loading
-        aaagent::logger::log("[Startup] Initializing JSONL store...".to_string());
-        let store = Arc::new(aaagent::history::JSONLStore::new("data".into()).await?);
+        crate::logger::log("[Startup] Initializing JSONL store...".to_string());
+        let store = Arc::new(crate::history::JSONLStore::new("data".into()).await?);
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver
@@ -52,16 +52,16 @@ impl AppState {
             .maintenance_config()
             .clone();
         tokio::spawn(async move {
-            aaagent::logger::log("[Startup] Running initial cleanup...".to_string());
-            let results = aaagent::maintenance::run_cleanup_tasks(&maintenance_config).await;
+            crate::logger::log("[Startup] Running initial cleanup...".to_string());
+            let results = crate::maintenance::run_cleanup_tasks(&maintenance_config).await;
             for (task, result) in results {
                 match result {
-                    Ok(count) => aaagent::logger::log(format!(
+                    Ok(count) => crate::logger::log(format!(
                         "[Startup] Cleanup '{}': {} items removed",
                         task, count
                     )),
                     Err(e) => {
-                        aaagent::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
+                        crate::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
                     }
                 }
             }
@@ -86,7 +86,7 @@ pub async fn create_router() -> Router {
         .config_manager()
         .maintenance_config()
         .clone();
-    aaagent::maintenance::start_maintenance_worker(maintenance_config);
+    crate::maintenance::start_maintenance_worker(maintenance_config);
 
     // Define sensitive headers that should never be logged
     let sensitive_headers = vec![
@@ -225,7 +225,7 @@ mod sessions {
         State(state): State<AppState>,
         Json(req): Json<Value>,
     ) -> Result<Json<Value>, ApiError> {
-        use aaagent::history::Session;
+        use crate::history::Session;
 
         let name = req
             .get("name")
@@ -297,7 +297,7 @@ mod sessions {
         State(state): State<AppState>,
         Json(req): Json<ChatRequest>,
     ) -> Result<Json<ChatResponse>, ApiError> {
-        aaagent::logger::log(format!("Chat request received for session: {}", session_id));
+        crate::logger::log(format!("Chat request received for session: {}", session_id));
 
         // Validate request
         if req.message.trim().is_empty() {
@@ -321,7 +321,7 @@ mod sessions {
 
         // Create stream
         let (stream_id, tx) = state.stream_manager.create_stream().await;
-        aaagent::logger::log(format!(
+        crate::logger::log(format!(
             "Created stream: {} for session: {}",
             stream_id, session_id
         ));
@@ -335,7 +335,7 @@ mod sessions {
 
         // Spawn background task to run Agent
         tokio::spawn(async move {
-            aaagent::logger::log(format!(
+            crate::logger::log(format!(
                 "Starting agent chat for stream: {}",
                 stream_id_clone
             ));
@@ -353,30 +353,30 @@ mod sessions {
             // If agent failed, send error to frontend
             match result {
                 Ok(_) => {
-                    aaagent::logger::log(format!(
+                    crate::logger::log(format!(
                         "Agent chat completed successfully for stream: {}",
                         stream_id_clone
                     ));
                 }
                 Err(e) => {
-                    aaagent::logger::log(format!(
+                    crate::logger::log(format!(
                         "ERROR: Agent chat failed for stream {}: {}",
                         stream_id_clone, e
                     ));
-                    aaagent::logger::log(format!("ERROR: Error details: {:?}", e));
+                    crate::logger::log(format!("ERROR: Error details: {:?}", e));
 
                     // Send error message to frontend
                     let error_msg = format!("❌ Agent Error: {}\n\nDetails: {}", e, e);
-                    aaagent::logger::log(format!("Sending error message to stream: {}", error_msg));
+                    crate::logger::log(format!("Sending error message to stream: {}", error_msg));
 
                     match tx
-                        .send(aaagent::agent::AgentEvent::Content(error_msg.clone()))
+                        .send(crate::agent::AgentEvent::Content(error_msg.clone()))
                         .await
                     {
                         Ok(_) => {
-                            aaagent::logger::log("Error message sent successfully".to_string())
+                            crate::logger::log("Error message sent successfully".to_string())
                         }
-                        Err(send_err) => aaagent::logger::log(format!(
+                        Err(send_err) => crate::logger::log(format!(
                             "ERROR: Failed to send error message: {}",
                             send_err
                         )),
@@ -384,8 +384,8 @@ mod sessions {
 
                     // Send done event
                     let _ = tx
-                        .send(aaagent::agent::AgentEvent::Done {
-                            total_usage: aaagent::llm::TokenUsage {
+                        .send(crate::agent::AgentEvent::Done {
+                            total_usage: crate::llm::TokenUsage {
                                 input_tokens: 0,
                                 output_tokens: 0,
                                 cached_tokens: 0,
@@ -397,7 +397,7 @@ mod sessions {
 
                     // Drop sender to close channel cleanly
                     drop(tx);
-                    aaagent::logger::log("Sender dropped, channel closed cleanly".to_string());
+                    crate::logger::log("Sender dropped, channel closed cleanly".to_string());
 
                     // Wait for SSE to read messages
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
@@ -537,7 +537,7 @@ mod sessions {
         }
         session.config.system_prompt = Some(config.session.system_prompt.clone());
         session.config.max_context_tokens = config.session.max_context_tokens;
-        session.updated_at = aaagent::history::node::now();
+        session.updated_at = crate::history::node::now();
 
         // Save updated session (automatically persisted by store)
         state
@@ -552,23 +552,23 @@ mod sessions {
 
 /// Run agent chat in background task
 async fn run_agent_chat(
-    session: aaagent::history::Session,
+    session: crate::history::Session,
     message: String,
     session_config: SessionConfig,
     config_manager: Arc<ConfigResolver>,
-    store: Arc<aaagent::history::JSONLStore>,
-    tx: tokio::sync::mpsc::Sender<aaagent::agent::AgentEvent>,
+    store: Arc<crate::history::JSONLStore>,
+    tx: tokio::sync::mpsc::Sender<crate::agent::AgentEvent>,
 ) -> anyhow::Result<()> {
-    use aaagent::agent::{Agent, AgentConfig};
-    use aaagent::llm::{LoopDetectorConfig, ToolRegistry};
+    use crate::agent::{Agent, AgentConfig};
+    use crate::llm::{LoopDetectorConfig, ToolRegistry};
 
-    aaagent::logger::log("run_agent_chat: Using persistent store".to_string());
+    crate::logger::log("run_agent_chat: Using persistent store".to_string());
 
     // Attach the shared store to the session
     let mut session = session;
     session.set_store(store.clone());
 
-    aaagent::logger::log(format!(
+    crate::logger::log(format!(
         "run_agent_chat: Creating provider (model: {})",
         session_config.provider.model
     ));
@@ -585,11 +585,11 @@ async fn run_agent_chat(
         }
     }));
 
-    aaagent::logger::log("run_agent_chat: Creating tool registry".to_string());
+    crate::logger::log("run_agent_chat: Creating tool registry".to_string());
     // Create tool registry
     let registry = ToolRegistry::new().register_all_builtin();
 
-    aaagent::logger::log("run_agent_chat: Creating agent".to_string());
+    crate::logger::log("run_agent_chat: Creating agent".to_string());
     // Create agent
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
@@ -597,7 +597,7 @@ async fn run_agent_chat(
         loop_detection: Some(LoopDetectorConfig::default()),
     });
 
-    aaagent::logger::log(format!(
+    crate::logger::log(format!(
         "run_agent_chat: Starting chat with message: {}",
         message
     ));
@@ -607,7 +607,7 @@ async fn run_agent_chat(
             let tx = tx.clone();
             async move {
                 // Debug logging disabled for performance
-                // aaagent::logger::log(format!("DEBUG: Sending event: {:?}", event));
+                // crate::logger::log(format!("DEBUG: Sending event: {:?}", event));
                 // Send event through channel (ignore if channel is closed)
                 let _ = tx.send(event).await;
             }
@@ -616,7 +616,7 @@ async fn run_agent_chat(
 
     match result {
         Ok(_) => {
-            aaagent::logger::log("run_agent_chat: Chat completed successfully".to_string());
+            crate::logger::log("run_agent_chat: Chat completed successfully".to_string());
             Ok(())
         }
         Err(e) => {
@@ -641,7 +641,7 @@ mod sse {
         Path((_session_id, stream_id)): Path<(String, String)>,
         State(state): State<AppState>,
     ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-        aaagent::logger::log(format!("SSE stream requested: {}", stream_id));
+        crate::logger::log(format!("SSE stream requested: {}", stream_id));
 
         // Take the stream from the manager
         let receiver = state
@@ -649,27 +649,27 @@ mod sse {
             .take_stream(&stream_id)
             .await
             .ok_or_else(|| {
-                aaagent::logger::log(format!("ERROR: Stream {} not found", stream_id));
+                crate::logger::log(format!("ERROR: Stream {} not found", stream_id));
                 ApiError::NotFound(format!("Stream {} not found", stream_id))
             })?;
 
-        aaagent::logger::log(format!("SSE stream connection established: {}", stream_id));
+        crate::logger::log(format!("SSE stream connection established: {}", stream_id));
 
         // Convert mpsc::Receiver to Stream
         let event_stream = ReceiverStream::new(receiver).map(|agent_event| {
             // Convert AgentEvent to SSE Event
             let (event_type, data) = match agent_event {
-                aaagent::agent::AgentEvent::Content(content) => {
+                crate::agent::AgentEvent::Content(content) => {
                     ("content", serde_json::json!({ "content": content }))
                 }
-                aaagent::agent::AgentEvent::Thinking(text) => {
+                crate::agent::AgentEvent::Thinking(text) => {
                     ("thinking", serde_json::json!({ "text": text }))
                 }
-                aaagent::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
+                crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
                     "tool_calls",
                     serde_json::json!({ "tool_calls": tool_calls }),
                 ),
-                aaagent::agent::AgentEvent::ToolResult {
+                crate::agent::AgentEvent::ToolResult {
                     tool_call_id,
                     tool_name,
                     result,
@@ -683,15 +683,15 @@ mod sse {
                         "is_error": is_error
                     }),
                 ),
-                aaagent::agent::AgentEvent::LoopDetected { detection } => (
+                crate::agent::AgentEvent::LoopDetected { detection } => (
                     "loop_detected",
                     serde_json::json!({ "detection": format!("{:?}", detection) }),
                 ),
-                aaagent::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
+                crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
                     "checkpoint",
                     serde_json::json!({ "node_id": node_id, "strategy": strategy }),
                 ),
-                aaagent::agent::AgentEvent::Done {
+                crate::agent::AgentEvent::Done {
                     total_usage,
                     all_tool_calls,
                     rounds,

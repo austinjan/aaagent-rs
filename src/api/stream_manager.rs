@@ -3,7 +3,7 @@
 //! Manages concurrent chat streams using tokio channels.
 //! Each stream has a unique ID and a receiver for AgentEvents.
 
-use aaagent::agent::AgentEvent;
+use crate::agent::AgentEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};

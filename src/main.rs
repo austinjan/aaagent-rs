@@ -4,9 +4,6 @@ use std::path::Path;
 
 use aaagent::{find_missing_readme, format_map_as_markdown, generate_map};
 
-mod api;
-mod web;
-
 const DEFAULT_IGNORE_PATTERNS: &[&str] = &[".*", "node_modules"];
 
 fn read_gitignore_patterns(dir: &Path) -> Vec<String> {
@@ -153,7 +150,7 @@ async fn main() {
             println!("Starting aaagent-rs chat UI server...");
 
             // Create router
-            let app = api::create_router().await;
+            let app = aaagent::api::create_router().await;
 
             // Start server
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

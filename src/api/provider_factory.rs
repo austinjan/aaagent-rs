@@ -1,19 +1,19 @@
 //! Provider Factory
 //! Creates LLM providers based on SessionConfig
 
-use aaagent::config::{ConfigManager, SessionConfig};
-use aaagent::llm::{ActiveProvider, LLMProvider};
+use crate::config::{ConfigManager, SessionConfig};
+use crate::llm::{ActiveProvider, LLMProvider};
 use anyhow::{bail, Result};
 use secrecy::ExposeSecret;
 
 #[cfg(feature = "openai")]
-use aaagent::llm::OpenAIProvider;
+use crate::llm::OpenAIProvider;
 
 #[cfg(feature = "anthropic")]
-use aaagent::llm::AnthropicProvider;
+use crate::llm::AnthropicProvider;
 
 #[cfg(feature = "gemini")]
-use aaagent::llm::GeminiProvider;
+use crate::llm::GeminiProvider;
 
 /// Create a provider from resolved config
 pub fn create_provider(
