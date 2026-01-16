@@ -697,7 +697,7 @@ mod tests {
         let path = setup_test_file(content);
 
         let tool = ReadTool::new();
-        let result = tool.read_search(&path, "ERROR", 1).unwrap();
+        let result = tool.read_search(&path, "ERROR", 1, 0).unwrap();
 
         assert!(result.contains("SEARCH"));
         assert!(result.contains(":>")); // Matched line marker

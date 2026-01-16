@@ -24,7 +24,6 @@ async fn main() {
         println!("Verbose mode enabled");
     }
 
-    aaagent::logger::log(format!("serve port={}", cli.port));
     println!("Starting aaagent-rs chat UI server...");
 
     // Create router
