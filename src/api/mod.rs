@@ -44,7 +44,17 @@ impl AppState {
 
         // Initialize JSONL store with lazy loading
         crate::logger::log("[Startup] Initializing JSONL store...".to_string());
-        let store = Arc::new(crate::history::JSONLStore::new("data".into()).await?);
+        let sync_every_writes = std::env::var("AAAGENT_JSONL_SYNC_EVERY")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1);
+        let store = Arc::new(
+            crate::history::JSONLStore::new_with_sync_every(
+                "data".into(),
+                sync_every_writes,
+            )
+            .await?,
+        );
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver

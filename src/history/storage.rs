@@ -79,4 +79,43 @@ pub trait TreeStore: Send + Sync {
 
     /// Insert multiple nodes in a single transaction
     async fn insert_nodes_batch(&self, nodes: Vec<Node>) -> Result<Vec<NodeId>>;
+
+    // Session-scoped operations (optimized for single-session queries)
+
+    /// Get a node within a specific session (avoids global scan)
+    ///
+    /// This is more efficient than `get_node()` for stores that partition by session.
+    /// For stores without partitioning (like MemoryStore), this may be equivalent.
+    async fn get_node_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Option<Node>>;
+
+    /// Get multiple nodes within a specific session (avoids global scan)
+    ///
+    /// More efficient than `get_nodes_batch()` when all nodes belong to the same session.
+    async fn get_nodes_batch_in_session(
+        &self,
+        session_id: SessionId,
+        node_ids: Vec<NodeId>,
+    ) -> Result<Vec<Node>>;
+
+    /// Get children of a node within a specific session (avoids global scan)
+    ///
+    /// More efficient than `get_children()` for partitioned stores.
+    async fn get_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Vec<Node>>;
+
+    /// Count children of a node within a specific session
+    ///
+    /// More efficient than loading all children when you only need the count.
+    async fn count_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<usize>;
 }

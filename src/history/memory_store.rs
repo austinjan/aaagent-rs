@@ -442,6 +442,75 @@ impl TreeStore for MemoryStore {
 
         Ok(ids)
     }
+
+    async fn get_node_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Option<Node>> {
+        // For MemoryStore, we can directly look up by node_id
+        // and verify it belongs to the session
+        let nodes = self.nodes.read().await;
+        if let Some(node) = nodes.get(&node_id) {
+            if node.session_id == session_id {
+                return Ok(Some(node.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn get_nodes_batch_in_session(
+        &self,
+        session_id: SessionId,
+        node_ids: Vec<NodeId>,
+    ) -> Result<Vec<Node>> {
+        let nodes = self.nodes.read().await;
+        let mut result = Vec::new();
+
+        for id in node_ids {
+            if let Some(node) = nodes.get(&id) {
+                if node.session_id == session_id {
+                    result.push(node.clone());
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn get_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Vec<Node>> {
+        let nodes = self.nodes.read().await;
+
+        let mut children: Vec<Node> = nodes
+            .values()
+            .filter(|n| n.session_id == session_id && n.parent_id.as_ref() == Some(&node_id))
+            .cloned()
+            .collect();
+
+        // Sort by seq to maintain ordering
+        children.sort_by_key(|n| n.seq);
+
+        Ok(children)
+    }
+
+    async fn count_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<usize> {
+        let nodes = self.nodes.read().await;
+
+        let count = nodes
+            .values()
+            .filter(|n| n.session_id == session_id && n.parent_id.as_ref() == Some(&node_id))
+            .count();
+
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
