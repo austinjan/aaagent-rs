@@ -22,7 +22,8 @@
 
 ### 核心特性
 
-- ✅ **多層級技能發現**：支援專案、用戶、系統、管理員四個範圍
+- ✅ **兩階段注入與發現**：Discovery (Brief清單) -> Details (透過工具或指令按需載入)
+- ✅ **詳情讀取工具**：提供內建 `get_skill_details` 工具讓 LLM 主動探索技能內容
 - ✅ **優先級覆蓋**：同名技能按範圍優先級自動去重
 - ✅ **YAML + TOML 配置**：靈活的元資料定義
 - ✅ **快取機制**：提升載入效能
@@ -182,10 +183,11 @@ src/skills/
 
 **目標**：實現執行時注入和文檔生成
 
-- [ ] 步驟 5.1：實現非同步內容載入
-- [ ] 步驟 5.2：實現 XML 注入格式
-- [ ] 步驟 5.3：實現文檔渲染器
-- [ ] 步驟 5.4：編寫端到端測試
+- [ ] 步驟 5.1：實現 `render_skills_section` (簡短 Brief 清單)
+- [ ] 步驟 5.2：實現內建工具 `get_skill_details` 的執行邏輯
+- [ ] 步驟 5.3：實現 XML/Markdown 注入格式
+- [ ] 步驟 5.4：在 System Prompt 中加入技能使用規範 (Interaction Rules)
+- [ ] 步驟 5.5：編寫端到端測試
 
 ### Phase 6: 整合與優化（第 12-14 天）
 
@@ -869,10 +871,11 @@ Your skill instructions go here.
 use crate::skills::{error::Result, model::{SkillLoadOutcome, SkillMetadata}};
 use std::path::PathBuf;
 
-/// 使用者輸入類型（簡化版）
+/// 使用者輸入類型
 #[derive(Debug, Clone)]
 pub enum UserInput {
     Text { text: String },
+    /// 顯示激發（例如透過 Slash Command 或 UI 選擇）
     Skill { name: String, path: PathBuf },
 }
 
@@ -889,25 +892,23 @@ pub struct SkillInjection {
     pub content: String,
 }
 
-/// 構建技能注入
+/// 構建技能注入（通常用於顯示激發，直接讀取全文）
 pub async fn build_skill_injections(
     inputs: &[UserInput],
-    skills: Option<&SkillLoadOutcome>,
 ) -> Result<SkillInjections> {
     let mut injections = Vec::new();
 
     for input in inputs {
         if let UserInput::Skill { name, path } = input {
-            // 非同步讀取技能內容
-            let content = tokio::fs::read_to_string(path).await?;
-
-            // 格式化為 XML 注入格式
-            let formatted = format_skill_injection(name, path, &content);
+            let content = tokio::fs::read_to_string(path).await.map_err(|e| SkillError::FileRead {
+                path: path.clone(),
+                source: e,
+            })?;
 
             injections.push(SkillInjection {
                 name: name.clone(),
                 path: path.clone(),
-                content: formatted,
+                content,
             });
         }
     }
@@ -915,18 +916,32 @@ pub async fn build_skill_injections(
     Ok(SkillInjections { injections })
 }
 
-/// 格式化技能注入為 XML
-fn format_skill_injection(name: &str, path: &Path, content: &str) -> String {
-    format!(
-        r#"<skill>
-<name>{}</name>
-<path>{}</path>
-{}
-</skill>"#,
-        name,
-        path.display(),
-        content
-    )
+/// 專用的 get_skill_details 工具邏輯
+pub async fn get_skill_details(name: &str, outcome: &SkillLoadOutcome) -> Result<String> {
+    let skill = outcome.skills.iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| SkillError::InvalidName { 
+            name: name.to_string(), 
+            path: PathBuf::new(), 
+            reason: "Skill not found".to_string() 
+        })?;
+
+    let content = tokio::fs::read_to_string(&skill.path).await.map_err(|e| SkillError::FileRead {
+        path: skill.path.clone(),
+        source: e,
+    })?;
+    
+    // 移除 YAML frontmatter，只給 LLM 指令部分
+    Ok(strip_frontmatter(&content))
+}
+
+fn strip_frontmatter(content: &str) -> String {
+    if content.starts_with("---\n") {
+        if let Some(end) = content[4..].find("\n---\n") {
+            return content[4 + end + 5..].to_string();
+        }
+    }
+    content.to_string()
 }
 
 #[cfg(test)]
@@ -960,28 +975,26 @@ mod tests {
 ```rust
 use crate::skills::model::SkillLoadOutcome;
 
-/// 渲染技能清單為 Markdown 文檔
-pub fn render_skills_section(outcome: &SkillLoadOutcome) -> String {
+/// 渲染技能清單為 Markdown Brief (用於 System Prompt)
+pub fn render_skills_brief(outcome: &SkillLoadOutcome) -> String {
     if outcome.skills.is_empty() {
         return String::new();
     }
 
     let mut output = String::new();
-    output.push_str("# Available Skills\n\n");
-    output.push_str("The following skills are available in this context:\n\n");
+    output.push_str("## Available Skills\n");
+    output.push_str("The following skills are available. To use a skill, you MUST call `get_skill_details` to read its full instructions first.\n\n");
 
     for skill in &outcome.skills {
-        output.push_str(&format!("## {}\n\n", skill.name));
-
-        if let Some(short) = &skill.short_description {
-            output.push_str(&format!("**{}**\n\n", short));
-        }
-
-        output.push_str(&format!("{}\n\n", skill.description));
-        output.push_str(&format!("- **Path**: `{}`\n", skill.path.display()));
-        output.push_str(&format!("- **Scope**: {:?}\n\n", skill.scope));
-        output.push_str("---\n\n");
+        let desc = skill.short_description.as_ref().unwrap_or(&skill.description);
+        output.push_str(&format!("- **{}**: {} (path: `{}`)\n", 
+            skill.name, desc, skill.path.display()));
     }
+    
+    output.push_str("\n**Skill Usage Rules**:\n");
+    output.push_str("1. If a skill description matches the user's task, use it.\n");
+    output.push_str("2. Always read the detailed instructions via `get_skill_details` before execution.\n");
+    output.push_str("3. Only load the specific reference files if requested by the skill instructions.\n");
 
     output
 }
