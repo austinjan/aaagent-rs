@@ -62,6 +62,32 @@ def write_pids(frontend_pid, backend_pid):
         json.dump(data, f, indent=2)
 
 
+def is_process_running(pid):
+    """Check if a process is actually running (cross-platform)"""
+    if pid is None:
+        return False
+
+    try:
+        if sys.platform == "win32":
+            # Windows: use tasklist
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return str(pid) in result.stdout
+        else:
+            # Unix: try sending signal 0
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+    except Exception:
+        return False
+
+
 def kill_process(pid):
     """Kill a process by PID (cross-platform)"""
     if pid is None:
@@ -198,13 +224,36 @@ def cmd_start():
     """Start both frontend and backend"""
     print_msg("Starting development environment...")
 
-    # Check if already running
+    # Check if already running and auto-kill if needed
     pids = read_pids()
     if pids:
-        print_error("Development environment already running")
-        print_msg(f"Frontend PID: {pids['frontend']}, Backend PID: {pids['backend']}")
-        print_msg("Run 'python develop.py stop' first")
-        sys.exit(1)
+        frontend_running = is_process_running(pids["frontend"])
+        backend_running = is_process_running(pids["backend"])
+
+        if frontend_running or backend_running:
+            print_msg(
+                f"Found existing processes (Frontend PID: {pids['frontend']}, Backend PID: {pids['backend']})"
+            )
+            print_msg("Stopping existing processes...")
+
+            if frontend_running:
+                print_msg(f"Killing frontend (PID {pids['frontend']})...")
+                kill_process(pids["frontend"])
+
+            if backend_running:
+                print_msg(f"Killing backend (PID {pids['backend']})...")
+                kill_process(pids["backend"])
+
+            # Wait for processes to die
+            time.sleep(1)
+            print_success("Stopped existing processes")
+        else:
+            # Stale PID file, just clean it up
+            print_msg("Cleaning up stale PID file...")
+
+        # Remove PID file
+        if PID_FILE.exists():
+            PID_FILE.unlink()
 
     # Reset shutdown flag
     _shutdown_flag.clear()

@@ -89,6 +89,19 @@ export interface CheckpointData {
 // Agent Events (SSE streaming)
 // ============================================================================
 
+// Node data sent from backend in done event (matches backend JSON structure)
+export interface NodeData {
+  node_id: string;
+  parent_id: string | null;
+  session_id: string;
+  kind: string;
+  role: string | null;
+  content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  created_at: number;
+}
+
 export type AgentEvent =
   | { type: "content"; content: string }
   | { type: "thinking"; text: string }
@@ -107,6 +120,8 @@ export type AgentEvent =
       total_usage: TokenUsage;
       all_tool_calls: ToolCall[];
       rounds: number;
+      new_node_ids?: string[];
+      new_nodes?: NodeData[];
     };
 
 export interface TokenUsage {

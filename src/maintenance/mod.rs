@@ -62,12 +62,13 @@ pub fn start_maintenance_worker(config: MaintenanceConfig) {
 
             for (task_name, result) in results {
                 match result {
-                    Ok(count) => {
+                    Ok(count) if count > 0 => {
                         crate::logger::log(format!(
                             "[Maintenance] Task '{}' completed: {} items cleaned",
                             task_name, count
                         ));
                     }
+                    Ok(_) => {} // Skip logging if 0 items cleaned
                     Err(e) => {
                         crate::logger::log(format!(
                             "[Maintenance] Task '{}' failed: {}",

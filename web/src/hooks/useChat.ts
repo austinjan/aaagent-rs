@@ -1,12 +1,14 @@
 // Hook for managing chat sessions with backend integration
 // Now using Zustand store for state management
 
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   createSession,
   sendChatMessage,
   getSessionPath,
   getStreamUrl,
+  getSessionTree,
+  type TreeNodeData,
 } from "../services/api";
 import { useSSEStream } from "./useSSEStream";
 import {
@@ -15,9 +17,112 @@ import {
   selectError,
 } from "../store/useChatStore";
 import { useShallow } from "zustand/react/shallow";
-import { Role, NodeKind, type MessageData } from "../types/backend";
-import { messagesToTreeNodes } from "../components/tree/treeHelpers";
+import { Role, NodeKind, type MessageData, type NodeData } from "../types/backend";
 import type { TreeNode } from "../components/tree/treeLayout";
+
+// Note: removed messagesToTreeNodes import - now using backendNodesToTreeNodes for full tree
+
+// Convert backend NodeData (from done event) to MessageData for chat display
+function convertNodesToMessages(nodes: NodeData[]): MessageData[] {
+  const messages: MessageData[] = [];
+
+  for (const node of nodes) {
+    // Skip root/system nodes that aren't messages
+    if (node.kind === "Root") continue;
+
+    // Case 1: Assistant with tool_calls - create base message + separate tool call messages
+    if (node.role === "Assistant" && node.tool_calls && node.tool_calls.length > 0) {
+      // Add base assistant message (if it has content)
+      if (node.content) {
+        messages.push({
+          id: node.node_id,
+          role: Role.Assistant,
+          content: node.content,
+          timestamp: new Date(node.created_at * 1000),
+          isStreaming: false,
+        });
+      }
+
+      // Add separate message for each tool call
+      for (const toolCall of node.tool_calls) {
+        messages.push({
+          id: `${node.node_id}-tc-${toolCall.id}`,
+          role: Role.Assistant,
+          content: "",
+          timestamp: new Date(node.created_at * 1000),
+          tool_calls: [
+            {
+              id: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            },
+          ],
+          isStreaming: false,
+        });
+      }
+    }
+    // Case 2: Tool result message
+    else if (node.role === "Tool" && node.tool_call_id) {
+      messages.push({
+        id: node.node_id,
+        role: Role.Tool,
+        content: node.content,
+        timestamp: new Date(node.created_at * 1000),
+        tool_call_id: node.tool_call_id,
+        is_error: false,
+        isStreaming: false,
+      });
+    }
+    // Case 3: Regular message (User, System, or Assistant without tool calls)
+    else if (node.role) {
+      let role: Role = Role.User;
+      if (node.role === "Assistant") role = Role.Assistant;
+      else if (node.role === "System") role = Role.System;
+      else if (node.role === "Tool") role = Role.Tool;
+
+      messages.push({
+        id: node.node_id,
+        role,
+        content: node.content,
+        timestamp: new Date(node.created_at * 1000),
+        isStreaming: false,
+      });
+    }
+  }
+
+  return messages;
+}
+
+// Convert backend tree nodes to TreeNode format for visualization
+function backendNodesToTreeNodes(
+  nodes: TreeNodeData[],
+  _activeLeafId: string
+): TreeNode[] {
+  // Sort nodes by created_at to get sequence numbers
+  const sortedNodes = [...nodes].sort((a, b) => a.created_at - b.created_at);
+  const seqMap = new Map<string, number>();
+  sortedNodes.forEach((node, index) => {
+    seqMap.set(node.node_id, index);
+  });
+
+  // Convert to TreeNode format
+  return nodes.map((node) => {
+    // Map role from backend format to frontend format
+    let role: "user" | "assistant" | "system" | "tool" = "system";
+    if (node.role === "User") role = "user";
+    else if (node.role === "Assistant") role = "assistant";
+    else if (node.role === "Tool") role = "tool";
+
+    return {
+      id: node.node_id,
+      parent_id: node.parent_id,
+      role,
+      content: node.content || "",
+      seq: seqMap.get(node.node_id) || 0,
+      hasCheckpoint: node.kind === "Checkpoint",
+    };
+  });
+}
 
 export interface UseChatOptions {
   sessionName?: string;
@@ -33,6 +138,10 @@ export function useChat(options: UseChatOptions = {}) {
   const isLoading = useChatStore(selectIsLoading);
   const error = useChatStore(selectError);
 
+  // Full tree state for minimap (all nodes, not just active path)
+  const [fullTreeNodes, setFullTreeNodes] = useState<TreeNode[]>([]);
+  const [treeActiveLeafId, setTreeActiveLeafId] = useState<string>("");
+
   // SSE stream URL (stored in local state since it changes per message)
   const [streamUrl, setStreamUrl] = React.useState<string | null>(null);
   const messageSequence = React.useRef(0);
@@ -41,6 +150,7 @@ export function useChat(options: UseChatOptions = {}) {
     const base = baseId ? `${baseId}-` : "";
     return `${prefix}-${base}${Date.now()}-${messageSequence.current}`;
   }, []);
+
 
   // Handle SSE events
   const handleSSEEvent = useCallback(
@@ -174,6 +284,75 @@ export function useChat(options: UseChatOptions = {}) {
           }
           store.stopStreaming();
           store.setLoading(false);
+
+          // Convert new_nodes to messages and tree nodes, replacing streaming messages
+          const newNodes = event.new_nodes as NodeData[] | undefined;
+          if (newNodes && newNodes.length > 0) {
+            // Convert backend nodes to messages with proper IDs
+            const backendMessages = convertNodesToMessages(newNodes);
+
+            // Find where streaming messages start (after existing backend messages)
+            // Streaming messages have IDs like "user-xxx", "assistant-xxx", "tool-call-xxx", "tool-result-xxx"
+            const streamingPrefixes = ["user-", "assistant-", "tool-call-", "tool-result-", "error-"];
+            const currentMsgs = useChatStore.getState().messages;
+
+            // Find first streaming message index
+            let firstStreamingIdx = currentMsgs.findIndex(m =>
+              streamingPrefixes.some(prefix => m.id.startsWith(prefix))
+            );
+
+            if (firstStreamingIdx === -1) {
+              // No streaming messages found, append backend messages
+              firstStreamingIdx = currentMsgs.length;
+            }
+
+            // Keep messages before streaming, replace with backend messages
+            const preservedMessages = currentMsgs.slice(0, firstStreamingIdx);
+            const newMessages = [...preservedMessages, ...backendMessages];
+            store.setMessages(newMessages);
+
+            // Update tree nodes
+            const treeNodesFromBackend = newNodes.map((node) => {
+              let role: "user" | "assistant" | "system" | "tool" = "system";
+              if (node.role === "User") role = "user";
+              else if (node.role === "Assistant") role = "assistant";
+              else if (node.role === "Tool") role = "tool";
+
+              return {
+                id: node.node_id,
+                parent_id: node.parent_id,
+                role,
+                content: node.content || "",
+                seq: 0, // Will be recalculated
+                hasCheckpoint: node.kind === "Checkpoint",
+              };
+            });
+
+            // Merge new tree nodes with existing ones
+            setFullTreeNodes((prev) => {
+              const existingIds = new Set(prev.map((n) => n.id));
+              const toAdd = treeNodesFromBackend.filter((n) => !existingIds.has(n.id));
+
+              // Recalculate seq numbers
+              const merged = [...prev, ...toAdd];
+              merged.sort((a, b) => {
+                // Sort by finding nodes in newNodes to get created_at
+                const aNode = newNodes.find(n => n.node_id === a.id);
+                const bNode = newNodes.find(n => n.node_id === b.id);
+                const aTime = aNode?.created_at || 0;
+                const bTime = bNode?.created_at || 0;
+                return aTime - bTime;
+              });
+
+              return merged.map((node, idx) => ({ ...node, seq: idx }));
+            });
+
+            // Update active leaf to the last new node
+            const lastNode = newNodes[newNodes.length - 1];
+            if (lastNode) {
+              setTreeActiveLeafId(lastNode.node_id);
+            }
+          }
           break;
         }
 
@@ -218,6 +397,8 @@ export function useChat(options: UseChatOptions = {}) {
       const store = useChatStore.getState();
       store.setLoading(false);
       store.stopStreaming();
+      // Tree reload is now triggered from the done event handler
+      // only when there are new nodes (more efficient)
     },
     autoConnect: true, // Auto-connect when streamUrl is set
   });
@@ -404,6 +585,20 @@ export function useChat(options: UseChatOptions = {}) {
       );
       store.setMessages(loadedMessages);
       store.setLoading(false);
+
+      // Load full tree for minimap
+      try {
+        const treeResponse = await getSessionTree(loadSessionId);
+        const treeNodes = backendNodesToTreeNodes(
+          treeResponse.nodes,
+          treeResponse.active_leaf_id
+        );
+        setFullTreeNodes(treeNodes);
+        setTreeActiveLeafId(treeResponse.active_leaf_id);
+      } catch (treeErr) {
+        console.warn("Failed to load full tree:", treeErr);
+        // Don't fail the whole load, tree is optional
+      }
     } catch (err) {
       const store = useChatStore.getState();
       const errorObj =
@@ -418,19 +613,55 @@ export function useChat(options: UseChatOptions = {}) {
   const resetChat = useCallback(async () => {
     const store = useChatStore.getState();
     store.resetStore();
+    setFullTreeNodes([]);
+    setTreeActiveLeafId("");
     return handleInitializeSession();
   }, [handleInitializeSession]);
 
-  // Convert messages to tree nodes for visualization
-  const treeNodes = useMemo<TreeNode[]>(() => {
-    return messagesToTreeNodes(messages);
-  }, [messages]);
+  // Load full tree (call after branch operations)
+  const loadTree = useCallback(async (treeSessionId: string) => {
+    try {
+      const treeResponse = await getSessionTree(treeSessionId);
+      const nodes = backendNodesToTreeNodes(
+        treeResponse.nodes,
+        treeResponse.active_leaf_id
+      );
+      setFullTreeNodes(nodes);
+      setTreeActiveLeafId(treeResponse.active_leaf_id);
+    } catch (err) {
+      console.warn("Failed to load tree:", err);
+    }
+  }, []);
 
-  // Get active leaf ID (last message in the conversation)
+  // Use full tree nodes if available, otherwise fall back to messages-based tree
+  const treeNodes = useMemo<TreeNode[]>(() => {
+    if (fullTreeNodes.length > 0) {
+      return fullTreeNodes;
+    }
+    // Fallback: convert messages to linear tree (no branches visible)
+    return messages.map((msg, index) => {
+      let role: "user" | "assistant" | "system" | "tool" = "system";
+      if (msg.role === Role.User) role = "user";
+      else if (msg.role === Role.Assistant) role = "assistant";
+      else if (msg.role === Role.Tool) role = "tool";
+
+      return {
+        id: msg.id,
+        parent_id: index > 0 ? messages[index - 1].id : null,
+        role,
+        content: msg.content,
+        seq: index,
+        hasCheckpoint: false,
+      };
+    });
+  }, [fullTreeNodes, messages]);
+
+  // Get active leaf ID from tree or fallback to last message
   const activeLeafId = useMemo(() => {
+    if (treeActiveLeafId) return treeActiveLeafId;
     if (messages.length === 0) return "";
     return messages[messages.length - 1].id;
-  }, [messages]);
+  }, [treeActiveLeafId, messages]);
 
   return React.useMemo(
     () => ({
@@ -444,6 +675,7 @@ export function useChat(options: UseChatOptions = {}) {
       initializeSession: handleInitializeSession,
       sendMessage,
       loadHistory,
+      loadTree,
       resetChat,
     }),
     [
@@ -457,6 +689,7 @@ export function useChat(options: UseChatOptions = {}) {
       handleInitializeSession,
       sendMessage,
       loadHistory,
+      loadTree,
       resetChat,
     ],
   );

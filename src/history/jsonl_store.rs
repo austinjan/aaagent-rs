@@ -2,6 +2,9 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::RwLock;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -9,15 +12,15 @@ use super::node::{Node, NodeFlags, NodeId, SessionId};
 use super::session::Session;
 use super::storage::{NodeFilter, TreeStore};
 
-/// JSONL-based tree store (simple, no cache)
+/// JSONL-based tree store with lazy in-memory cache
 ///
 /// **File Format:**
 /// - `data/sessions/{session_id}.meta.json` - Session metadata
 /// - `data/sessions/{session_id}.nodes.jsonl` - Append-only node log (one JSON per line)
 ///
 /// **Design:**
-/// - No in-memory cache - always read from disk
-/// - Simple and reliable - cache coherence problems eliminated
+/// - Lazy in-memory cache per session to avoid full scans
+/// - Simple and reliable - cache can be rebuilt from disk on restart
 /// - Suitable for small to medium workloads (< 10k nodes per session)
 ///
 /// **Atomic Writes:**
@@ -26,19 +29,110 @@ use super::storage::{NodeFilter, TreeStore};
 #[derive(Clone)]
 pub struct JSONLStore {
     base_path: PathBuf,
+    cache: Arc<RwLock<HashMap<SessionId, Arc<RwLock<SessionCache>>>>>,
+    sync_every_writes: u64,
+    write_counter: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Default)]
+struct SessionCache {
+    nodes: HashMap<NodeId, Node>,
+    child_map: HashMap<Option<NodeId>, Vec<NodeId>>,
+    next_seq: HashMap<Option<NodeId>, u32>,
+}
+
+impl SessionCache {
+    fn from_nodes(nodes: HashMap<NodeId, Node>) -> Self {
+        let mut cache = Self {
+            nodes,
+            child_map: HashMap::new(),
+            next_seq: HashMap::new(),
+        };
+
+        let node_ids: Vec<NodeId> = cache.nodes.keys().cloned().collect();
+        for node_id in node_ids {
+            if let Some(node) = cache.nodes.get(&node_id) {
+                if let Some(parent_id) = node.parent_id.clone() {
+                    cache
+                        .child_map
+                        .entry(Some(parent_id.clone()))
+                        .or_default()
+                        .push(node_id.clone());
+
+                    let next_entry = cache.next_seq.entry(Some(parent_id)).or_insert(1);
+                    let candidate = node.seq + 1;
+                    if candidate > *next_entry {
+                        *next_entry = candidate;
+                    }
+                }
+            }
+        }
+
+        for child_ids in cache.child_map.values_mut() {
+            child_ids.sort_by_key(|id| cache.nodes.get(id).map(|n| n.seq).unwrap_or(0));
+        }
+
+        cache
+    }
+
+    fn insert_node(&mut self, node: Node) {
+        let node_id = node.node_id.clone();
+        let parent_id = node.parent_id.clone();
+        let seq = node.seq;
+
+        self.nodes.insert(node_id.clone(), node);
+
+        if let Some(parent_id) = parent_id {
+            let children = self.child_map.entry(Some(parent_id.clone())).or_default();
+            if !children.contains(&node_id) {
+                children.push(node_id.clone());
+            }
+
+            children.sort_by_key(|id| self.nodes.get(id).map(|n| n.seq).unwrap_or(0));
+
+            let next_entry = self.next_seq.entry(Some(parent_id)).or_insert(1);
+            let candidate = seq + 1;
+            if candidate > *next_entry {
+                *next_entry = candidate;
+            }
+        }
+    }
+
+    fn update_node(&mut self, node: Node) {
+        self.nodes.insert(node.node_id.clone(), node);
+    }
 }
 
 impl JSONLStore {
     /// Create a new JSONL store at the given path
     pub async fn new(base_path: PathBuf) -> Result<Self> {
+        Self::new_with_sync_every(base_path, 1).await
+    }
+
+    /// Create a new JSONL store with batched fsync
+    ///
+    /// `sync_every_writes` controls how often writes call `sync_all`.
+    /// Use 1 for durability on every write (default behavior).
+    pub async fn new_with_sync_every(
+        base_path: PathBuf,
+        sync_every_writes: u64,
+    ) -> Result<Self> {
         let sessions_dir = base_path.join("sessions");
         fs::create_dir_all(&sessions_dir).await.context(format!(
             "Failed to create sessions directory: {}",
             sessions_dir.display()
         ))?;
 
-        crate::logger::log("[JSONLStore] Initialized (no cache)".to_string());
-        Ok(Self { base_path })
+        crate::logger::log(format!(
+            "[JSONLStore] Initialized (lazy cache, fsync every {} writes)",
+            if sync_every_writes == 0 { 1 } else { sync_every_writes }
+        ));
+        Ok(Self {
+            base_path,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            sync_every_writes: if sync_every_writes == 0 { 1 } else { sync_every_writes },
+            write_counter: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     /// Get session directory
@@ -58,8 +152,8 @@ impl JSONLStore {
             .join(format!("{}.nodes.jsonl", session_id))
     }
 
-    /// Load all nodes for a session from JSONL file
-    async fn load_nodes(&self, session_id: &SessionId) -> Result<HashMap<NodeId, Node>> {
+    /// Load all nodes for a session from JSONL file (disk only)
+    async fn load_nodes_from_disk(&self, session_id: &SessionId) -> Result<HashMap<NodeId, Node>> {
         let jsonl_path = self.nodes_jsonl_path(session_id);
         let mut nodes = HashMap::new();
 
@@ -102,6 +196,70 @@ impl JSONLStore {
         Ok(nodes)
     }
 
+    async fn get_session_cache(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Arc<RwLock<SessionCache>>> {
+        if let Some(cache) = self.get_session_cache_if_loaded(session_id).await {
+            return Ok(cache);
+        }
+
+        let nodes = self.load_nodes_from_disk(session_id).await?;
+        let cache = Arc::new(RwLock::new(SessionCache::from_nodes(nodes)));
+
+        let mut caches = self.cache.write().await;
+        let entry = caches
+            .entry(session_id.clone())
+            .or_insert_with(|| cache.clone());
+        Ok(entry.clone())
+    }
+
+    async fn get_session_cache_if_loaded(
+        &self,
+        session_id: &SessionId,
+    ) -> Option<Arc<RwLock<SessionCache>>> {
+        let caches = self.cache.read().await;
+        caches.get(session_id).cloned()
+    }
+
+    async fn find_node_in_cache(
+        &self,
+        node_id: &NodeId,
+    ) -> Option<(SessionId, Node)> {
+        let cache_entries: Vec<(SessionId, Arc<RwLock<SessionCache>>)> = {
+            let caches = self.cache.read().await;
+            caches
+                .iter()
+                .map(|(session_id, cache)| (session_id.clone(), cache.clone()))
+                .collect()
+        };
+
+        for (session_id, cache) in cache_entries {
+            let cache_guard = cache.read().await;
+            if let Some(node) = cache_guard.nodes.get(node_id) {
+                return Some((session_id, node.clone()));
+            }
+        }
+
+        None
+    }
+
+    async fn update_cache_node(&self, session_id: &SessionId, node: Node) -> Result<()> {
+        if let Some(cache) = self.get_session_cache_if_loaded(session_id).await {
+            let mut cache_guard = cache.write().await;
+            cache_guard.update_node(node);
+        }
+        Ok(())
+    }
+
+    async fn insert_cache_node(&self, session_id: &SessionId, node: Node) -> Result<()> {
+        if let Some(cache) = self.get_session_cache_if_loaded(session_id).await {
+            let mut cache_guard = cache.write().await;
+            cache_guard.insert_node(node);
+        }
+        Ok(())
+    }
+
     /// Append a node to JSONL file (atomic)
     async fn append_node_to_jsonl(&self, node: &Node) -> Result<()> {
         let jsonl_path = self.nodes_jsonl_path(&node.session_id);
@@ -123,7 +281,10 @@ impl JSONLStore {
             .await
             .context("Failed to write node")?;
 
-        file.sync_all().await.context("Failed to fsync node file")?;
+        let write_count = self.write_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        if write_count % self.sync_every_writes == 0 {
+            file.sync_all().await.context("Failed to fsync node file")?;
+        }
 
         Ok(())
     }
@@ -209,10 +370,14 @@ impl JSONLStore {
 
     /// Find a node by ID across all sessions (slow, for debugging)
     async fn find_node_in_any_session(&self, node_id: &NodeId) -> Result<Option<Node>> {
+        if let Some((_session_id, node)) = self.find_node_in_cache(node_id).await {
+            return Ok(Some(node));
+        }
+
         let sessions = self.list_sessions_metadata().await?;
 
         for session in sessions {
-            let nodes = self.load_nodes(&session.session_id).await?;
+            let nodes = self.load_nodes_from_disk(&session.session_id).await?;
             if let Some(node) = nodes.get(node_id) {
                 return Ok(Some(node.clone()));
             }
@@ -226,9 +391,11 @@ impl JSONLStore {
 impl TreeStore for JSONLStore {
     async fn insert_node(&self, node: Node) -> Result<NodeId> {
         let node_id = node.node_id.clone();
+        let session_id = node.session_id.clone();
 
         // Simply append to JSONL file
         self.append_node_to_jsonl(&node).await?;
+        self.insert_cache_node(&session_id, node).await?;
 
         Ok(node_id)
     }
@@ -250,10 +417,12 @@ impl TreeStore for JSONLStore {
         // Create updated node
         let mut updated_node = node.clone();
         updated_node.flags = flags;
+        let session_id = updated_node.session_id.clone();
 
         // Append updated version (JSONL append-only)
         // When loading, the last version wins
         self.append_node_to_jsonl(&updated_node).await?;
+        self.update_cache_node(&session_id, updated_node).await?;
 
         Ok(())
     }
@@ -266,8 +435,10 @@ impl TreeStore for JSONLStore {
 
         let mut updated_node = node.clone();
         updated_node.pruned_at = Some(pruned_at);
+        let session_id = updated_node.session_id.clone();
 
         self.append_node_to_jsonl(&updated_node).await?;
+        self.update_cache_node(&session_id, updated_node).await?;
 
         Ok(())
     }
@@ -278,39 +449,58 @@ impl TreeStore for JSONLStore {
     }
 
     async fn get_children(&self, node_id: NodeId) -> Result<Vec<Node>> {
-        // Find which session this node belongs to
-        let node = self
-            .get_node(node_id.clone())
-            .await?
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+        let (session_id, _node) = match self.find_node_in_cache(&node_id).await {
+            Some((session_id, node)) => (session_id, node),
+            None => {
+                let node = self
+                    .get_node(node_id.clone())
+                    .await?
+                    .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+                (node.session_id.clone(), node)
+            }
+        };
 
-        let nodes = self.load_nodes(&node.session_id).await?;
-
-        let mut children: Vec<Node> = nodes
-            .values()
-            .filter(|n| n.parent_id.as_ref() == Some(&node_id))
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
+        let child_ids = cache_guard
+            .child_map
+            .get(&Some(node_id.clone()))
             .cloned()
-            .collect();
+            .unwrap_or_default();
+
+        let mut children = Vec::with_capacity(child_ids.len());
+        for child_id in child_ids {
+            if let Some(child) = cache_guard.nodes.get(&child_id) {
+                children.push(child.clone());
+            }
+        }
 
         children.sort_by_key(|n| n.seq);
         Ok(children)
     }
 
     async fn get_path_to_root_internal(&self, node_id: NodeId) -> Result<Vec<Node>> {
-        // Find session that contains this node
-        let node = self
-            .get_node(node_id.clone())
-            .await?
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+        let (session_id, _node) = match self.find_node_in_cache(&node_id).await {
+            Some((session_id, node)) => (session_id, node),
+            None => {
+                let node = self
+                    .get_node(node_id.clone())
+                    .await?
+                    .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+                (node.session_id.clone(), node)
+            }
+        };
 
-        let nodes = self.load_nodes(&node.session_id).await?;
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
 
         // Walk path to root
         let mut path = Vec::new();
         let mut current_id = Some(node_id);
 
         while let Some(id) = current_id {
-            let current_node = nodes
+            let current_node = cache_guard
+                .nodes
                 .get(&id)
                 .ok_or_else(|| anyhow!("Node {} not found in session", id))?
                 .clone();
@@ -323,9 +513,11 @@ impl TreeStore for JSONLStore {
     }
 
     async fn find_nodes(&self, session_id: SessionId, filter: NodeFilter) -> Result<Vec<Node>> {
-        let nodes = self.load_nodes(&session_id).await?;
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
 
-        let filtered: Vec<Node> = nodes
+        let filtered: Vec<Node> = cache_guard
+            .nodes
             .values()
             .filter(|n| {
                 // Apply filters
@@ -421,6 +613,11 @@ impl TreeStore for JSONLStore {
         let mut result = Vec::new();
 
         for id in node_ids {
+            if let Some((_session_id, node)) = self.find_node_in_cache(&id).await {
+                result.push(node);
+                continue;
+            }
+
             if let Some(node) = self.get_node(id).await? {
                 result.push(node);
             }
@@ -438,5 +635,71 @@ impl TreeStore for JSONLStore {
         }
 
         Ok(ids)
+    }
+
+    async fn get_node_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Option<Node>> {
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
+        Ok(cache_guard.nodes.get(&node_id).cloned())
+    }
+
+    async fn get_nodes_batch_in_session(
+        &self,
+        session_id: SessionId,
+        node_ids: Vec<NodeId>,
+    ) -> Result<Vec<Node>> {
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
+        let mut result = Vec::new();
+        for id in node_ids {
+            if let Some(node) = cache_guard.nodes.get(&id) {
+                result.push(node.clone());
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn get_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<Vec<Node>> {
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
+        let child_ids = cache_guard
+            .child_map
+            .get(&Some(node_id))
+            .cloned()
+            .unwrap_or_default();
+
+        let mut children = Vec::with_capacity(child_ids.len());
+        for child_id in child_ids {
+            if let Some(child) = cache_guard.nodes.get(&child_id) {
+                children.push(child.clone());
+            }
+        }
+
+        children.sort_by_key(|n| n.seq);
+        Ok(children)
+    }
+
+    async fn count_children_in_session(
+        &self,
+        session_id: SessionId,
+        node_id: NodeId,
+    ) -> Result<usize> {
+        let cache = self.get_session_cache(&session_id).await?;
+        let cache_guard = cache.read().await;
+        let count = cache_guard
+            .child_map
+            .get(&Some(node_id))
+            .map(|children| children.len())
+            .unwrap_or(0);
+        Ok(count)
     }
 }

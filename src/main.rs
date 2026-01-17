@@ -146,7 +146,6 @@ async fn main() {
             }
         }
         Commands::Serve { port } => {
-            aaagent::logger::log(format!("serve port={}", port));
             println!("Starting aaagent-rs chat UI server...");
 
             // Create router

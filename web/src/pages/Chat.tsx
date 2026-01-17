@@ -52,6 +52,7 @@ export function Chat() {
     initializeSession,
     sendMessage,
     loadHistory,
+    loadTree,
     resetChat,
   } = useChat(DEFAULT_OPTIONS);
 
@@ -169,34 +170,42 @@ export function Chat() {
     async (nodeId: string) => {
       if (!sessionId) return;
       try {
+        console.log("Switching branch to node:", nodeId);
         const response = await switchBranch(sessionId, nodeId);
         if (response.success) {
+          console.log("Branch switch success, new active leaf:", response.active_leaf_id);
           setActiveLeaf(response.active_leaf_id);
           // Reload the session to get the updated path
           await loadHistory(sessionId);
+          // Also explicitly reload tree to ensure minimap is updated
+          await loadTree(sessionId);
         }
       } catch (err) {
         console.error("Failed to switch branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory]
+    [sessionId, setActiveLeaf, loadHistory, loadTree]
   );
 
   const handleCreateBranch = useCallback(
     async (fromNodeId: string) => {
       if (!sessionId) return;
       try {
+        console.log("Creating branch from node:", fromNodeId);
         const response = await createBranch(sessionId, fromNodeId);
         if (response.success) {
+          console.log("Branch created, new leaf:", response.new_leaf_id);
           setActiveLeaf(response.new_leaf_id);
           // Reload to show the new branch point
           await loadHistory(sessionId);
+          // Also explicitly reload tree to ensure minimap is updated
+          await loadTree(sessionId);
         }
       } catch (err) {
         console.error("Failed to create branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory]
+    [sessionId, setActiveLeaf, loadHistory, loadTree]
   );
 
   // Keyboard shortcut: Ctrl+B to create branch from selected message

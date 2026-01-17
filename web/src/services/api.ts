@@ -186,6 +186,36 @@ export async function createBranch(
 }
 
 // ============================================================================
+// Tree Visualization API
+// ============================================================================
+
+export interface TreeNodeData {
+  node_id: string;
+  parent_id: string | null;
+  session_id: string;
+  kind: string;
+  role: string | null;
+  content: string | null;
+  tool_calls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  tool_call_id?: string;
+  created_at: number;
+  children_count: number;
+}
+
+export interface SessionTreeResponse {
+  session_id: string;
+  root_node_id: string;
+  active_leaf_id: string;
+  nodes: TreeNodeData[];
+  total_nodes: number;
+}
+
+export async function getSessionTree(sessionId: string): Promise<SessionTreeResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree`);
+  return handleResponse<SessionTreeResponse>(response);
+}
+
+// ============================================================================
 // SSE Stream URL Builder
 // ============================================================================
 

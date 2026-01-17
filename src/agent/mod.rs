@@ -31,6 +31,8 @@ pub enum AgentEvent {
         total_usage: TokenUsage,
         all_tool_calls: Vec<ToolCall>,
         rounds: usize,
+        /// Node IDs created during this chat turn (for incremental tree updates)
+        new_node_ids: Vec<String>,
     },
 }
 
@@ -154,8 +156,11 @@ impl<P: LLMProvider> Agent<P> {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
 
+        // Track new nodes created during this chat turn
+        let mut new_node_ids: Vec<String> = Vec::new();
+
         // 1. Add user message to tree
-        self.session
+        let user_node_id = self.session
             .append_message(Message {
                 role: Role::User,
                 content: user_message.to_string(),
@@ -163,6 +168,7 @@ impl<P: LLMProvider> Agent<P> {
                 tool_calls: None,
             })
             .await?;
+        new_node_ids.push(user_node_id);
 
         // 2. Extract linear context from tree
         let context = self.session.get_context().await?;
@@ -293,7 +299,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    self.session
+                    let assistant_node_id = self.session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -301,10 +307,11 @@ impl<P: LLMProvider> Agent<P> {
                             tool_calls: Some(tool_calls.clone()),
                         })
                         .await?;
+                    new_node_ids.push(assistant_node_id);
 
                     // Add tool results
                     for result in &results {
-                        self.session
+                        let tool_node_id = self.session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -312,6 +319,7 @@ impl<P: LLMProvider> Agent<P> {
                                 tool_calls: None,
                             })
                             .await?;
+                        new_node_ids.push(tool_node_id);
                     }
 
                     handle.submit_tool_results(results)?;
@@ -336,7 +344,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // 5. Add assistant response to tree
         if !response_content.is_empty() {
-            self.session
+            let final_node_id = self.session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -344,10 +352,12 @@ impl<P: LLMProvider> Agent<P> {
                     tool_calls: None,
                 })
                 .await?;
+            new_node_ids.push(final_node_id);
         }
 
         // 6. Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
+            new_node_ids.push(node_id.clone());
             on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
@@ -356,6 +366,7 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
+            new_node_ids,
         })
         .await;
 
@@ -394,11 +405,14 @@ impl<P: LLMProvider> Agent<P> {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
 
+        // Track new nodes created during this chat turn
+        let mut new_node_ids: Vec<String> = Vec::new();
+
         // Branch from the node
         self.session.branch_from(from_node_id.clone()).await?;
 
         // Append new message to the branch point
-        self.session
+        let user_node_id = self.session
             .append_message_to(
                 from_node_id,
                 Message {
@@ -409,6 +423,7 @@ impl<P: LLMProvider> Agent<P> {
                 },
             )
             .await?;
+        new_node_ids.push(user_node_id);
 
         // Extract context and call provider
         let context = self.session.get_context().await?;
@@ -537,7 +552,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    self.session
+                    let assistant_node_id = self.session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -545,10 +560,11 @@ impl<P: LLMProvider> Agent<P> {
                             tool_calls: Some(tool_calls.clone()),
                         })
                         .await?;
+                    new_node_ids.push(assistant_node_id);
 
                     // Add tool results
                     for result in &results {
-                        self.session
+                        let tool_node_id = self.session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -556,6 +572,7 @@ impl<P: LLMProvider> Agent<P> {
                                 tool_calls: None,
                             })
                             .await?;
+                        new_node_ids.push(tool_node_id);
                     }
 
                     handle.submit_tool_results(results)?;
@@ -580,7 +597,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // Add assistant response to tree
         if !response_content.is_empty() {
-            self.session
+            let final_node_id = self.session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -588,10 +605,12 @@ impl<P: LLMProvider> Agent<P> {
                     tool_calls: None,
                 })
                 .await?;
+            new_node_ids.push(final_node_id);
         }
 
         // Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
+            new_node_ids.push(node_id.clone());
             on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
@@ -600,6 +619,7 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
+            new_node_ids,
         })
         .await;
 

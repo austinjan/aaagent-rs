@@ -190,10 +190,11 @@ export function MessageCard({
           {onCreateBranch && role !== "tool" && role !== "system" && !isStreaming && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+              size="sm"
+              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
               onClick={(e) => {
                 e.stopPropagation();
+                console.log("Branch button clicked, id:", id);
                 onCreateBranch(id);
               }}
               title="Create branch (Ctrl+B)"

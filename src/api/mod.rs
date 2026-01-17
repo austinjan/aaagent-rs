@@ -43,8 +43,19 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Initialize JSONL store with lazy loading
-        crate::logger::log("[Startup] Initializing JSONL store...".to_string());
-        let store = Arc::new(crate::history::JSONLStore::new("data".into()).await?);
+        crate::logger::log(format!("[Startup] Initializing JSONL store (sync_every: {})", 
+            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())));
+        let sync_every_writes = std::env::var("AAAGENT_JSONL_SYNC_EVERY")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1);
+        let store = Arc::new(
+            crate::history::JSONLStore::new_with_sync_every(
+                "data".into(),
+                sync_every_writes,
+            )
+            .await?,
+        );
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver
@@ -56,10 +67,11 @@ impl AppState {
             let results = crate::maintenance::run_cleanup_tasks(&maintenance_config).await;
             for (task, result) in results {
                 match result {
-                    Ok(count) => crate::logger::log(format!(
+                    Ok(count) if count > 0 => crate::logger::log(format!(
                         "[Startup] Cleanup '{}': {} items removed",
                         task, count
                     )),
+                    Ok(_) => {} // Skip logging if 0 items removed
                     Err(e) => {
                         crate::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
                     }
@@ -146,6 +158,11 @@ fn api_routes() -> Router<AppState> {
         .route(
             "/sessions/:session_id/branch-from",
             post(sessions::create_branch),
+        )
+        // Tree visualization
+        .route(
+            "/sessions/:session_id/tree",
+            get(sessions::get_tree),
         )
 }
 
@@ -401,6 +418,7 @@ mod sessions {
                             },
                             all_tool_calls: vec![],
                             rounds: 0,
+                            new_node_ids: vec![],
                         })
                         .await;
 
@@ -718,6 +736,66 @@ mod sessions {
             error: None,
         }))
     }
+
+    /// Get all nodes in a session for tree visualization
+    pub async fn get_tree(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Get tree request for session: {}", session_id));
+
+        // Verify session exists
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get all nodes in session using find_nodes with default filter (matches all)
+        let filter = crate::history::storage::NodeFilter::default();
+        let all_nodes = state
+            .store
+            .find_nodes(session_id.clone(), filter)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Build children count map
+        let mut children_count: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for node in &all_nodes {
+            if let Some(ref parent_id) = node.parent_id {
+                *children_count.entry(parent_id.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Convert nodes to JSON-serializable format
+        let nodes_json: Vec<Value> = all_nodes
+            .iter()
+            .map(|node| {
+                json!({
+                    "node_id": node.node_id,
+                    "parent_id": node.parent_id,
+                    "session_id": node.session_id,
+                    "kind": format!("{:?}", node.kind),
+                    "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                    "content": &node.content,
+                    "tool_calls": &node.tool_calls,
+                    "tool_call_id": &node.tool_call_id,
+                    "created_at": node.created_at,
+                    "children_count": children_count.get(&node.node_id).unwrap_or(&0),
+                })
+            })
+            .collect();
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "root_node_id": session.root_node_id,
+            "active_leaf_id": session.active_leaf_id,
+            "nodes": nodes_json,
+            "total_nodes": all_nodes.len(),
+        })))
+    }
 }
 
 /// Run agent chat in background task
@@ -732,16 +810,10 @@ async fn run_agent_chat(
     use crate::agent::{Agent, AgentConfig};
     use crate::llm::{LoopDetectorConfig, ToolRegistry};
 
-    crate::logger::log("run_agent_chat: Using persistent store".to_string());
-
     // Attach the shared store to the session
     let mut session = session;
     session.set_store(store.clone());
 
-    crate::logger::log(format!(
-        "run_agent_chat: Creating provider (model: {})",
-        session_config.provider.model
-    ));
     // Create provider from resolved config
     let provider =
         provider_factory::create_provider(&session_config, config_manager.config_manager())?;
@@ -755,17 +827,18 @@ async fn run_agent_chat(
         }
     }));
 
-    crate::logger::log("run_agent_chat: Creating tool registry".to_string());
-    // Create tool registry
+    // Create agent with consolidated logging
     let registry = ToolRegistry::new().register_all_builtin();
-
-    crate::logger::log("run_agent_chat: Creating agent".to_string());
-    // Create agent
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
         max_rounds: session_config.agent.max_rounds as usize,
         loop_detection: Some(LoopDetectorConfig::default()),
     });
+
+    crate::logger::log(format!(
+        "run_agent_chat: Agent initialized (model: {}, max_rounds: {})",
+        session_config.provider.model, session_config.agent.max_rounds
+    ));
 
     crate::logger::log(format!(
         "run_agent_chat: Starting chat with message: {}",
@@ -802,10 +875,17 @@ mod sse {
         extract::{Path, State},
         response::sse::{Event, Sse},
     };
+    use crate::history::TreeStore;
     use futures::stream::Stream;
     use std::{convert::Infallible, time::Duration};
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
+
+    // Intermediate type for SSE events (after async processing)
+    struct SseEventData {
+        event_type: &'static str,
+        data: serde_json::Value,
+    }
 
     pub async fn stream(
         Path((_session_id, stream_id)): Path<(String, String)>,
@@ -825,59 +905,94 @@ mod sse {
 
         crate::logger::log(format!("SSE stream connection established: {}", stream_id));
 
-        // Convert mpsc::Receiver to Stream
-        let event_stream = ReceiverStream::new(receiver).map(|agent_event| {
-            // Convert AgentEvent to SSE Event
-            let (event_type, data) = match agent_event {
-                crate::agent::AgentEvent::Content(content) => {
-                    ("content", serde_json::json!({ "content": content }))
-                }
-                crate::agent::AgentEvent::Thinking(text) => {
-                    ("thinking", serde_json::json!({ "text": text }))
-                }
-                crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
-                    "tool_calls",
-                    serde_json::json!({ "tool_calls": tool_calls }),
-                ),
-                crate::agent::AgentEvent::ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    result,
-                    is_error,
-                } => (
-                    "tool_result",
-                    serde_json::json!({
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "result": result,
-                        "is_error": is_error
-                    }),
-                ),
-                crate::agent::AgentEvent::LoopDetected { detection } => (
-                    "loop_detected",
-                    serde_json::json!({ "detection": format!("{:?}", detection) }),
-                ),
-                crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
-                    "checkpoint",
-                    serde_json::json!({ "node_id": node_id, "strategy": strategy }),
-                ),
-                crate::agent::AgentEvent::Done {
-                    total_usage,
-                    all_tool_calls,
-                    rounds,
-                } => (
-                    "done",
-                    serde_json::json!({
-                        "total_usage": total_usage,
-                        "all_tool_calls": all_tool_calls,
-                        "rounds": rounds
-                    }),
-                ),
-            };
+        // Clone store for use in async closure
+        let store = state.store.clone();
 
-            // Create SSE event
-            Ok(Event::default().event(event_type).data(data.to_string()))
-        });
+        // Convert mpsc::Receiver to Stream, using `then` for async processing
+        let event_stream = ReceiverStream::new(receiver)
+            .then(move |agent_event| {
+                let store = store.clone();
+                async move {
+                    // Convert AgentEvent to SSE Event
+                    match agent_event {
+                        crate::agent::AgentEvent::Content(content) => SseEventData {
+                            event_type: "content",
+                            data: serde_json::json!({ "content": content }),
+                        },
+                        crate::agent::AgentEvent::Thinking(text) => SseEventData {
+                            event_type: "thinking",
+                            data: serde_json::json!({ "text": text }),
+                        },
+                        crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => SseEventData {
+                            event_type: "tool_calls",
+                            data: serde_json::json!({ "tool_calls": tool_calls }),
+                        },
+                        crate::agent::AgentEvent::ToolResult {
+                            tool_call_id,
+                            tool_name,
+                            result,
+                            is_error,
+                        } => SseEventData {
+                            event_type: "tool_result",
+                            data: serde_json::json!({
+                                "tool_call_id": tool_call_id,
+                                "tool_name": tool_name,
+                                "result": result,
+                                "is_error": is_error
+                            }),
+                        },
+                        crate::agent::AgentEvent::LoopDetected { detection } => SseEventData {
+                            event_type: "loop_detected",
+                            data: serde_json::json!({ "detection": format!("{:?}", detection) }),
+                        },
+                        crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => SseEventData {
+                            event_type: "checkpoint",
+                            data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
+                        },
+                        crate::agent::AgentEvent::Done {
+                            total_usage,
+                            all_tool_calls,
+                            rounds,
+                            new_node_ids,
+                        } => {
+                            // Fetch full node data for each new node ID
+                            let mut new_nodes = Vec::new();
+                            for node_id in &new_node_ids {
+                                if let Ok(Some(node)) = store.get_node(node_id.clone()).await {
+                                    new_nodes.push(serde_json::json!({
+                                        "node_id": node.node_id,
+                                        "parent_id": node.parent_id,
+                                        "session_id": node.session_id,
+                                        "kind": format!("{:?}", node.kind),
+                                        "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                                        "content": &node.content,
+                                        "tool_calls": &node.tool_calls,
+                                        "tool_call_id": &node.tool_call_id,
+                                        "created_at": node.created_at,
+                                    }));
+                                }
+                            }
+
+                            SseEventData {
+                                event_type: "done",
+                                data: serde_json::json!({
+                                    "total_usage": total_usage,
+                                    "all_tool_calls": all_tool_calls,
+                                    "rounds": rounds,
+                                    "new_node_ids": new_node_ids,
+                                    "new_nodes": new_nodes
+                                }),
+                            }
+                        }
+                    }
+                }
+            })
+            .map(|sse_data| {
+                // Create SSE event
+                Ok(Event::default()
+                    .event(sse_data.event_type)
+                    .data(sse_data.data.to_string()))
+            });
 
         // Create SSE response with keepalive
         Ok(Sse::new(event_stream).keep_alive(
