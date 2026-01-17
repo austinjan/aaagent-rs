@@ -45,12 +45,21 @@ export function Home() {
       <header className="border-b">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <h1 className="text-xl font-bold text-primary">aaagent-rs</h1>
-          <nav className="flex gap-4">
+          <nav className="flex gap-2 flex-wrap">
             <Link to="/">
               <Button variant="ghost" size="sm">Home</Button>
             </Link>
+            <Link to="/chat">
+              <Button variant="ghost" size="sm">Chat</Button>
+            </Link>
             <Link to="/testing">
               <Button variant="ghost" size="sm">Testing</Button>
+            </Link>
+            <Link to="/message-demo">
+              <Button variant="ghost" size="sm">Message Demo</Button>
+            </Link>
+            <Link to="/branch-demo">
+              <Button variant="ghost" size="sm">Branch Demo</Button>
             </Link>
           </nav>
         </div>
@@ -138,12 +147,43 @@ export function Home() {
           </div>
         </div>
 
+        {/* Pages Section */}
         <div className="mt-8">
-          <Link to="/testing">
-            <Button className="w-full md:w-auto">
-              Go to Component Testing →
-            </Button>
-          </Link>
+          <h2 className="text-lg font-semibold text-foreground mb-4">Pages</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Link to="/chat" className="block">
+              <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 hover:shadow-sm transition-all">
+                <h3 className="font-medium text-foreground">Chat</h3>
+                <p className="text-sm text-muted-foreground">
+                  Main chat interface with streaming support
+                </p>
+              </div>
+            </Link>
+            <Link to="/testing" className="block">
+              <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 hover:shadow-sm transition-all">
+                <h3 className="font-medium text-foreground">Testing</h3>
+                <p className="text-sm text-muted-foreground">
+                  Component testing and debugging
+                </p>
+              </div>
+            </Link>
+            <Link to="/message-demo" className="block">
+              <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 hover:shadow-sm transition-all">
+                <h3 className="font-medium text-foreground">Message Demo</h3>
+                <p className="text-sm text-muted-foreground">
+                  MessageCard component showcase
+                </p>
+              </div>
+            </Link>
+            <Link to="/branch-demo" className="block">
+              <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 hover:shadow-sm transition-all">
+                <h3 className="font-medium text-foreground">Branch Demo</h3>
+                <p className="text-sm text-muted-foreground">
+                  Branch navigation and checkpoint components
+                </p>
+              </div>
+            </Link>
+          </div>
         </div>
       </main>
     </div>

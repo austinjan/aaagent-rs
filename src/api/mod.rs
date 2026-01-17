@@ -138,6 +138,15 @@ fn api_routes() -> Router<AppState> {
             "/sessions/:session_id/config",
             axum::routing::patch(sessions::update_config),
         )
+        // Branch operations
+        .route(
+            "/sessions/:session_id/switch-branch",
+            post(sessions::switch_branch),
+        )
+        .route(
+            "/sessions/:session_id/branch-from",
+            post(sessions::create_branch),
+        )
 }
 
 // Health check endpoint
@@ -547,6 +556,167 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         Ok(Json(config))
+    }
+
+    // ===== Branch Operations =====
+
+    #[derive(Debug, Deserialize)]
+    pub struct SwitchBranchRequest {
+        node_id: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct SwitchBranchResponse {
+        success: bool,
+        active_leaf_id: String,
+        path: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    }
+
+    pub async fn switch_branch(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<SwitchBranchRequest>,
+    ) -> Result<Json<SwitchBranchResponse>, ApiError> {
+        crate::logger::log(format!(
+            "Switch branch request for session: {}, node: {}",
+            session_id, req.node_id
+        ));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Verify the node exists
+        let node = state
+            .store
+            .get_node(req.node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Node {} not found", req.node_id)))?;
+
+        // Verify the node belongs to this session
+        if node.session_id != session_id {
+            return Err(ApiError::BadRequest(
+                "Node does not belong to this session".to_string(),
+            ));
+        }
+
+        // Update the active leaf ID
+        session.active_leaf_id = req.node_id.clone();
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Get the path from the new active leaf to root
+        let path_nodes = state
+            .store
+            .get_path_to_root_internal(req.node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let path: Vec<String> = path_nodes.iter().rev().map(|n| n.node_id.clone()).collect();
+
+        crate::logger::log(format!(
+            "Branch switched successfully to: {}",
+            req.node_id
+        ));
+
+        Ok(Json(SwitchBranchResponse {
+            success: true,
+            active_leaf_id: req.node_id,
+            path,
+            error: None,
+        }))
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct CreateBranchRequest {
+        from_node_id: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct CreateBranchResponse {
+        success: bool,
+        new_leaf_id: String,
+        branch_point_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    }
+
+    pub async fn create_branch(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateBranchRequest>,
+    ) -> Result<Json<CreateBranchResponse>, ApiError> {
+        crate::logger::log(format!(
+            "Create branch request for session: {}, from node: {}",
+            session_id, req.from_node_id
+        ));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Verify the node exists
+        let node = state
+            .store
+            .get_node(req.from_node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Node {} not found", req.from_node_id)))?;
+
+        // Verify the node belongs to this session
+        if node.session_id != session_id {
+            return Err(ApiError::BadRequest(
+                "Node does not belong to this session".to_string(),
+            ));
+        }
+
+        // For creating a branch, we need to set the active_leaf to the parent of the from_node
+        // This allows the user to send a new message that becomes a sibling of from_node
+        let branch_point_id = node
+            .parent_id
+            .clone()
+            .ok_or_else(|| ApiError::BadRequest("Cannot branch from root node".to_string()))?;
+
+        // Update session to point to the branch point
+        // The next message sent will create a new sibling branch
+        session.active_leaf_id = branch_point_id.clone();
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Branch created from: {}, new active leaf: {}",
+            req.from_node_id, branch_point_id
+        ));
+
+        Ok(Json(CreateBranchResponse {
+            success: true,
+            new_leaf_id: branch_point_id.clone(),
+            branch_point_id,
+            error: None,
+        }))
     }
 }
 

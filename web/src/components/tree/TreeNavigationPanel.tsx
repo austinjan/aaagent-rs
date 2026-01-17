@@ -10,6 +10,7 @@ export interface TreeNavigationPanelProps {
   activeLeafId: string;
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
+  onBranchSwitch?: (nodeId: string) => void;
 }
 
 export function TreeNavigationPanel({
@@ -17,6 +18,7 @@ export function TreeNavigationPanel({
   activeLeafId,
   selectedNodeId,
   onNodeSelect,
+  onBranchSwitch,
 }: TreeNavigationPanelProps) {
   const [showInactive, setShowInactive] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,6 +68,11 @@ export function TreeNavigationPanel({
     }, 100);
   };
 
+  const handleNodeDoubleClick = (nodeId: string) => {
+    // Double-click switches the active branch to this node
+    onBranchSwitch?.(nodeId);
+  };
+
   return (
     <div className="tree-panel h-full flex flex-col bg-background border-r border-border">
       {/* Controls */}
@@ -83,6 +90,7 @@ export function TreeNavigationPanel({
           selectedNodeId={selectedNodeId}
           showInactive={showInactive}
           onNodeSelect={handleNodeSelect}
+          onNodeDoubleClick={handleNodeDoubleClick}
         />
       </div>
     </div>

@@ -16,6 +16,7 @@ export interface TreeVisualizationProps {
   selectedNodeId?: string | null;
   showInactive: boolean;
   onNodeSelect?: (nodeId: string) => void;
+  onNodeDoubleClick?: (nodeId: string) => void;
   config?: Partial<TreeConfig>;
 }
 
@@ -25,6 +26,7 @@ export function TreeVisualization({
   selectedNodeId,
   showInactive,
   onNodeSelect,
+  onNodeDoubleClick,
   config: configOverride,
 }: TreeVisualizationProps) {
   const config = { ...DEFAULT_CONFIG, ...configOverride };
@@ -114,6 +116,7 @@ export function TreeVisualization({
               node={node}
               isSelected={node.id === selectedNodeId}
               onSelect={onNodeSelect}
+              onDoubleClick={onNodeDoubleClick}
             />
           ))}
         </g>

@@ -7,6 +7,7 @@ export interface TreeNodeProps {
   node: PositionedNode;
   isSelected: boolean;
   onSelect?: (nodeId: string) => void;
+  onDoubleClick?: (nodeId: string) => void;
 }
 
 const NODE_COLORS: Record<string, string> = {
@@ -16,7 +17,12 @@ const NODE_COLORS: Record<string, string> = {
   tool: "hsl(var(--role-tool))",
 };
 
-export function TreeNode({ node, isSelected, onSelect }: TreeNodeProps) {
+export function TreeNode({
+  node,
+  isSelected,
+  onSelect,
+  onDoubleClick,
+}: TreeNodeProps) {
   const strokeColor = NODE_COLORS[node.role] || NODE_COLORS.system;
   const baseSize = node.hasCheckpoint
     ? DEFAULT_CONFIG.nodeSize + 4
@@ -26,6 +32,10 @@ export function TreeNode({ node, isSelected, onSelect }: TreeNodeProps) {
 
   const handleClick = () => {
     onSelect?.(node.id);
+  };
+
+  const handleDoubleClick = () => {
+    onDoubleClick?.(node.id);
   };
 
   // Center fill color based on status
@@ -44,6 +54,7 @@ export function TreeNode({ node, isSelected, onSelect }: TreeNodeProps) {
       className={`node-tree ${isSelected ? "selected" : ""} ${node.isActive ? "active" : "inactive"}`}
       transform={`translate(${node.x},${node.y})`}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
       style={{ cursor: "pointer", transition: "all 0.2s ease" }}
     >
       {/* Outer ring (hollow circle) */}

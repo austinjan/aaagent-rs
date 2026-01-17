@@ -136,6 +136,56 @@ export async function updateConfig(
 }
 
 // ============================================================================
+// Branch Operations
+// ============================================================================
+
+export interface SwitchBranchRequest {
+  node_id: string;
+}
+
+export interface SwitchBranchResponse {
+  success: boolean;
+  active_leaf_id: string;
+  path: string[];
+  error?: string;
+}
+
+export interface CreateBranchRequest {
+  from_node_id: string;
+}
+
+export interface CreateBranchResponse {
+  success: boolean;
+  new_leaf_id: string;
+  branch_point_id: string;
+  error?: string;
+}
+
+export async function switchBranch(
+  sessionId: string,
+  nodeId: string,
+): Promise<SwitchBranchResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/switch-branch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_id: nodeId } as SwitchBranchRequest),
+  });
+  return handleResponse<SwitchBranchResponse>(response);
+}
+
+export async function createBranch(
+  sessionId: string,
+  fromNodeId: string,
+): Promise<CreateBranchResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/branch-from`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from_node_id: fromNodeId } as CreateBranchRequest),
+  });
+  return handleResponse<CreateBranchResponse>(response);
+}
+
+// ============================================================================
 // SSE Stream URL Builder
 // ============================================================================
 

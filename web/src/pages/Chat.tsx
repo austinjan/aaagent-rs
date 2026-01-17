@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
@@ -10,7 +10,7 @@ import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
-import { getConfig } from "../services/api";
+import { getConfig, switchBranch, createBranch } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
@@ -162,8 +162,60 @@ export function Chat() {
     }
   };
 
-  // Convert messages to MessageCardProps
-  const messageCards = messages.map(toMessageCardProps);
+  // Branch operations
+  const setActiveLeaf = useChatStore((state) => state.setActiveLeaf);
+
+  const handleBranchSwitch = useCallback(
+    async (nodeId: string) => {
+      if (!sessionId) return;
+      try {
+        const response = await switchBranch(sessionId, nodeId);
+        if (response.success) {
+          setActiveLeaf(response.active_leaf_id);
+          // Reload the session to get the updated path
+          await loadHistory(sessionId);
+        }
+      } catch (err) {
+        console.error("Failed to switch branch:", err);
+      }
+    },
+    [sessionId, setActiveLeaf, loadHistory]
+  );
+
+  const handleCreateBranch = useCallback(
+    async (fromNodeId: string) => {
+      if (!sessionId) return;
+      try {
+        const response = await createBranch(sessionId, fromNodeId);
+        if (response.success) {
+          setActiveLeaf(response.new_leaf_id);
+          // Reload to show the new branch point
+          await loadHistory(sessionId);
+        }
+      } catch (err) {
+        console.error("Failed to create branch:", err);
+      }
+    },
+    [sessionId, setActiveLeaf, loadHistory]
+  );
+
+  // Keyboard shortcut: Ctrl+B to create branch from selected message
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "b" && selectedMessageId) {
+        e.preventDefault();
+        handleCreateBranch(selectedMessageId);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedMessageId, handleCreateBranch]);
+
+  // Convert messages to MessageCardProps with branch callback
+  const messageCards = messages.map((msg) => ({
+    ...toMessageCardProps(msg),
+    onCreateBranch: handleCreateBranch,
+  }));
 
   return (
     <div className="chat-page flex flex-col h-screen bg-background">
@@ -208,6 +260,7 @@ export function Chat() {
             activeLeafId={activeLeafId}
             selectedNodeId={selectedMessageId}
             onNodeSelect={handleSelectMessage}
+            onBranchSwitch={handleBranchSwitch}
           />
         </div>
 

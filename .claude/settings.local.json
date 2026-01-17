@@ -10,7 +10,11 @@
       "Bash(./target/debug/km:*)",
       "mcp__acp__Bash",
       "mcp__acp__Write",
-      "mcp__acp__Edit"
+      "mcp__acp__Edit",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(./node_modules/.bin/tsc:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }
