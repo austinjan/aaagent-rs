@@ -244,15 +244,10 @@ impl Session {
     pub async fn append_message_to(&mut self, parent_id: NodeId, msg: Message) -> Result<NodeId> {
         let store = self.store()?.clone();
 
-        // OPTIMIZATION: Count children without loading all nodes across all sessions
-        // We know parent_id is in this session, so use session-scoped query
-        let all_nodes = store
-            .find_nodes(self.session_id.clone(), Default::default())
+        // Use session-scoped API to count children efficiently
+        let children_count = store
+            .count_children_in_session(self.session_id.clone(), parent_id.clone())
             .await?;
-        let children_count = all_nodes
-            .iter()
-            .filter(|n| n.parent_id.as_ref() == Some(&parent_id))
-            .count();
         let seq = children_count as u32 + 1;
 
         // Create new node
@@ -300,27 +295,15 @@ impl Session {
     pub async fn get_context_from(&mut self, leaf_id: NodeId) -> Result<Vec<Message>> {
         let store = self.store()?;
 
-        // OPTIMIZATION: Load all nodes for this session once, instead of per-node lookups
-        // This changes O(N*M) to O(M) where M = nodes in this session
-        let all_nodes = store
-            .find_nodes(self.session_id.clone(), Default::default())
-            .await?;
-        let nodes_map: HashMap<NodeId, Node> = all_nodes
-            .into_iter()
-            .map(|n| (n.node_id.clone(), n))
-            .collect();
+        // Build path to root using session-scoped API
+        let path_nodes = store.get_path_to_root_internal(leaf_id.clone()).await?;
 
         let mut messages = Vec::new();
-        let mut current_id = Some(leaf_id);
 
         // Step 1: Extract messages from tree
-        while let Some(node_id) = current_id {
-            let node = nodes_map
-                .get(&node_id)
-                .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
+        for node in &path_nodes {
             // Check if this node has a checkpoint
-            if let Some(checkpoint) = self.checkpoints.get(&node_id) {
+            if let Some(checkpoint) = self.checkpoints.get(&node.node_id) {
                 // Stop at checkpoint, use summary
                 messages.push(Message {
                     role: Role::System,
@@ -339,8 +322,6 @@ impl Session {
                 }
                 NodeKind::Root => break,
             }
-
-            current_id = node.parent_id.clone();
         }
 
         messages.reverse();
@@ -378,20 +359,11 @@ impl Session {
     ) -> Result<()> {
         let store = self.store()?.clone();
 
-        // Verify node exists
-        let node = store
-            .get_node(node_id.clone())
+        // Verify node exists and belongs to this session using session-scoped API
+        let _node = store
+            .get_node_in_session(self.session_id.clone(), node_id.clone())
             .await?
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
-        // Verify node belongs to this session
-        if node.session_id != self.session_id {
-            return Err(anyhow!(
-                "Node {} does not belong to session {}",
-                node_id,
-                self.session_id
-            ));
-        }
+            .ok_or_else(|| anyhow!("Node {} not found in session {}", node_id, self.session_id))?;
 
         // Create checkpoint data
         let checkpoint = CheckpointData {
@@ -459,24 +431,15 @@ impl Session {
     async fn get_context_internal(&self) -> Result<Vec<Message>> {
         let store = self.store()?;
 
-        // OPTIMIZATION: Load all nodes once
-        let all_nodes = store
-            .find_nodes(self.session_id.clone(), Default::default())
+        // Build path to root using session-scoped API
+        let path_nodes = store
+            .get_path_to_root_internal(self.active_leaf_id.clone())
             .await?;
-        let nodes_map: HashMap<NodeId, Node> = all_nodes
-            .into_iter()
-            .map(|n| (n.node_id.clone(), n))
-            .collect();
 
         let mut messages = Vec::new();
-        let mut current_id = Some(self.active_leaf_id.clone());
 
-        while let Some(node_id) = current_id {
-            let node = nodes_map
-                .get(&node_id)
-                .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
-            if self.checkpoints.contains_key(&node_id) {
+        for node in &path_nodes {
+            if self.checkpoints.contains_key(&node.node_id) {
                 break;
             }
 
@@ -488,8 +451,6 @@ impl Session {
                 }
                 NodeKind::Root => break,
             }
-
-            current_id = node.parent_id.clone();
         }
 
         messages.reverse();
@@ -580,15 +541,17 @@ impl Session {
             .find_nodes(self.session_id.clone(), Default::default())
             .await?;
 
-        // Find nodes with no children
+        // Find nodes with no children using session-scoped API
         let mut leaf_ids = Vec::new();
         for node in &all_nodes {
             if node.kind == NodeKind::Root {
                 continue; // Root is never a leaf
             }
 
-            let children = store.get_children(node.node_id.clone()).await?;
-            if children.is_empty() {
+            let children_count = store
+                .count_children_in_session(self.session_id.clone(), node.node_id.clone())
+                .await?;
+            if children_count == 0 {
                 leaf_ids.push(node.node_id.clone());
             }
         }
@@ -639,19 +602,11 @@ impl Session {
     pub async fn branch_from(&mut self, node_id: NodeId) -> Result<NodeId> {
         let store = self.store()?.clone();
 
-        // Verify node exists and belongs to this session
-        let node = store
-            .get_node(node_id.clone())
+        // Verify node exists and belongs to this session using session-scoped API
+        let _node = store
+            .get_node_in_session(self.session_id.clone(), node_id.clone())
             .await?
-            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
-
-        if node.session_id != self.session_id {
-            return Err(anyhow!(
-                "Node {} does not belong to session {}",
-                node_id,
-                self.session_id
-            ));
-        }
+            .ok_or_else(|| anyhow!("Node {} not found in session {}", node_id, self.session_id))?;
 
         // The new branch point is just the node_id itself
         // No new node is created - caller should append_message to create branch content
@@ -680,27 +635,21 @@ impl Session {
     pub async fn switch_to(&mut self, leaf_id: NodeId) -> Result<()> {
         let store = self.store()?.clone();
 
-        // Verify leaf exists and belongs to this session
-        let leaf_node = store
-            .get_node(leaf_id.clone())
+        // Verify leaf exists and belongs to this session using session-scoped API
+        let _leaf_node = store
+            .get_node_in_session(self.session_id.clone(), leaf_id.clone())
             .await?
-            .ok_or_else(|| anyhow!("Node {} not found", leaf_id))?;
+            .ok_or_else(|| anyhow!("Node {} not found in session {}", leaf_id, self.session_id))?;
 
-        if leaf_node.session_id != self.session_id {
-            return Err(anyhow!(
-                "Node {} does not belong to session {}",
-                leaf_id,
-                self.session_id
-            ));
-        }
-
-        // Verify it's actually a leaf (no children)
-        let children = store.get_children(leaf_id.clone()).await?;
-        if !children.is_empty() {
+        // Verify it's actually a leaf (no children) using session-scoped API
+        let children_count = store
+            .count_children_in_session(self.session_id.clone(), leaf_id.clone())
+            .await?;
+        if children_count > 0 {
             return Err(anyhow!(
                 "Node {} is not a leaf (has {} children)",
                 leaf_id,
-                children.len()
+                children_count
             ));
         }
 

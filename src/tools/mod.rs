@@ -4,10 +4,12 @@
 
 pub mod editor_edit;
 pub mod output_handler;
+pub mod read;
 pub mod shell;
 
 pub use editor_edit::EditorEditTool;
 pub use output_handler::{handle_large_output, DEFAULT_OUTPUT_THRESHOLD};
+pub use read::ReadTool;
 pub use shell::ShellTool;
 
 use crate::llm::ToolCall;
@@ -56,6 +58,6 @@ pub fn all_tools() -> Vec<Arc<dyn ToolProvider>> {
     vec![
         Arc::new(ShellTool::new()),
         Arc::new(EditorEditTool::new()),
-        // Add new built-in tools here
+        Arc::new(ReadTool::new()),
     ]
 }

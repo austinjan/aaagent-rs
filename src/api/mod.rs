@@ -43,8 +43,19 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Initialize JSONL store with lazy loading
-        crate::logger::log("[Startup] Initializing JSONL store...".to_string());
-        let store = Arc::new(crate::history::JSONLStore::new("data".into()).await?);
+        crate::logger::log(format!("[Startup] Initializing JSONL store (sync_every: {})", 
+            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())));
+        let sync_every_writes = std::env::var("AAAGENT_JSONL_SYNC_EVERY")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1);
+        let store = Arc::new(
+            crate::history::JSONLStore::new_with_sync_every(
+                "data".into(),
+                sync_every_writes,
+            )
+            .await?,
+        );
 
         // Run startup cleanup in background
         let maintenance_config = config_resolver
@@ -56,10 +67,11 @@ impl AppState {
             let results = crate::maintenance::run_cleanup_tasks(&maintenance_config).await;
             for (task, result) in results {
                 match result {
-                    Ok(count) => crate::logger::log(format!(
+                    Ok(count) if count > 0 => crate::logger::log(format!(
                         "[Startup] Cleanup '{}': {} items removed",
                         task, count
                     )),
+                    Ok(_) => {} // Skip logging if 0 items removed
                     Err(e) => {
                         crate::logger::log(format!("[Startup] Cleanup '{}' failed: {}", task, e))
                     }
@@ -562,16 +574,10 @@ async fn run_agent_chat(
     use crate::agent::{Agent, AgentConfig};
     use crate::llm::{LoopDetectorConfig, ToolRegistry};
 
-    crate::logger::log("run_agent_chat: Using persistent store".to_string());
-
     // Attach the shared store to the session
     let mut session = session;
     session.set_store(store.clone());
 
-    crate::logger::log(format!(
-        "run_agent_chat: Creating provider (model: {})",
-        session_config.provider.model
-    ));
     // Create provider from resolved config
     let provider =
         provider_factory::create_provider(&session_config, config_manager.config_manager())?;
@@ -585,17 +591,18 @@ async fn run_agent_chat(
         }
     }));
 
-    crate::logger::log("run_agent_chat: Creating tool registry".to_string());
-    // Create tool registry
+    // Create agent with consolidated logging
     let registry = ToolRegistry::new().register_all_builtin();
-
-    crate::logger::log("run_agent_chat: Creating agent".to_string());
-    // Create agent
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
         max_rounds: session_config.agent.max_rounds as usize,
         loop_detection: Some(LoopDetectorConfig::default()),
     });
+
+    crate::logger::log(format!(
+        "run_agent_chat: Agent initialized (model: {}, max_rounds: {})",
+        session_config.provider.model, session_config.agent.max_rounds
+    ));
 
     crate::logger::log(format!(
         "run_agent_chat: Starting chat with message: {}",
