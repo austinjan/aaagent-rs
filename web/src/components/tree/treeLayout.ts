@@ -163,14 +163,19 @@ export function layoutTree(
 }
 
 /**
- * Collapse inactive branches deeper than threshold
+ * Collapse inactive branches
+ * When hideAll is true, collapse all inactive nodes
+ * Otherwise, only collapse inactive nodes deeper than threshold
  */
 export function collapseInactiveBranches(
   positioned: PositionedNode[],
   threshold: number,
+  hideAll: boolean = false,
 ): PositionedNode[] {
   return positioned.map((node) => {
-    if (!node.isActive && node.depth >= threshold) {
+    // When hideAll is true, collapse all inactive nodes
+    // Otherwise, only collapse inactive nodes at depth >= threshold
+    if (!node.isActive && (hideAll || node.depth >= threshold)) {
       return { ...node, isCollapsed: true };
     }
     return node;

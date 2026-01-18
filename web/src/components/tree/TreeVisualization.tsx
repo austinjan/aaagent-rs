@@ -38,8 +38,9 @@ export function TreeVisualization({
     let layout = layoutTree(nodes, activeLeafId, config);
 
     // Collapse inactive branches if showInactive is false
+    // Pass hideAll=true to hide all inactive nodes, not just deep ones
     if (!showInactive) {
-      layout = collapseInactiveBranches(layout, config.collapseThreshold);
+      layout = collapseInactiveBranches(layout, config.collapseThreshold, true);
     }
 
     return layout;
