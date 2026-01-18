@@ -9,13 +9,10 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown, GitBranch } from "lucide-react";
+import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { Button } from "../ui/button";
-import {
-  CheckpointBadge,
-  type CheckpointStats,
-} from "../branch/CheckpointBadge";
+import { CheckpointBadge } from "../branch/CheckpointBadge";
 import { cn } from "@/lib/utils";
 
 export interface ToolCall {
@@ -26,7 +23,12 @@ export interface ToolCall {
 
 export interface CheckpointData {
   summary: string;
-  stats?: CheckpointStats;
+  stats?: {
+    nodesCovered: number;
+    originalTokens: number;
+    compressedTokens: number;
+    compressionRatio: number;
+  };
 }
 
 export interface MessageCardProps {
@@ -55,6 +57,10 @@ export interface MessageCardProps {
   checkpoint?: CheckpointData;
   checkpointExpanded?: boolean;
   onCheckpointToggle?: (expanded: boolean) => void;
+
+  // Checkpoint creation
+  canCreateCheckpoint?: boolean;
+  onCreateCheckpoint?: (nodeId: string) => void;
 }
 
 export function MessageCard({
@@ -74,6 +80,8 @@ export function MessageCard({
   checkpoint,
   checkpointExpanded,
   onCheckpointToggle,
+  canCreateCheckpoint = false,
+  onCreateCheckpoint,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -185,6 +193,21 @@ export function MessageCard({
             <span className="text-xs text-muted-foreground">
               {formatTime(timestamp)}
             </span>
+          )}
+          {/* Checkpoint button - only for assistant messages, not during streaming */}
+          {canCreateCheckpoint && onCreateCheckpoint && role === "assistant" && !isStreaming && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateCheckpoint(id);
+              }}
+              title="Create checkpoint"
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+            </Button>
           )}
           {/* Branch button - only for user/assistant messages, hidden during streaming */}
           {onCreateBranch && role !== "tool" && role !== "system" && !isStreaming && (

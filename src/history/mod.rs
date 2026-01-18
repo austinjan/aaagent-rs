@@ -18,8 +18,8 @@ pub use node::{
     ArchivedToolResult, CheckpointData, CheckpointStats, Node, NodeFlags, NodeId, NodeKind,
 };
 pub use session::{
-    BranchInfo, CheckpointConfig, ContextOptimizationConfig, Session, SessionConfig, SessionId,
-    SessionStats,
+    BranchInfo, CheckpointConfig, ContextOptimizationConfig, ContextStringStrategy, Session,
+    SessionConfig, SessionId, SessionStats,
 };
 pub use storage::{NodeFilter, TreeStore};
 pub use validator::MessageValidator;

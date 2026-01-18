@@ -119,7 +119,9 @@ function backendNodesToTreeNodes(
       role,
       content: node.content || "",
       seq: seqMap.get(node.node_id) || 0,
-      hasCheckpoint: node.kind === "Checkpoint",
+      hasCheckpoint: node.has_checkpoint === true,
+      inContext: node.in_context === true,
+      checkpointSummary: node.checkpoint?.summary,
     };
   });
 }
@@ -520,6 +522,20 @@ export function useChat(options: UseChatOptions = {}) {
       for (const node of pathResponse.nodes) {
         if (node.kind !== NodeKind.Message) continue;
 
+        // Extract checkpoint data if present
+        const checkpointInfo = node.has_checkpoint && node.checkpoint ? {
+          hasCheckpoint: true,
+          checkpoint: {
+            summary: node.checkpoint.summary,
+            stats: node.checkpoint.stats ? {
+              nodesCovered: node.checkpoint.stats.nodes_covered,
+              originalTokens: node.checkpoint.stats.total_tokens,
+              compressedTokens: node.checkpoint.stats.summary_tokens,
+              compressionRatio: node.checkpoint.stats.compression_ratio,
+            } : undefined,
+          },
+        } : {};
+
         // Case 1: Assistant message with tool_calls - create base message + separate tool call messages
         if (
           node.role === Role.Assistant &&
@@ -534,6 +550,7 @@ export function useChat(options: UseChatOptions = {}) {
               content: node.content,
               timestamp: new Date(node.created_at * 1000),
               isStreaming: false,
+              ...checkpointInfo,
             });
           }
 
@@ -565,6 +582,7 @@ export function useChat(options: UseChatOptions = {}) {
             tool_call_id: node.tool_call_id,
             is_error: false, // Could check content for error markers
             isStreaming: false,
+            ...checkpointInfo,
           });
         }
         // Case 3: Regular message (User, System, or Assistant without tool calls)
@@ -575,6 +593,7 @@ export function useChat(options: UseChatOptions = {}) {
             content: node.content,
             timestamp: new Date(node.created_at * 1000),
             isStreaming: false,
+            ...checkpointInfo,
           });
         }
       }

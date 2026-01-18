@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{
         header::{HeaderName, AUTHORIZATION},
         StatusCode,
@@ -142,6 +142,14 @@ fn api_routes() -> Router<AppState> {
             get(sessions::get_checkpoints),
         )
         .route(
+            "/sessions/:session_id/checkpoints",
+            post(sessions::create_checkpoint),
+        )
+        .route(
+            "/sessions/:session_id/checkpoints/preview",
+            post(sessions::preview_checkpoint),
+        )
+        .route(
             "/sessions/:session_id/system-prompt",
             get(sessions::get_system_prompt),
         )
@@ -163,6 +171,11 @@ fn api_routes() -> Router<AppState> {
         .route(
             "/sessions/:session_id/tree",
             get(sessions::get_tree),
+        )
+        // Context as markdown string
+        .route(
+            "/sessions/:session_id/context-string",
+            get(sessions::get_context_string),
         )
 }
 
@@ -462,7 +475,43 @@ mod sessions {
         let mut nodes = nodes;
         nodes.reverse();
 
-        Ok(Json(json!({ "nodes": nodes })))
+        // Convert nodes to JSON with checkpoint information
+        let nodes_json: Vec<Value> = nodes
+            .iter()
+            .map(|node| {
+                let has_checkpoint = session.checkpoints.contains_key(&node.node_id);
+                let checkpoint_data = session.checkpoints.get(&node.node_id);
+
+                json!({
+                    "node_id": node.node_id,
+                    "session_id": node.session_id,
+                    "parent_id": node.parent_id,
+                    "kind": format!("{:?}", node.kind),
+                    "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                    "content_type": format!("{:?}", node.content_type),
+                    "content": node.content,
+                    "created_at": node.created_at,
+                    "seq": node.seq,
+                    "flags": node.flags,
+                    "tool_call_id": node.tool_call_id,
+                    "tool_calls": node.tool_calls,
+                    "has_checkpoint": has_checkpoint,
+                    "checkpoint": checkpoint_data.map(|cp| json!({
+                        "summary": &cp.summary,
+                        "strategy": &cp.strategy,
+                        "created_at": cp.created_at,
+                        "stats": cp.stats.as_ref().map(|s| json!({
+                            "nodes_covered": s.nodes_covered,
+                            "total_tokens": s.total_tokens,
+                            "summary_tokens": s.summary_tokens,
+                            "compression_ratio": s.compression_ratio,
+                        })),
+                    })),
+                })
+            })
+            .collect();
+
+        Ok(Json(json!({ "nodes": nodes_json })))
     }
 
     pub async fn get_metadata(
@@ -496,6 +545,238 @@ mod sessions {
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         Ok(Json(json!({ "checkpoints": session.checkpoints })))
+    }
+
+    /// Query parameters for context-string endpoint
+    #[derive(Debug, Deserialize)]
+    pub struct ContextStringQuery {
+        /// Leaf node ID (defaults to active_leaf_id if not provided)
+        pub leaf_id: Option<String>,
+        /// Strategy: "full", "default", or "aggressive"
+        #[serde(default)]
+        pub strategy: ContextStringStrategyParam,
+    }
+
+    /// Strategy parameter for context-string endpoint
+    #[derive(Debug, Clone, Copy, Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ContextStringStrategyParam {
+        Full,
+        #[default]
+        Default,
+        Aggressive,
+    }
+
+    impl From<ContextStringStrategyParam> for crate::history::ContextStringStrategy {
+        fn from(param: ContextStringStrategyParam) -> Self {
+            match param {
+                ContextStringStrategyParam::Full => crate::history::ContextStringStrategy::Full,
+                ContextStringStrategyParam::Default => crate::history::ContextStringStrategy::Default,
+                ContextStringStrategyParam::Aggressive => crate::history::ContextStringStrategy::Aggressive,
+            }
+        }
+    }
+
+    /// Get context as a markdown-formatted string
+    pub async fn get_context_string(
+        Path(session_id): Path<String>,
+        Query(query): Query<ContextStringQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        // Load session
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Use provided leaf_id or default to active_leaf_id
+        let leaf_id = query.leaf_id.unwrap_or_else(|| session.active_leaf_id.clone());
+
+        // Convert strategy
+        let strategy: crate::history::ContextStringStrategy = query.strategy.into();
+
+        // Get context string
+        let content = session
+            .get_context_string_from(leaf_id.clone(), strategy)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "leaf_id": leaf_id,
+            "strategy": format!("{:?}", query.strategy).to_lowercase(),
+            "content": content
+        })))
+    }
+
+    /// Request body for creating a checkpoint
+    #[derive(Debug, Deserialize)]
+    pub struct CreateCheckpointRequest {
+        /// Node ID where the checkpoint will be created
+        pub target_node_id: String,
+        /// Compression strategy: "balanced", "aggressive", or "custom"
+        #[serde(default)]
+        pub strategy: crate::agent::CompressionStrategy,
+        /// Custom prompt (only used when strategy is "custom")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub custom_prompt: Option<String>,
+        /// Use main provider instead of quick provider for higher quality
+        #[serde(default)]
+        pub use_main_provider: bool,
+    }
+
+    /// Create a checkpoint at a specific node
+    pub async fn create_checkpoint(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateCheckpointRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!(
+            "Create checkpoint request for session: {}, node: {}, strategy: {:?}",
+            session_id, req.target_node_id, req.strategy
+        ));
+
+        // Load session
+        let stored_session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get session config
+        let session_config = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
+
+        // Create provider
+        let provider = provider_factory::create_provider(
+            &session_config,
+            state.config_resolver.config_manager(),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Create agent
+        let mut session = stored_session;
+        session.set_store(state.store.clone());
+
+        let registry = crate::llm::ToolRegistry::new();
+        let mut agent = crate::agent::Agent::new(session, provider, registry);
+
+        // Optionally set quick provider
+        if let Ok(quick_provider) = provider_factory::create_quick_provider(
+            state.config_resolver.config_manager(),
+        ) {
+            agent.set_quick_provider(quick_provider);
+        }
+
+        // Create checkpoint options
+        let options = crate::agent::CheckpointOptions {
+            strategy: req.strategy,
+            custom_prompt: req.custom_prompt,
+            use_main_provider: req.use_main_provider,
+        };
+
+        // Create checkpoint
+        let result = agent
+            .create_checkpoint(req.target_node_id, options)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Checkpoint created: {} (compression ratio: {:.1}%)",
+            result.node_id,
+            result.stats.compression_ratio * 100.0
+        ));
+
+        Ok(Json(json!({
+            "checkpoint_id": result.node_id,
+            "summary": result.summary,
+            "stats": {
+                "nodes_covered": result.stats.nodes_covered,
+                "original_tokens": result.stats.total_tokens,
+                "summary_tokens": result.stats.summary_tokens,
+                "compression_ratio": result.stats.compression_ratio,
+            }
+        })))
+    }
+
+    /// Preview a checkpoint without creating it
+    pub async fn preview_checkpoint(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateCheckpointRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!(
+            "Preview checkpoint request for session: {}, node: {}, strategy: {:?}",
+            session_id, req.target_node_id, req.strategy
+        ));
+
+        // Load session
+        let stored_session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get session config
+        let session_config = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
+
+        // Create provider
+        let provider = provider_factory::create_provider(
+            &session_config,
+            state.config_resolver.config_manager(),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Create agent
+        let mut session = stored_session;
+        session.set_store(state.store.clone());
+
+        let registry = crate::llm::ToolRegistry::new();
+        let mut agent = crate::agent::Agent::new(session, provider, registry);
+
+        // Optionally set quick provider
+        if let Ok(quick_provider) = provider_factory::create_quick_provider(
+            state.config_resolver.config_manager(),
+        ) {
+            agent.set_quick_provider(quick_provider);
+        }
+
+        // Create checkpoint options
+        let options = crate::agent::CheckpointOptions {
+            strategy: req.strategy,
+            custom_prompt: req.custom_prompt,
+            use_main_provider: req.use_main_provider,
+        };
+
+        // Preview checkpoint (doesn't save)
+        let result = agent
+            .preview_checkpoint(req.target_node_id, options)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        Ok(Json(json!({
+            "node_id": result.node_id,
+            "summary": result.summary,
+            "stats": {
+                "nodes_covered": result.stats.nodes_covered,
+                "original_tokens": result.stats.total_tokens,
+                "estimated_summary_tokens": result.stats.summary_tokens,
+                "estimated_compression_ratio": result.stats.compression_ratio,
+            }
+        })))
     }
 
     pub async fn get_system_prompt(
@@ -769,10 +1050,52 @@ mod sessions {
             }
         }
 
+        // Build node map for path traversal
+        let node_map: std::collections::HashMap<String, &crate::history::Node> = all_nodes
+            .iter()
+            .map(|n| (n.node_id.clone(), n))
+            .collect();
+
+        // Calculate context range: traverse from active_leaf to checkpoint or root
+        let mut context_node_ids: Vec<String> = Vec::new();
+        let mut context_boundary_id: Option<String> = None;
+        let mut current_id = Some(session.active_leaf_id.clone());
+
+        while let Some(id) = current_id {
+            context_node_ids.push(id.clone());
+
+            // Check if this node has a checkpoint (context boundary)
+            if session.checkpoints.contains_key(&id) {
+                context_boundary_id = Some(id.clone());
+                break;
+            }
+
+            // Move to parent
+            if let Some(node) = node_map.get(&id) {
+                current_id = node.parent_id.clone();
+                // Stop at root
+                if node.parent_id.is_none() {
+                    context_boundary_id = Some(id);
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let context_node_set: std::collections::HashSet<String> =
+            context_node_ids.iter().cloned().collect();
+
         // Convert nodes to JSON-serializable format
         let nodes_json: Vec<Value> = all_nodes
             .iter()
             .map(|node| {
+                // Check if this node has a checkpoint
+                let has_checkpoint = session.checkpoints.contains_key(&node.node_id);
+                let checkpoint_data = session.checkpoints.get(&node.node_id);
+                // Check if this node is in the current context range
+                let in_context = context_node_set.contains(&node.node_id);
+
                 json!({
                     "node_id": node.node_id,
                     "parent_id": node.parent_id,
@@ -784,6 +1107,18 @@ mod sessions {
                     "tool_call_id": &node.tool_call_id,
                     "created_at": node.created_at,
                     "children_count": children_count.get(&node.node_id).unwrap_or(&0),
+                    "has_checkpoint": has_checkpoint,
+                    "in_context": in_context,
+                    "checkpoint": checkpoint_data.map(|cp| json!({
+                        "summary": &cp.summary,
+                        "strategy": &cp.strategy,
+                        "stats": cp.stats.as_ref().map(|s| json!({
+                            "nodes_covered": s.nodes_covered,
+                            "total_tokens": s.total_tokens,
+                            "summary_tokens": s.summary_tokens,
+                            "compression_ratio": s.compression_ratio,
+                        })),
+                    })),
                 })
             })
             .collect();
@@ -792,6 +1127,8 @@ mod sessions {
             "session_id": session_id,
             "root_node_id": session.root_node_id,
             "active_leaf_id": session.active_leaf_id,
+            "context_boundary_id": context_boundary_id,
+            "context_node_ids": context_node_ids,
             "nodes": nodes_json,
             "total_nodes": all_nodes.len(),
         })))

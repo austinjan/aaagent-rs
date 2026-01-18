@@ -5,14 +5,26 @@ use std::sync::Arc;
 
 use super::compressor::{CompressionConfig, ContextCompressor};
 use super::node::{
-    new_node_id, new_session_id, now, ArchivedToolResult, CheckpointData, ContentType, Node,
-    NodeFlags, NodeId, NodeKind,
+    new_node_id, new_session_id, now, ArchivedToolResult, CheckpointData, CheckpointStats,
+    ContentType, Node, NodeFlags, NodeId, NodeKind,
 };
 use super::storage::TreeStore;
 use super::validator::MessageValidator;
 use crate::llm::{Message, Role};
 
 pub type SessionId = String;
+
+/// Strategy for extracting context as a string
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContextStringStrategy {
+    /// Traverse from leaf to root, ignoring checkpoints
+    Full,
+    /// Traverse from leaf to checkpoint (or root if no checkpoint)
+    #[default]
+    Default,
+    /// Like Default but skip all tool-related nodes
+    Aggressive,
+}
 
 /// Session represents a conversation workspace
 #[derive(Clone, Serialize, Deserialize)]
@@ -350,6 +362,136 @@ impl Session {
         Ok(messages)
     }
 
+    /// Extract context as a markdown-formatted string
+    ///
+    /// # Strategies
+    /// - `Full`: Traverse from leaf to root, ignoring checkpoints
+    /// - `Default`: Traverse from leaf to checkpoint (or root if no checkpoint)
+    /// - `Aggressive`: Like Default but skip all tool-related nodes
+    pub async fn get_context_string_from(
+        &self,
+        leaf_id: NodeId,
+        strategy: ContextStringStrategy,
+    ) -> Result<String> {
+        let store = self.store()?;
+
+        // Build path to root
+        let path_nodes = store.get_path_to_root_internal(leaf_id.clone()).await?;
+
+        let mut sections: Vec<String> = Vec::new();
+
+        for node in &path_nodes {
+            // Check for checkpoint boundary (except for Full strategy)
+            if strategy != ContextStringStrategy::Full {
+                if let Some(checkpoint) = self.checkpoints.get(&node.node_id) {
+                    // Add checkpoint summary as a special section
+                    sections.push(format!(
+                        "## 📌 Checkpoint Summary\n\n{}",
+                        checkpoint.summary
+                    ));
+                    break;
+                }
+            }
+
+            match node.kind {
+                NodeKind::Message => {
+                    if !node.flags.hidden {
+                        sections.push(self.format_message_node(node));
+                    }
+                }
+                NodeKind::Tool => {
+                    // Skip tool nodes in Aggressive mode
+                    if strategy != ContextStringStrategy::Aggressive && !node.flags.hidden {
+                        sections.push(self.format_tool_node(node));
+                    }
+                }
+                NodeKind::Root => break,
+            }
+        }
+
+        // Reverse to get chronological order (root -> leaf)
+        sections.reverse();
+
+        Ok(sections.join("\n\n---\n\n"))
+    }
+
+    /// Format a message node as markdown
+    fn format_message_node(&self, node: &Node) -> String {
+        let role_header = match node.role {
+            Some(Role::User) => "## 👤 User",
+            Some(Role::Assistant) => "## 🤖 Assistant",
+            Some(Role::System) => "## ⚙️ System",
+            Some(Role::Tool) => "## 🔧 Tool",
+            None => "## Message",
+        };
+
+        let mut output = format!("{}\n\n{}", role_header, node.content);
+
+        // Include tool calls if present
+        if let Some(tool_calls) = &node.tool_calls {
+            if !tool_calls.is_empty() {
+                output.push_str("\n\n### Tool Calls\n");
+                for tc in tool_calls {
+                    output.push_str(&format!(
+                        "\n- **{}** (`{}`)\n  ```json\n  {}\n  ```\n",
+                        tc.name, tc.id, tc.arguments
+                    ));
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Format a tool node as markdown
+    fn format_tool_node(&self, node: &Node) -> String {
+        let tool_id = node.tool_call_id.as_deref().unwrap_or("unknown");
+        format!(
+            "## 🔧 Tool Result (`{}`)\n\n```\n{}\n```",
+            tool_id, node.content
+        )
+    }
+
+    /// Count nodes in path from target to checkpoint/root
+    ///
+    /// Uses the same traversal logic as `get_context_string_from` to ensure
+    /// consistent node counting for stats.
+    pub async fn count_nodes_in_path(
+        &self,
+        leaf_id: NodeId,
+        strategy: ContextStringStrategy,
+    ) -> Result<u32> {
+        let store = self.store()?;
+        let path_nodes = store.get_path_to_root_internal(leaf_id).await?;
+
+        let mut count = 0u32;
+        for node in &path_nodes {
+            // Check for checkpoint boundary (except for Full strategy)
+            if strategy != ContextStringStrategy::Full {
+                if self.checkpoints.contains_key(&node.node_id) {
+                    break;
+                }
+            }
+
+            match node.kind {
+                NodeKind::Message => {
+                    if !node.flags.hidden {
+                        count += 1;
+                    }
+                }
+                NodeKind::Tool => {
+                    // Skip tool nodes in Aggressive mode
+                    if strategy != ContextStringStrategy::Aggressive && !node.flags.hidden {
+                        count += 1;
+                    }
+                }
+                NodeKind::Root => break,
+            }
+        }
+
+        Ok(count)
+    }
+
     /// Create a checkpoint at a specific node (metadata, not a new node)
     pub async fn create_checkpoint(
         &mut self,
@@ -371,6 +513,46 @@ impl Session {
             created_at: now(),
             strategy: Some(strategy.to_string()),
             stats: None,
+            extensions: None,
+        };
+
+        // Store checkpoint
+        self.checkpoints.insert(node_id.clone(), checkpoint);
+        self.stats.total_checkpoints += 1;
+
+        // Update head checkpoint cache if this is on the active path
+        if node_id == self.active_leaf_id {
+            self.head_checkpoint_id = Some(node_id.clone());
+        }
+
+        // Persist session
+        store.update_session(self).await?;
+
+        Ok(())
+    }
+
+    /// Create a checkpoint at a specific node with stats
+    pub async fn create_checkpoint_with_stats(
+        &mut self,
+        node_id: NodeId,
+        summary: String,
+        strategy: &str,
+        stats: CheckpointStats,
+    ) -> Result<()> {
+        let store = self.store()?.clone();
+
+        // Verify node exists and belongs to this session
+        let _node = store
+            .get_node_in_session(self.session_id.clone(), node_id.clone())
+            .await?
+            .ok_or_else(|| anyhow!("Node {} not found in session {}", node_id, self.session_id))?;
+
+        // Create checkpoint data with stats
+        let checkpoint = CheckpointData {
+            summary,
+            created_at: now(),
+            strategy: Some(strategy.to_string()),
+            stats: Some(stats),
             extensions: None,
         };
 

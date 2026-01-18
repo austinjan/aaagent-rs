@@ -10,6 +10,8 @@ export interface TreeNode {
 
   // Optional metadata
   hasCheckpoint?: boolean;
+  inContext?: boolean;
+  checkpointSummary?: string;
   status?: "loading" | "error" | "complete";
   timestamp?: Date;
 }
@@ -20,6 +22,9 @@ export interface PositionedNode extends TreeNode {
   depth: number;
   isActive: boolean;
   isCollapsed?: boolean;
+  // Inherited from TreeNode but explicitly listed for clarity
+  inContext?: boolean;
+  checkpointSummary?: string;
 }
 
 export interface TreeConfig {

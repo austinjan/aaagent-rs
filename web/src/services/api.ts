@@ -11,6 +11,12 @@ import type {
   ConfigResponse,
   SessionConfig,
   HealthResponse,
+  CreateCheckpointRequest,
+  CreateCheckpointResponse,
+  PreviewCheckpointRequest,
+  PreviewCheckpointResponse,
+  ContextStringStrategy,
+  ContextStringResponse,
 } from "../types/backend";
 
 const API_BASE = "/api";
@@ -189,6 +195,17 @@ export async function createBranch(
 // Tree Visualization API
 // ============================================================================
 
+export interface TreeNodeCheckpointData {
+  summary: string;
+  strategy?: string;
+  stats?: {
+    nodes_covered: number;
+    total_tokens: number;
+    summary_tokens: number;
+    compression_ratio: number;
+  };
+}
+
 export interface TreeNodeData {
   node_id: string;
   parent_id: string | null;
@@ -200,12 +217,17 @@ export interface TreeNodeData {
   tool_call_id?: string;
   created_at: number;
   children_count: number;
+  has_checkpoint?: boolean;
+  in_context?: boolean;
+  checkpoint?: TreeNodeCheckpointData;
 }
 
 export interface SessionTreeResponse {
   session_id: string;
   root_node_id: string;
   active_leaf_id: string;
+  context_boundary_id: string | null;
+  context_node_ids: string[];
   nodes: TreeNodeData[];
   total_nodes: number;
 }
@@ -224,4 +246,58 @@ export function getStreamUrl(sessionId: string, streamId: string): string {
   const isDev = import.meta.env.DEV;
   const baseUrl = isDev ? "http://localhost:3000" : "";
   return `${baseUrl}/api/sessions/${sessionId}/stream/${streamId}`;
+}
+
+// ============================================================================
+// Checkpoint Operations
+// ============================================================================
+
+export async function createCheckpoint(
+  sessionId: string,
+  req: CreateCheckpointRequest,
+): Promise<CreateCheckpointResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  return handleResponse<CreateCheckpointResponse>(response);
+}
+
+export async function previewCheckpoint(
+  sessionId: string,
+  req: PreviewCheckpointRequest,
+): Promise<PreviewCheckpointResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  return handleResponse<PreviewCheckpointResponse>(response);
+}
+
+// ============================================================================
+// Context String (Summary)
+// ============================================================================
+
+export interface GetContextStringParams {
+  leafId?: string;
+  strategy?: ContextStringStrategy;
+}
+
+export async function getContextString(
+  sessionId: string,
+  params?: GetContextStringParams,
+): Promise<ContextStringResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.leafId) {
+    queryParams.set("leaf_id", params.leafId);
+  }
+  if (params?.strategy) {
+    queryParams.set("strategy", params.strategy);
+  }
+  const queryString = queryParams.toString();
+  const url = `${API_BASE}/sessions/${sessionId}/context-string${queryString ? `?${queryString}` : ""}`;
+  const response = await fetch(url);
+  return handleResponse<ContextStringResponse>(response);
 }
