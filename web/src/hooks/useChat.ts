@@ -17,7 +17,12 @@ import {
   selectError,
 } from "../store/useChatStore";
 import { useShallow } from "zustand/react/shallow";
-import { Role, NodeKind, type MessageData, type NodeData } from "../types/backend";
+import {
+  Role,
+  NodeKind,
+  type MessageData,
+  type NodeData,
+} from "../types/backend";
 import type { TreeNode } from "../components/tree/treeLayout";
 
 // Note: removed messagesToTreeNodes import - now using backendNodesToTreeNodes for full tree
@@ -31,7 +36,11 @@ function convertNodesToMessages(nodes: NodeData[]): MessageData[] {
     if (node.kind === "Root") continue;
 
     // Case 1: Assistant with tool_calls - create base message + separate tool call messages
-    if (node.role === "Assistant" && node.tool_calls && node.tool_calls.length > 0) {
+    if (
+      node.role === "Assistant" &&
+      node.tool_calls &&
+      node.tool_calls.length > 0
+    ) {
       // Add base assistant message (if it has content)
       if (node.content) {
         messages.push({
@@ -96,7 +105,7 @@ function convertNodesToMessages(nodes: NodeData[]): MessageData[] {
 // Convert backend tree nodes to TreeNode format for visualization
 function backendNodesToTreeNodes(
   nodes: TreeNodeData[],
-  _activeLeafId: string
+  _activeLeafId: string,
 ): TreeNode[] {
   // Sort nodes by created_at to get sequence numbers
   const sortedNodes = [...nodes].sort((a, b) => a.created_at - b.created_at);
@@ -152,7 +161,6 @@ export function useChat(options: UseChatOptions = {}) {
     const base = baseId ? `${baseId}-` : "";
     return `${prefix}-${base}${Date.now()}-${messageSequence.current}`;
   }, []);
-
 
   // Handle SSE events
   const handleSSEEvent = useCallback(
@@ -295,12 +303,18 @@ export function useChat(options: UseChatOptions = {}) {
 
             // Find where streaming messages start (after existing backend messages)
             // Streaming messages have IDs like "user-xxx", "assistant-xxx", "tool-call-xxx", "tool-result-xxx"
-            const streamingPrefixes = ["user-", "assistant-", "tool-call-", "tool-result-", "error-"];
+            const streamingPrefixes = [
+              "user-",
+              "assistant-",
+              "tool-call-",
+              "tool-result-",
+              "error-",
+            ];
             const currentMsgs = useChatStore.getState().messages;
 
             // Find first streaming message index
-            let firstStreamingIdx = currentMsgs.findIndex(m =>
-              streamingPrefixes.some(prefix => m.id.startsWith(prefix))
+            let firstStreamingIdx = currentMsgs.findIndex((m) =>
+              streamingPrefixes.some((prefix) => m.id.startsWith(prefix)),
             );
 
             if (firstStreamingIdx === -1) {
@@ -333,14 +347,16 @@ export function useChat(options: UseChatOptions = {}) {
             // Merge new tree nodes with existing ones
             setFullTreeNodes((prev) => {
               const existingIds = new Set(prev.map((n) => n.id));
-              const toAdd = treeNodesFromBackend.filter((n) => !existingIds.has(n.id));
+              const toAdd = treeNodesFromBackend.filter(
+                (n) => !existingIds.has(n.id),
+              );
 
               // Recalculate seq numbers
               const merged = [...prev, ...toAdd];
               merged.sort((a, b) => {
                 // Sort by finding nodes in newNodes to get created_at
-                const aNode = newNodes.find(n => n.node_id === a.id);
-                const bNode = newNodes.find(n => n.node_id === b.id);
+                const aNode = newNodes.find((n) => n.node_id === a.id);
+                const bNode = newNodes.find((n) => n.node_id === b.id);
                 const aTime = aNode?.created_at || 0;
                 const bTime = bNode?.created_at || 0;
                 return aTime - bTime;
@@ -522,19 +538,29 @@ export function useChat(options: UseChatOptions = {}) {
       for (const node of pathResponse.nodes) {
         if (node.kind !== NodeKind.Message) continue;
 
-        // Extract checkpoint data if present
-        const checkpointInfo = node.has_checkpoint && node.checkpoint ? {
-          hasCheckpoint: true,
-          checkpoint: {
-            summary: node.checkpoint.summary,
-            stats: node.checkpoint.stats ? {
-              nodesCovered: node.checkpoint.stats.nodes_covered,
-              originalTokens: node.checkpoint.stats.total_tokens,
-              compressedTokens: node.checkpoint.stats.summary_tokens,
-              compressionRatio: node.checkpoint.stats.compression_ratio,
-            } : undefined,
-          },
-        } : {};
+        // Extract checkpoint data if present (for displaying badge on the original message)
+        const checkpointInfo =
+          node.has_checkpoint && node.checkpoint
+            ? {
+                hasCheckpoint: true,
+                checkpoint: {
+                  summary: node.checkpoint.summary,
+                  stats: node.checkpoint.stats
+                    ? {
+                        nodesCovered: node.checkpoint.stats.nodes_covered,
+                        originalTokens: node.checkpoint.stats.total_tokens,
+                        compressedTokens: node.checkpoint.stats.summary_tokens,
+                        compressionRatio:
+                          node.checkpoint.stats.compression_ratio,
+                      }
+                    : undefined,
+                },
+              }
+            : {};
+
+        // Flag to track if we should add a checkpoint message after this node
+        const shouldAddCheckpointMessage =
+          node.has_checkpoint && node.checkpoint;
 
         // Case 1: Assistant message with tool_calls - create base message + separate tool call messages
         if (
@@ -596,6 +622,21 @@ export function useChat(options: UseChatOptions = {}) {
             ...checkpointInfo,
           });
         }
+
+        // Add checkpoint message card if this node has a checkpoint
+        if (shouldAddCheckpointMessage && node.checkpoint) {
+          loadedMessages.push({
+            id: `checkpoint-${node.node_id}`,
+            role: Role.System, // Placeholder role
+            content: "",
+            timestamp: new Date(node.checkpoint.created_at * 1000),
+            isStreaming: false,
+            // Checkpoint-specific fields
+            isCheckpoint: true,
+            checkpointNodeId: node.node_id,
+            checkpointData: node.checkpoint,
+          });
+        }
       }
 
       store.initializeSession(
@@ -610,7 +651,7 @@ export function useChat(options: UseChatOptions = {}) {
         const treeResponse = await getSessionTree(loadSessionId);
         const treeNodes = backendNodesToTreeNodes(
           treeResponse.nodes,
-          treeResponse.active_leaf_id
+          treeResponse.active_leaf_id,
         );
         setFullTreeNodes(treeNodes);
         setTreeActiveLeafId(treeResponse.active_leaf_id);
@@ -643,7 +684,7 @@ export function useChat(options: UseChatOptions = {}) {
       const treeResponse = await getSessionTree(treeSessionId);
       const nodes = backendNodesToTreeNodes(
         treeResponse.nodes,
-        treeResponse.active_leaf_id
+        treeResponse.active_leaf_id,
       );
       setFullTreeNodes(nodes);
       setTreeActiveLeafId(treeResponse.active_leaf_id);

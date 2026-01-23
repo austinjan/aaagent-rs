@@ -272,6 +272,11 @@ export interface MessageData {
     summary: string;
     stats?: CheckpointDisplayStats;
   };
+
+  // For checkpoint message cards (synthetic messages created from nodes with checkpoints)
+  isCheckpoint?: boolean;
+  checkpointNodeId?: NodeId; // Links to the original node that has this checkpoint
+  checkpointData?: CheckpointData; // Full checkpoint data from backend
 }
 
 // Convert CheckpointData to CheckpointCard format

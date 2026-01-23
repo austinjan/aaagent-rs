@@ -12,23 +12,12 @@ import {
 import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { Button } from "../ui/button";
-import { CheckpointBadge } from "../branch/CheckpointBadge";
 import { cn } from "@/lib/utils";
 
 export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
-}
-
-export interface CheckpointData {
-  summary: string;
-  stats?: {
-    nodesCovered: number;
-    originalTokens: number;
-    compressedTokens: number;
-    compressionRatio: number;
-  };
 }
 
 export interface MessageCardProps {
@@ -52,15 +41,14 @@ export interface MessageCardProps {
   // Branch creation
   onCreateBranch?: (id: string) => void;
 
-  // Checkpoint support
-  hasCheckpoint?: boolean;
-  checkpoint?: CheckpointData;
-  checkpointExpanded?: boolean;
-  onCheckpointToggle?: (expanded: boolean) => void;
-
-  // Checkpoint creation
+  // Checkpoint creation (only for creating new checkpoints)
   canCreateCheckpoint?: boolean;
   onCreateCheckpoint?: (nodeId: string) => void;
+
+  // For checkpoint message cards (synthetic messages)
+  isCheckpoint?: boolean;
+  checkpointNodeId?: string;
+  checkpointData?: import("@/types").CheckpointData;
 }
 
 export function MessageCard({
@@ -76,10 +64,6 @@ export function MessageCard({
   isSelected = false,
   onSelect,
   onCreateBranch,
-  hasCheckpoint = false,
-  checkpoint,
-  checkpointExpanded,
-  onCheckpointToggle,
   canCreateCheckpoint = false,
   onCreateCheckpoint,
 }: MessageCardProps) {
@@ -139,7 +123,7 @@ export function MessageCard({
       className={cn(
         "group message-card rounded-lg border-2 p-4 transition-all cursor-pointer relative",
         roleStyles[role],
-        isSelected ? "shadow-lg scale-[1.02] bg-accent/10" : "shadow-sm"
+        isSelected ? "shadow-lg scale-[1.02] bg-accent/10" : "shadow-sm",
       )}
       onClick={handleClick}
     >
@@ -155,27 +139,18 @@ export function MessageCard({
       <div
         className={cn(
           "message-header flex items-center justify-between mb-3",
-          isSelected && "ml-2"
+          isSelected && "ml-2",
         )}
       >
         <div className="flex items-center gap-2">
           <span
             className={cn(
               "role-label text-xs font-bold uppercase",
-              roleLabelColors[role]
+              roleLabelColors[role],
             )}
           >
             {roleLabels[role]}
           </span>
-          {/* Checkpoint badge */}
-          {hasCheckpoint && checkpoint && (
-            <CheckpointBadge
-              summary={checkpoint.summary}
-              stats={checkpoint.stats}
-              isExpanded={checkpointExpanded}
-              onToggle={onCheckpointToggle}
-            />
-          )}
           {tool_call_id && (
             <span className="text-xs text-muted-foreground font-mono">
               {tool_call_id}
@@ -195,36 +170,42 @@ export function MessageCard({
             </span>
           )}
           {/* Checkpoint button - only for assistant messages, not during streaming */}
-          {canCreateCheckpoint && onCreateCheckpoint && role === "assistant" && !isStreaming && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateCheckpoint(id);
-              }}
-              title="Create checkpoint"
-            >
-              <Bookmark className="h-3.5 w-3.5" />
-            </Button>
-          )}
+          {canCreateCheckpoint &&
+            onCreateCheckpoint &&
+            role === "assistant" &&
+            !isStreaming && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateCheckpoint(id);
+                }}
+                title="Create checkpoint"
+              >
+                <Bookmark className="h-3.5 w-3.5" />
+              </Button>
+            )}
           {/* Branch button - only for user/assistant messages, hidden during streaming */}
-          {onCreateBranch && role !== "tool" && role !== "system" && !isStreaming && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
-              onClick={(e) => {
-                e.stopPropagation();
-                console.log("Branch button clicked, id:", id);
-                onCreateBranch(id);
-              }}
-              title="Create branch (Ctrl+B)"
-            >
-              <GitBranch className="h-3.5 w-3.5" />
-            </Button>
-          )}
+          {onCreateBranch &&
+            role !== "tool" &&
+            role !== "system" &&
+            !isStreaming && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  console.log("Branch button clicked, id:", id);
+                  onCreateBranch(id);
+                }}
+                title="Create branch (Ctrl+B)"
+              >
+                <GitBranch className="h-3.5 w-3.5" />
+              </Button>
+            )}
         </div>
       </div>
 
@@ -241,7 +222,7 @@ export function MessageCard({
             <ChevronDown
               className={cn(
                 "h-4 w-4 transition-transform",
-                !toolCallsExpanded && "-rotate-90"
+                !toolCallsExpanded && "-rotate-90",
               )}
             />
             <span className="font-medium">

@@ -36,9 +36,6 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
     is_error: msg.is_error,
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
-    // Pass checkpoint data if present
-    hasCheckpoint: msg.hasCheckpoint,
-    checkpoint: msg.checkpoint,
   };
 }
 
@@ -87,7 +84,9 @@ export function Chat() {
 
   // Checkpoint modal state
   const [checkpointModalOpen, setCheckpointModalOpen] = useState(false);
-  const [checkpointTargetNodeId, setCheckpointTargetNodeId] = useState<string | null>(null);
+  const [checkpointTargetNodeId, setCheckpointTargetNodeId] = useState<
+    string | null
+  >(null);
 
   const persistSession = (sessionId: string) => {
     localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -182,7 +181,10 @@ export function Chat() {
         console.log("Switching branch to node:", nodeId);
         const response = await switchBranch(sessionId, nodeId);
         if (response.success) {
-          console.log("Branch switch success, new active leaf:", response.active_leaf_id);
+          console.log(
+            "Branch switch success, new active leaf:",
+            response.active_leaf_id,
+          );
           setActiveLeaf(response.active_leaf_id);
           // Reload the session to get the updated path
           await loadHistory(sessionId);
@@ -193,7 +195,7 @@ export function Chat() {
         console.error("Failed to switch branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory, loadTree]
+    [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
   const handleCreateBranch = useCallback(
@@ -214,7 +216,7 @@ export function Chat() {
         console.error("Failed to create branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory, loadTree]
+    [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
   // Keyboard shortcut: Ctrl+B to create branch from selected message
@@ -249,7 +251,7 @@ export function Chat() {
         await loadTree(sessionId);
       }
     },
-    [sessionId, loadHistory, loadTree]
+    [sessionId, loadHistory, loadTree],
   );
 
   // Calculate node count for checkpoint modal (count from target to root or last checkpoint)
@@ -262,7 +264,10 @@ export function Chat() {
   // Estimate tokens for checkpoint (rough estimate)
   const getEstimatedTokensForCheckpoint = useCallback(() => {
     // Rough estimate: 4 chars per token
-    const totalChars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
+    const totalChars = messages.reduce(
+      (sum, msg) => sum + msg.content.length,
+      0,
+    );
     return Math.round(totalChars / 4);
   }, [messages]);
 
@@ -272,6 +277,12 @@ export function Chat() {
     onCreateBranch: handleCreateBranch,
     canCreateCheckpoint: !isLoading,
     onCreateCheckpoint: handleOpenCheckpointModal,
+    // Pass through checkpoint message fields if present
+    ...(msg.isCheckpoint && {
+      isCheckpoint: msg.isCheckpoint,
+      checkpointNodeId: msg.checkpointNodeId,
+      checkpointData: msg.checkpointData,
+    }),
   }));
 
   return (
@@ -322,10 +333,7 @@ export function Chat() {
           {/* Summary Panel */}
           {sessionId && (
             <div className="p-2 border-t border-border">
-              <SummaryPanel
-                sessionId={sessionId}
-                leafId={activeLeafId}
-              />
+              <SummaryPanel sessionId={sessionId} leafId={activeLeafId} />
             </div>
           )}
         </div>
