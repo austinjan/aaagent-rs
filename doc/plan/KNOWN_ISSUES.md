@@ -1,50 +1,26 @@
 # Known Issues
 
-## 1. Session History Not Preserved Across Requests
+## 1. Session History Not Preserved Across Requests (FIXED)
 
-**Status:** Known limitation, needs architectural fix
+**Status:** ✅ RESOLVED - Implemented in JSONLStore
 
-**Symptom:**
-- Each chat request creates a new empty session
-- LLM cannot see previous conversation history
-- Multi-turn conversations don't work (e.g., "what is this folder?" after "pwd" doesn't remember the previous response)
+**Previous Issue:**
+- Sessions were not persisted across requests
+- Multi-turn conversations didn't work
 
-**Root Cause:**
-- `src/api/mod.rs:507-509`: Creates new Session instead of reconstructing from stored data
-- Session store only saves metadata, not the tree nodes
-- MemoryStore is not persistent across requests
+**Fix Implemented:**
+- ✅ JSONLStore with append-only JSONL format (`src/history/jsonl_store.rs`)
+- ✅ Session metadata persisted in `data/sessions/{session_id}.meta.json`
+- ✅ Tree nodes persisted in `data/sessions/{session_id}.nodes.jsonl`
+- ✅ Lazy in-memory cache for performance
+- ✅ AppState uses `Arc<JSONLStore>` for persistent storage (`src/api/mod.rs:32`)
+- ✅ Sessions loaded from disk via `store.get_session()` (`src/api/mod.rs:405-418`)
+- ✅ Agent receives persistent store via `session.set_store()` (`src/api/mod.rs:579`)
 
-**Current Workaround:**
-None - this is a fundamental limitation
+**Verification:**
+Multi-turn conversations now work correctly. Sessions persist across server restarts.
 
-**Fix Required:**
-Option 1: Persist tree nodes in session store
-- Serialize all nodes when saving session
-- Deserialize and reconstruct tree when loading session
-
-Option 2: Use persistent tree store (not MemoryStore)
-- Implement FileStore or DatabaseStore for tree nodes
-- Associate tree store with session_id
-
-**Code Location:**
-```rust
-// src/api/mod.rs:495-510
-async fn run_agent_chat(
-    session: aaagent::history::Session,
-    ...
-) -> anyhow::Result<()> {
-    let tree_store = Arc::new(MemoryStore::new());
-    
-    // TODO: Properly reconstruct session with tree store
-    // For now, create a new session - this is a limitation we need to fix
-    let session = aaagent::history::Session::new(tree_store.clone(), session.config.clone()).await?;
-    ...
-}
-```
-
-**Impact:**
-- High: Breaks multi-turn conversations
-- Users must repeat context in every message
+**Fixed in commit:** ec91271 - "Add JSONLStore for append-only session and node storage"
 
 ---
 

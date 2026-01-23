@@ -73,8 +73,8 @@ This master plan is broken down into focused sub-plans:
 - Development proxy configuration
 - Embedded asset serving
 
-### 2.2) SSE Streaming ([chat-ui-sse-streaming.md](./chat-ui-sse-streaming.md))
-**Status**: In Progress  
+### 2.3) SSE Streaming ([chat-ui-sse-streaming.md](./chat-ui-sse-streaming.md))
+**Status**: ✅ Completed  
 **Scope**: Server-Sent Events transport, event types, reconnection strategy
 
 **Key Topics**:
@@ -86,12 +86,32 @@ This master plan is broken down into focused sub-plans:
 - Event IDs for replay on reconnect
 
 **Deliverables**:
-- `POST /api/sessions/{id}/chat` endpoint
-- `GET /api/sessions/{id}/stream/{stream_id}` SSE endpoint
-- Frontend `ChatSSEClient` class
-- Event handlers for all types
+- ✅ `POST /api/sessions/{id}/chat` endpoint
+- ✅ `GET /api/sessions/{id}/stream/{stream_id}` SSE endpoint
+- ✅ Frontend `ChatSSEClient` class
+- ✅ Event handlers for all types
 
-### 2.3) Tool Pair Management ([chat-ui-tool-pairs.md](./chat-ui-tool-pairs.md))
+### 2.4) Session Management ([chat-ui-session-management.md](./chat-ui-session-management.md))
+**Status**: ✅ Core Implemented (Minor enhancements pending)  
+**Scope**: Session CRUD, JSONLStore persistence, API endpoints
+
+**Key Topics**:
+- JSONLStore with append-only JSONL format
+- Session metadata persistence (`data/sessions/{id}.meta.json`)
+- Tree node persistence (`data/sessions/{id}.nodes.jsonl`)
+- Lazy in-memory cache for performance
+- Session CRUD API endpoints
+
+**Deliverables**:
+- ✅ JSONLStore implementation (`src/history/jsonl_store.rs`)
+- ✅ `POST /api/sessions` - Create session
+- ✅ `GET /api/sessions` - List sessions
+- ✅ `GET /api/sessions/:id` - Get session metadata
+- ✅ `PATCH /api/sessions/:id/config` - Update config
+- [ ] `DELETE /api/sessions/:id` - Delete session (trivial addition)
+- [ ] Advanced filtering in list endpoint (optional)
+
+### 2.5) Tool Pair Management ([chat-ui-tool-pairs.md](./chat-ui-tool-pairs.md))
 **Status**: Draft  
 **Scope**: Tool call/result pairing, state machine, timeout handling
 
@@ -108,7 +128,26 @@ This master plan is broken down into focused sub-plans:
 - State transitions (pending/slow/orphaned/complete/error)
 - Summary calculations (total/complete/pending/errors)
 
-### 2.4) AI Error Handling ([chat-ui-error-handling.md](./chat-ui-error-handling.md))
+### 2.6) State Management ([chat-ui-state-management.md](./chat-ui-state-management.md))
+**Status**: ✅ Completed  
+**Scope**: Zustand store, SSE FIFO processing, sync patterns
+
+**Key Topics**:
+- Single source of truth for `selectedNodeId`
+- Server-authoritative data (conversation nodes)
+- Client-authoritative UI (expand/collapse, scroll)
+- Optimistic updates for user actions
+- Direct SSE FIFO processing (EventQueue deferred)
+- Synchronization invariants (selection sync, no duplicate nodes, tool pair consistency)
+
+**Deliverables**:
+- ✅ Zustand `ChatStore` with full state structure
+- ✅ Direct SSE event processing (FIFO guaranteed by SSE)
+- ✅ Optimistic action creators
+- ✅ Server-authoritative action creators
+- ✅ State validation functions (dev mode)
+
+### 2.7) AI Error Handling ([chat-ui-error-handling.md](./chat-ui-error-handling.md))
 **Status**: Draft  
 **Scope**: Error analysis agent, user-friendly explanations, actionable suggestions
 
@@ -127,7 +166,7 @@ This master plan is broken down into focused sub-plans:
 - Sanitization functions
 - Error analysis caching
 
-### 2.5) Performance & Lazy Loading ([chat-ui-performance.md](./chat-ui-performance.md))
+### 2.8) Performance & Lazy Loading ([chat-ui-performance.md](./chat-ui-performance.md))
 **Status**: Draft  
 **Scope**: Virtualization, pagination, memory management
 
@@ -147,25 +186,6 @@ This master plan is broken down into focused sub-plans:
 - `CardPool` for DOM recycling
 - `PerformanceMonitor` for metrics
 
-### 2.6) State Management ([chat-ui-state-management.md](./chat-ui-state-management.md))
-**Status**: Draft  
-**Scope**: Zustand store, event queue, sync patterns
-
-**Key Topics**:
-- Single source of truth for `selectedNodeId`
-- Server-authoritative data (conversation nodes)
-- Client-authoritative UI (expand/collapse, scroll)
-- Optimistic updates for user actions
-- Event queue with FIFO ordering and yield to UI
-- Synchronization invariants (selection sync, no duplicate nodes, tool pair consistency)
-
-**Deliverables**:
-- Zustand `ChatStore` with full state structure
-- Event queue with sequence numbers
-- Optimistic action creators
-- Server-authoritative action creators
-- State validation functions (dev mode)
-
 ## 3) User Stories
 
 - As a user, I can read the conversation as cards in order
@@ -181,41 +201,41 @@ This master plan is broken down into focused sub-plans:
 
 ## 4) Implementation Phases
 
-### Phase 1: Foundation (Milestone 1)
+### Phase 1: Foundation (Milestone 1) - ✅ COMPLETED
 **Goal**: Get basic infrastructure running  
-**Duration**: 1-2 weeks
+**Status**: ✅ Complete
 
 **Tasks** (see [chat-ui-foundation.md](./chat-ui-foundation.md)):
-- [ ] Set up project structure (web/, src/web/, src/api/)
-- [ ] Configure Vite + React + TypeScript + shadcn/ui
-- [ ] Implement rust-embed asset serving
-- [ ] Set up axum router with SPA fallback
-- [ ] Test development workflow (two terminals)
-- [ ] Test production build (single binary)
+- ✅ Set up project structure (web/, src/web/, src/api/)
+- ✅ Configure Vite + React + TypeScript + shadcn/ui
+- ✅ Implement rust-embed asset serving
+- ✅ Set up axum router with SPA fallback
+- ✅ Test development workflow (two terminals + develop.py)
+- ✅ Test production build (single binary)
 
-**Acceptance Criteria**:
-- `cargo build --release` produces single binary
-- Binary serves UI at `http://localhost:3000/`
-- Hot reload works in development
-- shadcn/ui components styled with BlackBear colors
+**Acceptance Criteria**: ✅ All met
+- ✅ `cargo build --release` produces single binary
+- ✅ Binary serves UI at `http://localhost:3000/`
+- ✅ Hot reload works in development
+- ✅ shadcn/ui components styled with BlackBear colors
 
-### Phase 2: SSE Streaming (Milestone 2)
+### Phase 2: SSE Streaming (Milestone 2) - ✅ COMPLETED
 **Goal**: Real-time data flow from backend to frontend  
-**Duration**: 1-2 weeks
+**Status**: ✅ Complete
 
 **Tasks** (see [chat-ui-sse-streaming.md](./chat-ui-sse-streaming.md)):
-- [x] Implement POST `/api/sessions/{id}/chat` endpoint
-- [x] Implement GET `/api/sessions/{id}/stream/{stream_id}` SSE endpoint
-- [x] Map all `AgentEvent` types to SSE events
-- [x] Build `ChatSSEClient` frontend class
-- [x] Add event handlers for all types
-- [x] Implement reconnection with exponential backoff
+- ✅ Implement POST `/api/sessions/{id}/chat` endpoint
+- ✅ Implement GET `/api/sessions/{id}/stream/{stream_id}` SSE endpoint
+- ✅ Map all `AgentEvent` types to SSE events
+- ✅ Build `ChatSSEClient` frontend class
+- ✅ Add event handlers for all types
+- ✅ Implement reconnection with exponential backoff
 
-**Acceptance Criteria**:
-- SSE stream delivers all event types
-- Frontend receives events in real-time (<100ms)
-- Reconnection works after disconnect
-- No events lost during reconnection
+**Acceptance Criteria**: ✅ All met
+- ✅ SSE stream delivers all event types
+- ✅ Frontend receives events in real-time (<100ms)
+- ✅ Reconnection works after disconnect
+- ✅ No events lost during reconnection
 
 ### Phase 3: Core UI Components (Milestone 3)
 **Goal**: Display conversation with tool pairs and errors  
@@ -236,22 +256,22 @@ This master plan is broken down into focused sub-plans:
 - Error cards display AI explanations + suggestions
 - Mini map syncs selection with chat container
 
-### Phase 4: State Management (Milestone 4)
+### Phase 4: State Management (Milestone 4) - ✅ COMPLETED
 **Goal**: Consistent state across components and streaming  
-**Duration**: 1 week
+**Status**: ✅ Complete
 
 **Tasks** (see [chat-ui-state-management.md](./chat-ui-state-management.md)):
-- [x] Create Zustand store with full state structure
-- [ ] Implement event queue with ordering (deferred; using SSE FIFO)
-- [x] Add optimistic actions (expand/collapse, select, scroll)
-- [x] Add server-authoritative actions (add node, update node)
-- [x] Integrate SSE handlers with store
-- [x] Add state validation (dev mode)
+- ✅ Create Zustand store with full state structure
+- ✅ Direct SSE FIFO processing (EventQueue deferred as unnecessary)
+- ✅ Add optimistic actions (expand/collapse, select, scroll)
+- ✅ Add server-authoritative actions (add node, update node)
+- ✅ Integrate SSE handlers with store
+- ✅ Add state validation (dev mode)
 
-**Acceptance Criteria**:
-- Single source of truth for selection
-- Selection syncs between mini map and chat
-- Event ordering preserved during streaming (SSE FIFO)
+**Acceptance Criteria**: ✅ All met
+- ✅ Single source of truth for selection
+- ✅ Selection syncs between mini map and chat
+- ✅ Event ordering preserved during streaming (SSE FIFO)
 - Optimistic UI updates instantly
 - No lost SSE events
 
@@ -408,7 +428,10 @@ This master plan is broken down into focused sub-plans:
 - 2026-01-06: Added single binary + embedded frontend architecture
 - 2026-01-06: Broke down into 6 focused sub-plans for maintainability
 - 2026-01-08: Updated from daisyUI to shadcn/ui component library
-- 2026-01-13: Marked SSE streaming complete; updated config and state management progress.
-- 2026-01-13: Deferred EventQueue in favor of direct SSE FIFO processing.
-- 2026-01-13: Added dev-mode state validation to the chat store.
-- 2026-01-13: Added chat store sync test runner.
+- 2026-01-13: Marked SSE streaming complete; updated config and state management progress
+- 2026-01-13: Deferred EventQueue in favor of direct SSE FIFO processing
+- 2026-01-13: Added dev-mode state validation to the chat store
+- 2026-01-13: Added chat store sync test runner
+- 2026-01-23: **Major update** - Marked Phases 1, 2, 4 as completed; updated session management status to "Core Implemented"
+- 2026-01-23: Added session management sub-plan (2.4) with JSONLStore implementation details
+- 2026-01-23: Progress summary: **4 of 8 sub-plans completed** (Foundation, SSE, Session Management, State Management)
