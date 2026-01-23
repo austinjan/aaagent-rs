@@ -3,6 +3,7 @@ import { Home } from "./pages/Home";
 import { Testing } from "./pages/Testing";
 import MessageCardDemo from "./pages/MessageCardDemo";
 import { Chat } from "./pages/Chat";
+import BranchDemo from "./pages/BranchDemo";
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
         <Route path="/testing" element={<Testing />} />
         <Route path="/message-card" element={<MessageCardDemo />} />
         <Route path="/message-demo" element={<MessageCardDemo />} />
+        <Route path="/branch-demo" element={<BranchDemo />} />
       </Routes>
     </BrowserRouter>
   );

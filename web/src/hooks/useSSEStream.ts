@@ -225,6 +225,8 @@ export function useSSEStream(
           total_usage: data.total_usage,
           all_tool_calls: data.all_tool_calls,
           rounds: data.rounds,
+          new_node_ids: data.new_node_ids,
+          new_nodes: data.new_nodes,
         });
 
         // Mark as done to prevent reconnection

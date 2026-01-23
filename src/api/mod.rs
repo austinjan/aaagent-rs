@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{
         header::{HeaderName, AUTHORIZATION},
         StatusCode,
@@ -142,6 +142,14 @@ fn api_routes() -> Router<AppState> {
             get(sessions::get_checkpoints),
         )
         .route(
+            "/sessions/:session_id/checkpoints",
+            post(sessions::create_checkpoint),
+        )
+        .route(
+            "/sessions/:session_id/checkpoints/preview",
+            post(sessions::preview_checkpoint),
+        )
+        .route(
             "/sessions/:session_id/system-prompt",
             get(sessions::get_system_prompt),
         )
@@ -149,6 +157,25 @@ fn api_routes() -> Router<AppState> {
         .route(
             "/sessions/:session_id/config",
             axum::routing::patch(sessions::update_config),
+        )
+        // Branch operations
+        .route(
+            "/sessions/:session_id/switch-branch",
+            post(sessions::switch_branch),
+        )
+        .route(
+            "/sessions/:session_id/branch-from",
+            post(sessions::create_branch),
+        )
+        // Tree visualization
+        .route(
+            "/sessions/:session_id/tree",
+            get(sessions::get_tree),
+        )
+        // Context as markdown string
+        .route(
+            "/sessions/:session_id/context-string",
+            get(sessions::get_context_string),
         )
 }
 
@@ -404,6 +431,7 @@ mod sessions {
                             },
                             all_tool_calls: vec![],
                             rounds: 0,
+                            new_node_ids: vec![],
                         })
                         .await;
 
@@ -447,7 +475,43 @@ mod sessions {
         let mut nodes = nodes;
         nodes.reverse();
 
-        Ok(Json(json!({ "nodes": nodes })))
+        // Convert nodes to JSON with checkpoint information
+        let nodes_json: Vec<Value> = nodes
+            .iter()
+            .map(|node| {
+                let has_checkpoint = session.checkpoints.contains_key(&node.node_id);
+                let checkpoint_data = session.checkpoints.get(&node.node_id);
+
+                json!({
+                    "node_id": node.node_id,
+                    "session_id": node.session_id,
+                    "parent_id": node.parent_id,
+                    "kind": format!("{:?}", node.kind),
+                    "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                    "content_type": format!("{:?}", node.content_type),
+                    "content": node.content,
+                    "created_at": node.created_at,
+                    "seq": node.seq,
+                    "flags": node.flags,
+                    "tool_call_id": node.tool_call_id,
+                    "tool_calls": node.tool_calls,
+                    "has_checkpoint": has_checkpoint,
+                    "checkpoint": checkpoint_data.map(|cp| json!({
+                        "summary": &cp.summary,
+                        "strategy": &cp.strategy,
+                        "created_at": cp.created_at,
+                        "stats": cp.stats.as_ref().map(|s| json!({
+                            "nodes_covered": s.nodes_covered,
+                            "total_tokens": s.total_tokens,
+                            "summary_tokens": s.summary_tokens,
+                            "compression_ratio": s.compression_ratio,
+                        })),
+                    })),
+                })
+            })
+            .collect();
+
+        Ok(Json(json!({ "nodes": nodes_json })))
     }
 
     pub async fn get_metadata(
@@ -481,6 +545,238 @@ mod sessions {
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         Ok(Json(json!({ "checkpoints": session.checkpoints })))
+    }
+
+    /// Query parameters for context-string endpoint
+    #[derive(Debug, Deserialize)]
+    pub struct ContextStringQuery {
+        /// Leaf node ID (defaults to active_leaf_id if not provided)
+        pub leaf_id: Option<String>,
+        /// Strategy: "full", "default", or "aggressive"
+        #[serde(default)]
+        pub strategy: ContextStringStrategyParam,
+    }
+
+    /// Strategy parameter for context-string endpoint
+    #[derive(Debug, Clone, Copy, Default, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ContextStringStrategyParam {
+        Full,
+        #[default]
+        Default,
+        Aggressive,
+    }
+
+    impl From<ContextStringStrategyParam> for crate::history::ContextStringStrategy {
+        fn from(param: ContextStringStrategyParam) -> Self {
+            match param {
+                ContextStringStrategyParam::Full => crate::history::ContextStringStrategy::Full,
+                ContextStringStrategyParam::Default => crate::history::ContextStringStrategy::Default,
+                ContextStringStrategyParam::Aggressive => crate::history::ContextStringStrategy::Aggressive,
+            }
+        }
+    }
+
+    /// Get context as a markdown-formatted string
+    pub async fn get_context_string(
+        Path(session_id): Path<String>,
+        Query(query): Query<ContextStringQuery>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        // Load session
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Use provided leaf_id or default to active_leaf_id
+        let leaf_id = query.leaf_id.unwrap_or_else(|| session.active_leaf_id.clone());
+
+        // Convert strategy
+        let strategy: crate::history::ContextStringStrategy = query.strategy.into();
+
+        // Get context string
+        let content = session
+            .get_context_string_from(leaf_id.clone(), strategy)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "leaf_id": leaf_id,
+            "strategy": format!("{:?}", query.strategy).to_lowercase(),
+            "content": content
+        })))
+    }
+
+    /// Request body for creating a checkpoint
+    #[derive(Debug, Deserialize)]
+    pub struct CreateCheckpointRequest {
+        /// Node ID where the checkpoint will be created
+        pub target_node_id: String,
+        /// Compression strategy: "balanced", "aggressive", or "custom"
+        #[serde(default)]
+        pub strategy: crate::agent::CompressionStrategy,
+        /// Custom prompt (only used when strategy is "custom")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub custom_prompt: Option<String>,
+        /// Use main provider instead of quick provider for higher quality
+        #[serde(default)]
+        pub use_main_provider: bool,
+    }
+
+    /// Create a checkpoint at a specific node
+    pub async fn create_checkpoint(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateCheckpointRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!(
+            "Create checkpoint request for session: {}, node: {}, strategy: {:?}",
+            session_id, req.target_node_id, req.strategy
+        ));
+
+        // Load session
+        let stored_session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get session config
+        let session_config = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
+
+        // Create provider
+        let provider = provider_factory::create_provider(
+            &session_config,
+            state.config_resolver.config_manager(),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Create agent
+        let mut session = stored_session;
+        session.set_store(state.store.clone());
+
+        let registry = crate::llm::ToolRegistry::new();
+        let mut agent = crate::agent::Agent::new(session, provider, registry);
+
+        // Optionally set quick provider
+        if let Ok(quick_provider) = provider_factory::create_quick_provider(
+            state.config_resolver.config_manager(),
+        ) {
+            agent.set_quick_provider(quick_provider);
+        }
+
+        // Create checkpoint options
+        let options = crate::agent::CheckpointOptions {
+            strategy: req.strategy,
+            custom_prompt: req.custom_prompt,
+            use_main_provider: req.use_main_provider,
+        };
+
+        // Create checkpoint
+        let result = agent
+            .create_checkpoint(req.target_node_id, options)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Checkpoint created: {} (compression ratio: {:.1}%)",
+            result.node_id,
+            result.stats.compression_ratio * 100.0
+        ));
+
+        Ok(Json(json!({
+            "checkpoint_id": result.node_id,
+            "summary": result.summary,
+            "stats": {
+                "nodes_covered": result.stats.nodes_covered,
+                "original_tokens": result.stats.total_tokens,
+                "summary_tokens": result.stats.summary_tokens,
+                "compression_ratio": result.stats.compression_ratio,
+            }
+        })))
+    }
+
+    /// Preview a checkpoint without creating it
+    pub async fn preview_checkpoint(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateCheckpointRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!(
+            "Preview checkpoint request for session: {}, node: {}, strategy: {:?}",
+            session_id, req.target_node_id, req.strategy
+        ));
+
+        // Load session
+        let stored_session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get session config
+        let session_config = stored_session
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("session_config"))
+            .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
+            .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
+
+        // Create provider
+        let provider = provider_factory::create_provider(
+            &session_config,
+            state.config_resolver.config_manager(),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Create agent
+        let mut session = stored_session;
+        session.set_store(state.store.clone());
+
+        let registry = crate::llm::ToolRegistry::new();
+        let mut agent = crate::agent::Agent::new(session, provider, registry);
+
+        // Optionally set quick provider
+        if let Ok(quick_provider) = provider_factory::create_quick_provider(
+            state.config_resolver.config_manager(),
+        ) {
+            agent.set_quick_provider(quick_provider);
+        }
+
+        // Create checkpoint options
+        let options = crate::agent::CheckpointOptions {
+            strategy: req.strategy,
+            custom_prompt: req.custom_prompt,
+            use_main_provider: req.use_main_provider,
+        };
+
+        // Preview checkpoint (doesn't save)
+        let result = agent
+            .preview_checkpoint(req.target_node_id, options)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        Ok(Json(json!({
+            "node_id": result.node_id,
+            "summary": result.summary,
+            "stats": {
+                "nodes_covered": result.stats.nodes_covered,
+                "original_tokens": result.stats.total_tokens,
+                "estimated_summary_tokens": result.stats.summary_tokens,
+                "estimated_compression_ratio": result.stats.compression_ratio,
+            }
+        })))
     }
 
     pub async fn get_system_prompt(
@@ -559,6 +855,283 @@ mod sessions {
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         Ok(Json(config))
+    }
+
+    // ===== Branch Operations =====
+
+    #[derive(Debug, Deserialize)]
+    pub struct SwitchBranchRequest {
+        node_id: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct SwitchBranchResponse {
+        success: bool,
+        active_leaf_id: String,
+        path: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    }
+
+    pub async fn switch_branch(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<SwitchBranchRequest>,
+    ) -> Result<Json<SwitchBranchResponse>, ApiError> {
+        crate::logger::log(format!(
+            "Switch branch request for session: {}, node: {}",
+            session_id, req.node_id
+        ));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Verify the node exists
+        let node = state
+            .store
+            .get_node(req.node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Node {} not found", req.node_id)))?;
+
+        // Verify the node belongs to this session
+        if node.session_id != session_id {
+            return Err(ApiError::BadRequest(
+                "Node does not belong to this session".to_string(),
+            ));
+        }
+
+        // Update the active leaf ID
+        session.active_leaf_id = req.node_id.clone();
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Get the path from the new active leaf to root
+        let path_nodes = state
+            .store
+            .get_path_to_root_internal(req.node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let path: Vec<String> = path_nodes.iter().rev().map(|n| n.node_id.clone()).collect();
+
+        crate::logger::log(format!(
+            "Branch switched successfully to: {}",
+            req.node_id
+        ));
+
+        Ok(Json(SwitchBranchResponse {
+            success: true,
+            active_leaf_id: req.node_id,
+            path,
+            error: None,
+        }))
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct CreateBranchRequest {
+        from_node_id: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct CreateBranchResponse {
+        success: bool,
+        new_leaf_id: String,
+        branch_point_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    }
+
+    pub async fn create_branch(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<CreateBranchRequest>,
+    ) -> Result<Json<CreateBranchResponse>, ApiError> {
+        crate::logger::log(format!(
+            "Create branch request for session: {}, from node: {}",
+            session_id, req.from_node_id
+        ));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Verify the node exists
+        let node = state
+            .store
+            .get_node(req.from_node_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Node {} not found", req.from_node_id)))?;
+
+        // Verify the node belongs to this session
+        if node.session_id != session_id {
+            return Err(ApiError::BadRequest(
+                "Node does not belong to this session".to_string(),
+            ));
+        }
+
+        // For creating a branch, we need to set the active_leaf to the parent of the from_node
+        // This allows the user to send a new message that becomes a sibling of from_node
+        let branch_point_id = node
+            .parent_id
+            .clone()
+            .ok_or_else(|| ApiError::BadRequest("Cannot branch from root node".to_string()))?;
+
+        // Update session to point to the branch point
+        // The next message sent will create a new sibling branch
+        session.active_leaf_id = branch_point_id.clone();
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Branch created from: {}, new active leaf: {}",
+            req.from_node_id, branch_point_id
+        ));
+
+        Ok(Json(CreateBranchResponse {
+            success: true,
+            new_leaf_id: branch_point_id.clone(),
+            branch_point_id,
+            error: None,
+        }))
+    }
+
+    /// Get all nodes in a session for tree visualization
+    pub async fn get_tree(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Get tree request for session: {}", session_id));
+
+        // Verify session exists
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get all nodes in session using find_nodes with default filter (matches all)
+        let filter = crate::history::storage::NodeFilter::default();
+        let all_nodes = state
+            .store
+            .find_nodes(session_id.clone(), filter)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Build children count map
+        let mut children_count: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for node in &all_nodes {
+            if let Some(ref parent_id) = node.parent_id {
+                *children_count.entry(parent_id.clone()).or_insert(0) += 1;
+            }
+        }
+
+        // Build node map for path traversal
+        let node_map: std::collections::HashMap<String, &crate::history::Node> = all_nodes
+            .iter()
+            .map(|n| (n.node_id.clone(), n))
+            .collect();
+
+        // Calculate context range: traverse from active_leaf to checkpoint or root
+        let mut context_node_ids: Vec<String> = Vec::new();
+        let mut context_boundary_id: Option<String> = None;
+        let mut current_id = Some(session.active_leaf_id.clone());
+
+        while let Some(id) = current_id {
+            context_node_ids.push(id.clone());
+
+            // Check if this node has a checkpoint (context boundary)
+            if session.checkpoints.contains_key(&id) {
+                context_boundary_id = Some(id.clone());
+                break;
+            }
+
+            // Move to parent
+            if let Some(node) = node_map.get(&id) {
+                current_id = node.parent_id.clone();
+                // Stop at root
+                if node.parent_id.is_none() {
+                    context_boundary_id = Some(id);
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let context_node_set: std::collections::HashSet<String> =
+            context_node_ids.iter().cloned().collect();
+
+        // Convert nodes to JSON-serializable format
+        let nodes_json: Vec<Value> = all_nodes
+            .iter()
+            .map(|node| {
+                // Check if this node has a checkpoint
+                let has_checkpoint = session.checkpoints.contains_key(&node.node_id);
+                let checkpoint_data = session.checkpoints.get(&node.node_id);
+                // Check if this node is in the current context range
+                let in_context = context_node_set.contains(&node.node_id);
+
+                json!({
+                    "node_id": node.node_id,
+                    "parent_id": node.parent_id,
+                    "session_id": node.session_id,
+                    "kind": format!("{:?}", node.kind),
+                    "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                    "content": &node.content,
+                    "tool_calls": &node.tool_calls,
+                    "tool_call_id": &node.tool_call_id,
+                    "created_at": node.created_at,
+                    "children_count": children_count.get(&node.node_id).unwrap_or(&0),
+                    "has_checkpoint": has_checkpoint,
+                    "in_context": in_context,
+                    "checkpoint": checkpoint_data.map(|cp| json!({
+                        "summary": &cp.summary,
+                        "strategy": &cp.strategy,
+                        "stats": cp.stats.as_ref().map(|s| json!({
+                            "nodes_covered": s.nodes_covered,
+                            "total_tokens": s.total_tokens,
+                            "summary_tokens": s.summary_tokens,
+                            "compression_ratio": s.compression_ratio,
+                        })),
+                    })),
+                })
+            })
+            .collect();
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "root_node_id": session.root_node_id,
+            "active_leaf_id": session.active_leaf_id,
+            "context_boundary_id": context_boundary_id,
+            "context_node_ids": context_node_ids,
+            "nodes": nodes_json,
+            "total_nodes": all_nodes.len(),
+        })))
     }
 }
 
@@ -639,10 +1212,17 @@ mod sse {
         extract::{Path, State},
         response::sse::{Event, Sse},
     };
+    use crate::history::TreeStore;
     use futures::stream::Stream;
     use std::{convert::Infallible, time::Duration};
     use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::StreamExt;
+
+    // Intermediate type for SSE events (after async processing)
+    struct SseEventData {
+        event_type: &'static str,
+        data: serde_json::Value,
+    }
 
     pub async fn stream(
         Path((_session_id, stream_id)): Path<(String, String)>,
@@ -662,59 +1242,94 @@ mod sse {
 
         crate::logger::log(format!("SSE stream connection established: {}", stream_id));
 
-        // Convert mpsc::Receiver to Stream
-        let event_stream = ReceiverStream::new(receiver).map(|agent_event| {
-            // Convert AgentEvent to SSE Event
-            let (event_type, data) = match agent_event {
-                crate::agent::AgentEvent::Content(content) => {
-                    ("content", serde_json::json!({ "content": content }))
-                }
-                crate::agent::AgentEvent::Thinking(text) => {
-                    ("thinking", serde_json::json!({ "text": text }))
-                }
-                crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => (
-                    "tool_calls",
-                    serde_json::json!({ "tool_calls": tool_calls }),
-                ),
-                crate::agent::AgentEvent::ToolResult {
-                    tool_call_id,
-                    tool_name,
-                    result,
-                    is_error,
-                } => (
-                    "tool_result",
-                    serde_json::json!({
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "result": result,
-                        "is_error": is_error
-                    }),
-                ),
-                crate::agent::AgentEvent::LoopDetected { detection } => (
-                    "loop_detected",
-                    serde_json::json!({ "detection": format!("{:?}", detection) }),
-                ),
-                crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => (
-                    "checkpoint",
-                    serde_json::json!({ "node_id": node_id, "strategy": strategy }),
-                ),
-                crate::agent::AgentEvent::Done {
-                    total_usage,
-                    all_tool_calls,
-                    rounds,
-                } => (
-                    "done",
-                    serde_json::json!({
-                        "total_usage": total_usage,
-                        "all_tool_calls": all_tool_calls,
-                        "rounds": rounds
-                    }),
-                ),
-            };
+        // Clone store for use in async closure
+        let store = state.store.clone();
 
-            // Create SSE event
-            Ok(Event::default().event(event_type).data(data.to_string()))
-        });
+        // Convert mpsc::Receiver to Stream, using `then` for async processing
+        let event_stream = ReceiverStream::new(receiver)
+            .then(move |agent_event| {
+                let store = store.clone();
+                async move {
+                    // Convert AgentEvent to SSE Event
+                    match agent_event {
+                        crate::agent::AgentEvent::Content(content) => SseEventData {
+                            event_type: "content",
+                            data: serde_json::json!({ "content": content }),
+                        },
+                        crate::agent::AgentEvent::Thinking(text) => SseEventData {
+                            event_type: "thinking",
+                            data: serde_json::json!({ "text": text }),
+                        },
+                        crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => SseEventData {
+                            event_type: "tool_calls",
+                            data: serde_json::json!({ "tool_calls": tool_calls }),
+                        },
+                        crate::agent::AgentEvent::ToolResult {
+                            tool_call_id,
+                            tool_name,
+                            result,
+                            is_error,
+                        } => SseEventData {
+                            event_type: "tool_result",
+                            data: serde_json::json!({
+                                "tool_call_id": tool_call_id,
+                                "tool_name": tool_name,
+                                "result": result,
+                                "is_error": is_error
+                            }),
+                        },
+                        crate::agent::AgentEvent::LoopDetected { detection } => SseEventData {
+                            event_type: "loop_detected",
+                            data: serde_json::json!({ "detection": format!("{:?}", detection) }),
+                        },
+                        crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => SseEventData {
+                            event_type: "checkpoint",
+                            data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
+                        },
+                        crate::agent::AgentEvent::Done {
+                            total_usage,
+                            all_tool_calls,
+                            rounds,
+                            new_node_ids,
+                        } => {
+                            // Fetch full node data for each new node ID
+                            let mut new_nodes = Vec::new();
+                            for node_id in &new_node_ids {
+                                if let Ok(Some(node)) = store.get_node(node_id.clone()).await {
+                                    new_nodes.push(serde_json::json!({
+                                        "node_id": node.node_id,
+                                        "parent_id": node.parent_id,
+                                        "session_id": node.session_id,
+                                        "kind": format!("{:?}", node.kind),
+                                        "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                                        "content": &node.content,
+                                        "tool_calls": &node.tool_calls,
+                                        "tool_call_id": &node.tool_call_id,
+                                        "created_at": node.created_at,
+                                    }));
+                                }
+                            }
+
+                            SseEventData {
+                                event_type: "done",
+                                data: serde_json::json!({
+                                    "total_usage": total_usage,
+                                    "all_tool_calls": all_tool_calls,
+                                    "rounds": rounds,
+                                    "new_node_ids": new_node_ids,
+                                    "new_nodes": new_nodes
+                                }),
+                            }
+                        }
+                    }
+                }
+            })
+            .map(|sse_data| {
+                // Create SSE event
+                Ok(Event::default()
+                    .event(sse_data.event_type)
+                    .data(sse_data.data.to_string()))
+            });
 
         // Create SSE response with keepalive
         Ok(Sse::new(event_stream).keep_alive(

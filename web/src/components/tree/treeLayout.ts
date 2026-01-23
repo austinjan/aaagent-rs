@@ -10,6 +10,8 @@ export interface TreeNode {
 
   // Optional metadata
   hasCheckpoint?: boolean;
+  inContext?: boolean;
+  checkpointSummary?: string;
   status?: "loading" | "error" | "complete";
   timestamp?: Date;
 }
@@ -20,6 +22,9 @@ export interface PositionedNode extends TreeNode {
   depth: number;
   isActive: boolean;
   isCollapsed?: boolean;
+  // Inherited from TreeNode but explicitly listed for clarity
+  inContext?: boolean;
+  checkpointSummary?: string;
 }
 
 export interface TreeConfig {
@@ -163,14 +168,19 @@ export function layoutTree(
 }
 
 /**
- * Collapse inactive branches deeper than threshold
+ * Collapse inactive branches
+ * When hideAll is true, collapse all inactive nodes
+ * Otherwise, only collapse inactive nodes deeper than threshold
  */
 export function collapseInactiveBranches(
   positioned: PositionedNode[],
   threshold: number,
+  hideAll: boolean = false,
 ): PositionedNode[] {
   return positioned.map((node) => {
-    if (!node.isActive && node.depth >= threshold) {
+    // When hideAll is true, collapse all inactive nodes
+    // Otherwise, only collapse inactive nodes at depth >= threshold
+    if (!node.isActive && (hideAll || node.depth >= threshold)) {
       return { ...node, isCollapsed: true };
     }
     return node;

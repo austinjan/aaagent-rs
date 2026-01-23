@@ -182,7 +182,7 @@ def start_backend():
 
     # Build backend
     build_result = subprocess.run(
-        ["cargo", "build", "--features", "dev-server"], capture_output=True, text=True
+        ["cargo", "build", "--bin", "aaagent-serve", "--features", "dev-server"], capture_output=True, text=True
     )
 
     if build_result.returncode != 0:
@@ -195,7 +195,7 @@ def start_backend():
     # Start backend
     if sys.platform == "win32":
         process = subprocess.Popen(
-            "cargo run --bin aaagent-serve --features dev-server",
+            ["cargo", "run", "--bin", "aaagent-serve", "--features", "dev-server"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             shell=True,
@@ -203,7 +203,7 @@ def start_backend():
         )
     else:
         process = subprocess.Popen(
-            ["cargo", "run", "--features", "dev-server", "--", "serve"],
+            ["cargo", "run", "--bin", "aaagent-serve", "--features", "dev-server"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
