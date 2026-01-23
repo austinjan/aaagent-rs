@@ -16,6 +16,7 @@ export interface TreeVisualizationProps {
   selectedNodeId?: string | null;
   showInactive: boolean;
   onNodeSelect?: (nodeId: string) => void;
+  onNodeDoubleClick?: (nodeId: string) => void;
   config?: Partial<TreeConfig>;
 }
 
@@ -25,6 +26,7 @@ export function TreeVisualization({
   selectedNodeId,
   showInactive,
   onNodeSelect,
+  onNodeDoubleClick,
   config: configOverride,
 }: TreeVisualizationProps) {
   const config = { ...DEFAULT_CONFIG, ...configOverride };
@@ -36,8 +38,9 @@ export function TreeVisualization({
     let layout = layoutTree(nodes, activeLeafId, config);
 
     // Collapse inactive branches if showInactive is false
+    // Pass hideAll=true to hide all inactive nodes, not just deep ones
     if (!showInactive) {
-      layout = collapseInactiveBranches(layout, config.collapseThreshold);
+      layout = collapseInactiveBranches(layout, config.collapseThreshold, true);
     }
 
     return layout;
@@ -114,6 +117,7 @@ export function TreeVisualization({
               node={node}
               isSelected={node.id === selectedNodeId}
               onSelect={onNodeSelect}
+              onDoubleClick={onNodeDoubleClick}
             />
           ))}
         </g>

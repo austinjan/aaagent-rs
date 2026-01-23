@@ -127,6 +127,9 @@ export interface ChatStore {
     elapsedMs?: number,
   ) => void;
 
+  // ===== BRANCH OPERATIONS =====
+  setActiveLeaf: (nodeId: NodeId) => void;
+
   // ===== UTILITY ACTIONS =====
   setError: (error: Error | null) => void;
   setLoading: (isLoading: boolean) => void;
@@ -538,6 +541,22 @@ export const useChatStore = create<ChatStore>()(
         validateAfter(get, "updateToolPairState");
       },
 
+      // ===== BRANCH OPERATIONS =====
+
+      setActiveLeaf: (nodeId) => {
+        set(
+          (state) => ({
+            session: {
+              ...state.session,
+              activeLeafId: nodeId,
+            },
+          }),
+          false,
+          "setActiveLeaf",
+        );
+        validateAfter(get, "setActiveLeaf");
+      },
+
       // ===== UTILITY ACTIONS =====
 
       setError: (error) => set({ error }, false, "setError"),
@@ -589,6 +608,8 @@ export const selectSession = (state: ChatStore) => state.session;
 export const selectMessages = (state: ChatStore) => state.messages;
 export const selectSelectedNodeId = (state: ChatStore) =>
   state.ui.selectedNodeId;
+export const selectActiveLeafId = (state: ChatStore) =>
+  state.session.activeLeafId;
 export const selectIsStreaming = (state: ChatStore) =>
   state.streaming.isStreaming;
 export const selectToolPairGroups = (state: ChatStore) =>

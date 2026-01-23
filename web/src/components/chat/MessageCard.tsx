@@ -9,13 +9,26 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
+import { Button } from "../ui/button";
+import { CheckpointBadge } from "../branch/CheckpointBadge";
+import { cn } from "@/lib/utils";
 
 export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+}
+
+export interface CheckpointData {
+  summary: string;
+  stats?: {
+    nodesCovered: number;
+    originalTokens: number;
+    compressedTokens: number;
+    compressionRatio: number;
+  };
 }
 
 export interface MessageCardProps {
@@ -35,6 +48,19 @@ export interface MessageCardProps {
   isStreaming?: boolean;
   isSelected?: boolean;
   onSelect?: (id: string) => void;
+
+  // Branch creation
+  onCreateBranch?: (id: string) => void;
+
+  // Checkpoint support
+  hasCheckpoint?: boolean;
+  checkpoint?: CheckpointData;
+  checkpointExpanded?: boolean;
+  onCheckpointToggle?: (expanded: boolean) => void;
+
+  // Checkpoint creation
+  canCreateCheckpoint?: boolean;
+  onCreateCheckpoint?: (nodeId: string) => void;
 }
 
 export function MessageCard({
@@ -49,6 +75,13 @@ export function MessageCard({
   isStreaming = false,
   isSelected = false,
   onSelect,
+  onCreateBranch,
+  hasCheckpoint = false,
+  checkpoint,
+  checkpointExpanded,
+  onCheckpointToggle,
+  canCreateCheckpoint = false,
+  onCreateCheckpoint,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -103,11 +136,11 @@ export function MessageCard({
   return (
     <div
       id={`message-${id}`}
-      className={`
-        message-card rounded-lg border-2 p-4 transition-all cursor-pointer relative
-        ${roleStyles[role]}
-        ${isSelected ? "shadow-lg scale-[1.02] bg-accent/10" : "shadow-sm"}
-      `}
+      className={cn(
+        "group message-card rounded-lg border-2 p-4 transition-all cursor-pointer relative",
+        roleStyles[role],
+        isSelected ? "shadow-lg scale-[1.02] bg-accent/10" : "shadow-sm"
+      )}
       onClick={handleClick}
     >
       {/* Left indicator bar */}
@@ -120,14 +153,29 @@ export function MessageCard({
 
       {/* Header */}
       <div
-        className={`message-header flex items-center justify-between mb-3 ${isSelected ? "ml-2" : ""}`}
+        className={cn(
+          "message-header flex items-center justify-between mb-3",
+          isSelected && "ml-2"
+        )}
       >
         <div className="flex items-center gap-2">
           <span
-            className={`role-label text-xs font-bold uppercase ${roleLabelColors[role]}`}
+            className={cn(
+              "role-label text-xs font-bold uppercase",
+              roleLabelColors[role]
+            )}
           >
             {roleLabels[role]}
           </span>
+          {/* Checkpoint badge */}
+          {hasCheckpoint && checkpoint && (
+            <CheckpointBadge
+              summary={checkpoint.summary}
+              stats={checkpoint.stats}
+              isExpanded={checkpointExpanded}
+              onToggle={onCheckpointToggle}
+            />
+          )}
           {tool_call_id && (
             <span className="text-xs text-muted-foreground font-mono">
               {tool_call_id}
@@ -140,11 +188,44 @@ export function MessageCard({
             </span>
           )}
         </div>
-        {timestamp && (
-          <span className="text-xs text-muted-foreground">
-            {formatTime(timestamp)}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {timestamp && (
+            <span className="text-xs text-muted-foreground">
+              {formatTime(timestamp)}
+            </span>
+          )}
+          {/* Checkpoint button - only for assistant messages, not during streaming */}
+          {canCreateCheckpoint && onCreateCheckpoint && role === "assistant" && !isStreaming && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateCheckpoint(id);
+              }}
+              title="Create checkpoint"
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {/* Branch button - only for user/assistant messages, hidden during streaming */}
+          {onCreateBranch && role !== "tool" && role !== "system" && !isStreaming && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                console.log("Branch button clicked, id:", id);
+                onCreateBranch(id);
+              }}
+              title="Create branch (Ctrl+B)"
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Thinking block */}
@@ -158,7 +239,10 @@ export function MessageCard({
         >
           <CollapsibleTrigger className="flex items-center gap-2 w-full mb-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
             <ChevronDown
-              className={`h-4 w-4 transition-transform ${toolCallsExpanded ? "" : "-rotate-90"}`}
+              className={cn(
+                "h-4 w-4 transition-transform",
+                !toolCallsExpanded && "-rotate-90"
+              )}
             />
             <span className="font-medium">
               Tool Calls ({tool_calls.length})

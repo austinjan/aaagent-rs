@@ -10,6 +10,7 @@ export interface TreeNavigationPanelProps {
   activeLeafId: string;
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
+  onBranchSwitch?: (nodeId: string) => void;
 }
 
 export function TreeNavigationPanel({
@@ -17,6 +18,7 @@ export function TreeNavigationPanel({
   activeLeafId,
   selectedNodeId,
   onNodeSelect,
+  onBranchSwitch,
 }: TreeNavigationPanelProps) {
   const [showInactive, setShowInactive] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,11 +40,30 @@ export function TreeNavigationPanel({
   };
 
   const handleNodeSelect = (nodeId: string) => {
-    onNodeSelect?.(nodeId);
-
     // Scroll message card into view in the chat container
     setTimeout(() => {
-      const messageCard = document.getElementById(`message-${nodeId}`);
+      // First try exact match, then try prefix match (for tool call messages)
+      let messageCard = document.getElementById(`message-${nodeId}`);
+      let actualMessageId = nodeId;
+
+      if (!messageCard) {
+        // For assistant messages with tool calls but no content, the ID might be like:
+        // message-{nodeId}-tc-{toolCallId}
+        // Find any element that starts with the nodeId prefix
+        const allCards = document.querySelectorAll(`[id^="message-${nodeId}"]`);
+        if (allCards.length > 0) {
+          messageCard = allCards[0] as HTMLElement;
+          // Extract the actual message ID from the element ID
+          const elementId = messageCard.id;
+          if (elementId.startsWith("message-")) {
+            actualMessageId = elementId.substring("message-".length);
+          }
+        }
+      }
+
+      // Select the message with the actual ID (might be different from nodeId for tool calls)
+      onNodeSelect?.(actualMessageId);
+
       const chatContainer = document.querySelector(".chat-container");
 
       if (messageCard && chatContainer) {
@@ -62,8 +83,17 @@ export function TreeNavigationPanel({
           top: targetScroll,
           behavior: "smooth",
         });
+      } else if (!messageCard) {
+        // No message card found - still select the node ID
+        // This handles cases where the message might not be rendered yet
+        onNodeSelect?.(nodeId);
       }
     }, 100);
+  };
+
+  const handleNodeDoubleClick = (nodeId: string) => {
+    // Double-click switches the active branch to this node
+    onBranchSwitch?.(nodeId);
   };
 
   return (
@@ -83,8 +113,10 @@ export function TreeNavigationPanel({
           selectedNodeId={selectedNodeId}
           showInactive={showInactive}
           onNodeSelect={handleNodeSelect}
+          onNodeDoubleClick={handleNodeDoubleClick}
         />
       </div>
+
     </div>
   );
 }

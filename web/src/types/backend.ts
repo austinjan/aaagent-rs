@@ -67,6 +67,9 @@ export interface Node {
   tool_calls?: ToolCall[];
   pruned_at?: number;
   metadata?: Record<string, unknown>;
+  // Checkpoint data (included when node has a checkpoint)
+  has_checkpoint?: boolean;
+  checkpoint?: CheckpointData;
 }
 
 export interface CheckpointStats {
@@ -89,6 +92,19 @@ export interface CheckpointData {
 // Agent Events (SSE streaming)
 // ============================================================================
 
+// Node data sent from backend in done event (matches backend JSON structure)
+export interface NodeData {
+  node_id: string;
+  parent_id: string | null;
+  session_id: string;
+  kind: string;
+  role: string | null;
+  content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  created_at: number;
+}
+
 export type AgentEvent =
   | { type: "content"; content: string }
   | { type: "thinking"; text: string }
@@ -107,6 +123,8 @@ export type AgentEvent =
       total_usage: TokenUsage;
       all_tool_calls: ToolCall[];
       rounds: number;
+      new_node_ids?: string[];
+      new_nodes?: NodeData[];
     };
 
 export interface TokenUsage {
@@ -223,6 +241,14 @@ export interface HealthResponse {
 // Helper Types for Frontend
 // ============================================================================
 
+// Checkpoint stats in camelCase for frontend display
+export interface CheckpointDisplayStats {
+  nodesCovered: number;
+  originalTokens: number;
+  compressedTokens: number;
+  compressionRatio: number;
+}
+
 // Convert Node to MessageCard format - matches backend structure exactly
 export interface MessageData {
   id: NodeId;
@@ -239,6 +265,13 @@ export interface MessageData {
   is_error?: boolean;
 
   isStreaming?: boolean;
+
+  // Checkpoint data (if this message has a checkpoint)
+  hasCheckpoint?: boolean;
+  checkpoint?: {
+    summary: string;
+    stats?: CheckpointDisplayStats;
+  };
 }
 
 // Convert CheckpointData to CheckpointCard format
@@ -248,4 +281,59 @@ export interface CheckpointMessage {
   timestamp: Date;
   stats?: CheckpointStats;
   isExpanded?: boolean;
+}
+
+// ============================================================================
+// Checkpoint API Types
+// ============================================================================
+
+export type CompressionStrategy = "balanced" | "aggressive" | "custom";
+
+export interface CreateCheckpointRequest {
+  target_node_id: string;
+  strategy?: CompressionStrategy;
+  custom_prompt?: string;
+  use_main_provider?: boolean;
+}
+
+export interface CreateCheckpointResponse {
+  checkpoint_id: string;
+  summary: string;
+  stats: {
+    nodes_covered: number;
+    original_tokens: number;
+    summary_tokens: number;
+    compression_ratio: number;
+  };
+}
+
+export interface PreviewCheckpointRequest {
+  target_node_id: string;
+  strategy?: CompressionStrategy;
+  custom_prompt?: string;
+  use_main_provider?: boolean;
+}
+
+export interface PreviewCheckpointResponse {
+  node_id: string;
+  summary: string;
+  stats: {
+    nodes_covered: number;
+    original_tokens: number;
+    estimated_summary_tokens: number;
+    estimated_compression_ratio: number;
+  };
+}
+
+// ============================================================================
+// Context String API Types
+// ============================================================================
+
+export type ContextStringStrategy = "full" | "default" | "aggressive";
+
+export interface ContextStringResponse {
+  session_id: string;
+  leaf_id: string;
+  strategy: ContextStringStrategy;
+  content: string;
 }

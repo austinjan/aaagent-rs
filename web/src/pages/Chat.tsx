@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
@@ -10,10 +10,12 @@ import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
-import { getConfig } from "../services/api";
+import { getConfig, switchBranch, createBranch } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
+import { CheckpointCreationModal } from "../components/checkpoint";
+import { SummaryPanel } from "../components/summary";
 
 // Convert MessageData to MessageCardProps
 function toMessageCardProps(msg: MessageData): MessageCardProps {
@@ -34,6 +36,9 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
     is_error: msg.is_error,
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
+    // Pass checkpoint data if present
+    hasCheckpoint: msg.hasCheckpoint,
+    checkpoint: msg.checkpoint,
   };
 }
 
@@ -52,6 +57,7 @@ export function Chat() {
     initializeSession,
     sendMessage,
     loadHistory,
+    loadTree,
     resetChat,
   } = useChat(DEFAULT_OPTIONS);
 
@@ -78,6 +84,10 @@ export function Chat() {
       max_context_tokens: 200000,
     },
   });
+
+  // Checkpoint modal state
+  const [checkpointModalOpen, setCheckpointModalOpen] = useState(false);
+  const [checkpointTargetNodeId, setCheckpointTargetNodeId] = useState<string | null>(null);
 
   const persistSession = (sessionId: string) => {
     localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -162,8 +172,107 @@ export function Chat() {
     }
   };
 
-  // Convert messages to MessageCardProps
-  const messageCards = messages.map(toMessageCardProps);
+  // Branch operations
+  const setActiveLeaf = useChatStore((state) => state.setActiveLeaf);
+
+  const handleBranchSwitch = useCallback(
+    async (nodeId: string) => {
+      if (!sessionId) return;
+      try {
+        console.log("Switching branch to node:", nodeId);
+        const response = await switchBranch(sessionId, nodeId);
+        if (response.success) {
+          console.log("Branch switch success, new active leaf:", response.active_leaf_id);
+          setActiveLeaf(response.active_leaf_id);
+          // Reload the session to get the updated path
+          await loadHistory(sessionId);
+          // Also explicitly reload tree to ensure minimap is updated
+          await loadTree(sessionId);
+        }
+      } catch (err) {
+        console.error("Failed to switch branch:", err);
+      }
+    },
+    [sessionId, setActiveLeaf, loadHistory, loadTree]
+  );
+
+  const handleCreateBranch = useCallback(
+    async (fromNodeId: string) => {
+      if (!sessionId) return;
+      try {
+        console.log("Creating branch from node:", fromNodeId);
+        const response = await createBranch(sessionId, fromNodeId);
+        if (response.success) {
+          console.log("Branch created, new leaf:", response.new_leaf_id);
+          setActiveLeaf(response.new_leaf_id);
+          // Reload to show the new branch point
+          await loadHistory(sessionId);
+          // Also explicitly reload tree to ensure minimap is updated
+          await loadTree(sessionId);
+        }
+      } catch (err) {
+        console.error("Failed to create branch:", err);
+      }
+    },
+    [sessionId, setActiveLeaf, loadHistory, loadTree]
+  );
+
+  // Keyboard shortcut: Ctrl+B to create branch from selected message
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "b" && selectedMessageId) {
+        e.preventDefault();
+        handleCreateBranch(selectedMessageId);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedMessageId, handleCreateBranch]);
+
+  // Checkpoint creation handlers
+  const handleOpenCheckpointModal = useCallback((nodeId: string) => {
+    setCheckpointTargetNodeId(nodeId);
+    setCheckpointModalOpen(true);
+  }, []);
+
+  const handleCloseCheckpointModal = useCallback(() => {
+    setCheckpointModalOpen(false);
+    setCheckpointTargetNodeId(null);
+  }, []);
+
+  const handleCheckpointCreated = useCallback(
+    async (checkpointId: string) => {
+      console.log("Checkpoint created:", checkpointId);
+      // Reload the session to show the checkpoint
+      if (sessionId) {
+        await loadHistory(sessionId);
+        await loadTree(sessionId);
+      }
+    },
+    [sessionId, loadHistory, loadTree]
+  );
+
+  // Calculate node count for checkpoint modal (count from target to root or last checkpoint)
+  const getNodeCountForCheckpoint = useCallback(() => {
+    if (!checkpointTargetNodeId) return 0;
+    // For now, return a placeholder - the backend calculates this
+    return messages.length;
+  }, [checkpointTargetNodeId, messages.length]);
+
+  // Estimate tokens for checkpoint (rough estimate)
+  const getEstimatedTokensForCheckpoint = useCallback(() => {
+    // Rough estimate: 4 chars per token
+    const totalChars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
+    return Math.round(totalChars / 4);
+  }, [messages]);
+
+  // Convert messages to MessageCardProps with branch and checkpoint callbacks
+  const messageCards = messages.map((msg) => ({
+    ...toMessageCardProps(msg),
+    onCreateBranch: handleCreateBranch,
+    canCreateCheckpoint: !isLoading,
+    onCreateCheckpoint: handleOpenCheckpointModal,
+  }));
 
   return (
     <div className="chat-page flex flex-col h-screen bg-background">
@@ -202,13 +311,23 @@ export function Chat() {
       {/* Main Content: Tree Panel + Chat */}
       <div className="flex flex-1 overflow-hidden">
         {/* Tree Navigation Panel (Left Sidebar) */}
-        <div className="w-80 border-r border-border flex-shrink-0">
+        <div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
           <TreeNavigationPanel
             nodes={treeNodes}
             activeLeafId={activeLeafId}
             selectedNodeId={selectedMessageId}
             onNodeSelect={handleSelectMessage}
+            onBranchSwitch={handleBranchSwitch}
           />
+          {/* Summary Panel */}
+          {sessionId && (
+            <div className="p-2 border-t border-border">
+              <SummaryPanel
+                sessionId={sessionId}
+                leafId={activeLeafId}
+              />
+            </div>
+          )}
         </div>
 
         {/* Chat Area (Right Side) */}
@@ -237,6 +356,20 @@ export function Chat() {
           </div>
         </div>
       </div>
+
+      {/* Checkpoint Creation Modal */}
+      {sessionId && checkpointTargetNodeId && (
+        <CheckpointCreationModal
+          isOpen={checkpointModalOpen}
+          sessionId={sessionId}
+          targetNodeId={checkpointTargetNodeId}
+          nodeCount={getNodeCountForCheckpoint()}
+          estimatedTokens={getEstimatedTokensForCheckpoint()}
+          hasPreviousCheckpoint={false}
+          onClose={handleCloseCheckpointModal}
+          onCheckpointCreated={handleCheckpointCreated}
+        />
+      )}
     </div>
   );
 }

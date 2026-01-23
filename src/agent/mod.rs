@@ -1,10 +1,121 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
-use crate::history::{NodeId, Session};
+use crate::history::{CheckpointStats, ContextStringStrategy, NodeId, Session};
 use crate::llm::{
     LLMProvider, LoopDetection, LoopDetector, LoopDetectorConfig, Message, Role, TokenUsage,
     ToolCall, ToolRegistry,
 };
+
+/// Compression strategy for checkpoint creation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionStrategy {
+    /// Keep facts, constraints, decisions and reasoning
+    Balanced,
+    /// Remove all non-essential content including tool calls
+    Aggressive,
+    /// User-provided prompt guides compression
+    Custom,
+}
+
+impl Default for CompressionStrategy {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+impl std::fmt::Display for CompressionStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Balanced => write!(f, "balanced"),
+            Self::Aggressive => write!(f, "aggressive"),
+            Self::Custom => write!(f, "custom"),
+        }
+    }
+}
+
+impl CompressionStrategy {
+    /// Get the system prompt for this compression strategy
+    pub fn get_prompt(&self, custom_prompt: Option<&str>) -> String {
+        match self {
+            Self::Balanced => BALANCED_COMPRESSION_PROMPT.to_string(),
+            Self::Aggressive => AGGRESSIVE_COMPRESSION_PROMPT.to_string(),
+            Self::Custom => {
+                if let Some(prompt) = custom_prompt {
+                    format!("{}\n\n{}", CUSTOM_COMPRESSION_PREFIX, prompt)
+                } else {
+                    BALANCED_COMPRESSION_PROMPT.to_string()
+                }
+            }
+        }
+    }
+
+    /// Convert to ContextStringStrategy for context extraction
+    /// - Aggressive compression skips tool nodes (ContextStringStrategy::Aggressive)
+    /// - Balanced and Custom include tool nodes (ContextStringStrategy::Default)
+    pub fn to_context_strategy(&self) -> ContextStringStrategy {
+        match self {
+            Self::Aggressive => ContextStringStrategy::Aggressive,
+            Self::Balanced | Self::Custom => ContextStringStrategy::Default,
+        }
+    }
+}
+
+const BALANCED_COMPRESSION_PROMPT: &str = r#"Summarize the following conversation, preserving:
+- Key facts and data points established
+- Constraints and requirements identified
+- Decisions made and their reasoning
+- Current state and next steps
+
+Remove:
+- Casual conversation and greetings
+- Repeated information
+- Verbose explanations (keep conclusions only)
+
+Output a concise summary that allows the conversation to continue naturally."#;
+
+const AGGRESSIVE_COMPRESSION_PROMPT: &str = r#"Create a minimal summary containing ONLY:
+- Final decisions and outcomes
+- Critical constraints that affect future actions
+- Current objective/goal
+
+Remove ALL:
+- Tool calls and their results (summarize outcomes only in one sentence)
+- Reasoning and deliberation
+- Alternative options that were rejected
+- Any content not directly relevant to the main goal
+
+Be extremely concise. The summary should be as short as possible while preserving the ability to continue the conversation."#;
+
+const CUSTOM_COMPRESSION_PREFIX: &str = r#"You are summarizing a conversation between a user and an AI assistant.
+The summary will replace the original messages to reduce context size.
+Ensure the summary preserves enough information for the conversation to continue coherently.
+
+User's compression instructions:"#;
+
+/// Options for checkpoint creation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CheckpointOptions {
+    /// Compression strategy to use
+    #[serde(default)]
+    pub strategy: CompressionStrategy,
+    /// Custom prompt (only used when strategy is Custom)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_prompt: Option<String>,
+    /// Use main (more powerful) provider instead of quick provider
+    /// Default: false (uses quick provider for speed/cost)
+    #[serde(default)]
+    pub use_main_provider: bool,
+}
+
+/// Result of checkpoint creation or preview
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckpointResult {
+    pub node_id: String,
+    pub summary: String,
+    pub stats: CheckpointStats,
+}
 
 /// Events emitted during agent chat for real-time monitoring
 #[derive(Debug, Clone)]
@@ -31,6 +142,8 @@ pub enum AgentEvent {
         total_usage: TokenUsage,
         all_tool_calls: Vec<ToolCall>,
         rounds: usize,
+        /// Node IDs created during this chat turn (for incremental tree updates)
+        new_node_ids: Vec<String>,
     },
 }
 
@@ -154,8 +267,11 @@ impl<P: LLMProvider> Agent<P> {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
 
+        // Track new nodes created during this chat turn
+        let mut new_node_ids: Vec<String> = Vec::new();
+
         // 1. Add user message to tree
-        self.session
+        let user_node_id = self.session
             .append_message(Message {
                 role: Role::User,
                 content: user_message.to_string(),
@@ -163,6 +279,7 @@ impl<P: LLMProvider> Agent<P> {
                 tool_calls: None,
             })
             .await?;
+        new_node_ids.push(user_node_id);
 
         // 2. Extract linear context from tree
         let context = self.session.get_context().await?;
@@ -293,7 +410,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    self.session
+                    let assistant_node_id = self.session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -301,10 +418,11 @@ impl<P: LLMProvider> Agent<P> {
                             tool_calls: Some(tool_calls.clone()),
                         })
                         .await?;
+                    new_node_ids.push(assistant_node_id);
 
                     // Add tool results
                     for result in &results {
-                        self.session
+                        let tool_node_id = self.session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -312,6 +430,7 @@ impl<P: LLMProvider> Agent<P> {
                                 tool_calls: None,
                             })
                             .await?;
+                        new_node_ids.push(tool_node_id);
                     }
 
                     handle.submit_tool_results(results)?;
@@ -336,7 +455,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // 5. Add assistant response to tree
         if !response_content.is_empty() {
-            self.session
+            let final_node_id = self.session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -344,10 +463,12 @@ impl<P: LLMProvider> Agent<P> {
                     tool_calls: None,
                 })
                 .await?;
+            new_node_ids.push(final_node_id);
         }
 
         // 6. Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
+            new_node_ids.push(node_id.clone());
             on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
@@ -356,6 +477,7 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
+            new_node_ids,
         })
         .await;
 
@@ -394,11 +516,14 @@ impl<P: LLMProvider> Agent<P> {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
 
+        // Track new nodes created during this chat turn
+        let mut new_node_ids: Vec<String> = Vec::new();
+
         // Branch from the node
         self.session.branch_from(from_node_id.clone()).await?;
 
         // Append new message to the branch point
-        self.session
+        let user_node_id = self.session
             .append_message_to(
                 from_node_id,
                 Message {
@@ -409,6 +534,7 @@ impl<P: LLMProvider> Agent<P> {
                 },
             )
             .await?;
+        new_node_ids.push(user_node_id);
 
         // Extract context and call provider
         let context = self.session.get_context().await?;
@@ -537,7 +663,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    self.session
+                    let assistant_node_id = self.session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -545,10 +671,11 @@ impl<P: LLMProvider> Agent<P> {
                             tool_calls: Some(tool_calls.clone()),
                         })
                         .await?;
+                    new_node_ids.push(assistant_node_id);
 
                     // Add tool results
                     for result in &results {
-                        self.session
+                        let tool_node_id = self.session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -556,6 +683,7 @@ impl<P: LLMProvider> Agent<P> {
                                 tool_calls: None,
                             })
                             .await?;
+                        new_node_ids.push(tool_node_id);
                     }
 
                     handle.submit_tool_results(results)?;
@@ -580,7 +708,7 @@ impl<P: LLMProvider> Agent<P> {
 
         // Add assistant response to tree
         if !response_content.is_empty() {
-            self.session
+            let final_node_id = self.session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -588,10 +716,12 @@ impl<P: LLMProvider> Agent<P> {
                     tool_calls: None,
                 })
                 .await?;
+            new_node_ids.push(final_node_id);
         }
 
         // Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
+            new_node_ids.push(node_id.clone());
             on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
@@ -600,23 +730,142 @@ impl<P: LLMProvider> Agent<P> {
             total_usage,
             all_tool_calls,
             rounds,
+            new_node_ids,
         })
         .await;
 
         Ok(response_content)
     }
 
-    /// Manually create a checkpoint at the current active leaf
+    /// Manually create a checkpoint at the current active leaf (uses balanced strategy)
     pub async fn checkpoint(&mut self) -> Result<NodeId> {
-        let context = self.session.get_context().await?;
-        let summary = self.generate_summary(&context).await?;
+        let result = self
+            .create_checkpoint(
+                self.session.active_leaf_id.clone(),
+                CheckpointOptions::default(),
+            )
+            .await?;
+        Ok(result.node_id)
+    }
 
-        let checkpoint_node = self.session.active_leaf_id.clone();
-        self.session
-            .create_checkpoint(checkpoint_node.clone(), summary, "manual")
+    /// Create a checkpoint at a specific node with options
+    ///
+    /// This compacts all messages from the target node back to the root (or previous checkpoint)
+    /// into a summary using the specified options.
+    ///
+    /// # Arguments
+    /// * `target_node_id` - The node where the checkpoint will be created
+    /// * `options` - Checkpoint options including strategy, custom prompt, and provider choice
+    pub async fn create_checkpoint(
+        &mut self,
+        target_node_id: NodeId,
+        options: CheckpointOptions,
+    ) -> Result<CheckpointResult> {
+        // Get context string using the appropriate strategy
+        let context_strategy = options.strategy.to_context_strategy();
+        let context_string = self
+            .session
+            .get_context_string_from(target_node_id.clone(), context_strategy)
             .await?;
 
-        Ok(checkpoint_node)
+        if context_string.is_empty() {
+            return Err(anyhow::anyhow!("No messages to checkpoint"));
+        }
+
+        // Calculate stats from the context string
+        let original_tokens = Self::estimate_tokens_for_text(&context_string);
+        let nodes_covered = self.session.count_nodes_in_path(target_node_id.clone(), context_strategy).await?;
+        let time_range = Self::get_time_range_now();
+
+        // Generate summary with strategy
+        let summary = self
+            .generate_summary_with_options(&context_string, &options)
+            .await?;
+
+        let summary_tokens = Self::estimate_tokens_for_text(&summary);
+        let compression_ratio = if original_tokens > 0 {
+            1.0 - (summary_tokens as f32 / original_tokens as f32)
+        } else {
+            0.0
+        };
+
+        let stats = CheckpointStats {
+            nodes_covered,
+            total_tokens: original_tokens,
+            summary_tokens,
+            compression_ratio,
+            covered_time_range: time_range,
+        };
+
+        // Create the checkpoint
+        self.session
+            .create_checkpoint_with_stats(
+                target_node_id.clone(),
+                summary.clone(),
+                &options.strategy.to_string(),
+                stats.clone(),
+            )
+            .await?;
+
+        Ok(CheckpointResult {
+            node_id: target_node_id,
+            summary,
+            stats,
+        })
+    }
+
+    /// Preview a checkpoint without creating it
+    ///
+    /// Returns what the checkpoint would look like without actually creating it.
+    /// Useful for showing the user what summary will be generated before committing.
+    ///
+    /// # Arguments
+    /// * `target_node_id` - The node where the checkpoint would be created
+    /// * `options` - Checkpoint options including strategy, custom prompt, and provider choice
+    pub async fn preview_checkpoint(
+        &mut self,
+        target_node_id: NodeId,
+        options: CheckpointOptions,
+    ) -> Result<CheckpointResult> {
+        // Get context string using the appropriate strategy
+        let context_strategy = options.strategy.to_context_strategy();
+        let context_string = self
+            .session
+            .get_context_string_from(target_node_id.clone(), context_strategy)
+            .await?;
+
+        if context_string.is_empty() {
+            return Err(anyhow::anyhow!("No messages to checkpoint"));
+        }
+
+        // Calculate stats from the context string
+        let original_tokens = Self::estimate_tokens_for_text(&context_string);
+        let nodes_covered = self.session.count_nodes_in_path(target_node_id.clone(), context_strategy).await?;
+        let time_range = Self::get_time_range_now();
+
+        // Generate summary preview
+        let summary = self
+            .generate_summary_with_options(&context_string, &options)
+            .await?;
+
+        let summary_tokens = Self::estimate_tokens_for_text(&summary);
+        let compression_ratio = if original_tokens > 0 {
+            1.0 - (summary_tokens as f32 / original_tokens as f32)
+        } else {
+            0.0
+        };
+
+        Ok(CheckpointResult {
+            node_id: target_node_id,
+            summary,
+            stats: CheckpointStats {
+                nodes_covered,
+                total_tokens: original_tokens,
+                summary_tokens,
+                compression_ratio,
+                covered_time_range: time_range,
+            },
+        })
     }
 
     /// Auto checkpoint if conditions are met
@@ -629,28 +878,32 @@ impl<P: LLMProvider> Agent<P> {
 
         // Ask Session if checkpoint is needed based on its optimization config
         if let Some(strategy) = self.session.should_auto_checkpoint().await? {
-            let context = self.session.get_context().await?;
-            let summary = self.generate_summary(&context).await?;
-            let node_id = self.session.active_leaf_id.clone();
-            self.session
-                .create_checkpoint(node_id.clone(), summary, strategy)
+            let result = self
+                .create_checkpoint(
+                    self.session.active_leaf_id.clone(),
+                    CheckpointOptions::default(),
+                )
                 .await?;
-            return Ok(Some((node_id, strategy.to_string())));
+            return Ok(Some((result.node_id, strategy.to_string())));
         }
 
         Ok(None)
     }
 
-    /// Generate a summary for checkpoint using the quick provider (or main provider as fallback)
-    async fn generate_summary(&self, context: &[Message]) -> Result<String> {
-        // Simple implementation: ask LLM to summarize
+    /// Generate a summary using checkpoint options
+    ///
+    /// By default uses quick_provider (faster/cheaper model) for compression.
+    /// Set `options.use_main_provider = true` to use the main provider for higher quality.
+    async fn generate_summary_with_options(
+        &self,
+        context_string: &str,
+        options: &CheckpointOptions,
+    ) -> Result<String> {
+        let strategy_prompt = options.strategy.get_prompt(options.custom_prompt.as_deref());
+
         let summary_prompt = format!(
-            "Please provide a concise summary of the following conversation:\n\n{}",
-            context
-                .iter()
-                .map(|m| format!("{:?}: {}", m.role, m.content))
-                .collect::<Vec<_>>()
-                .join("\n")
+            "{}\n\n---\n\nConversation to summarize:\n\n{}",
+            strategy_prompt, context_string
         );
 
         let summary_context = vec![Message {
@@ -660,10 +913,17 @@ impl<P: LLMProvider> Agent<P> {
             tool_calls: None,
         }];
 
-        // Use quick_provider if available, otherwise fall back to main provider
-        let mut handle = if let Some(ref quick) = self.quick_provider {
+        // Choose provider based on options:
+        // - use_main_provider=true: always use main provider (higher quality)
+        // - use_main_provider=false (default): use quick_provider if available, otherwise main
+        let mut handle = if options.use_main_provider {
+            // User explicitly requested main provider for higher quality
+            self.provider.chat_loop(summary_context, None).await?
+        } else if let Some(ref quick) = self.quick_provider {
+            // Default: use quick provider for speed/cost
             quick.chat_loop(summary_context, None).await?
         } else {
+            // Fallback: no quick provider configured, use main
             self.provider.chat_loop(summary_context, None).await?
         };
 
@@ -676,7 +936,9 @@ impl<P: LLMProvider> Agent<P> {
                     summary.push_str(&text);
                 }
                 LoopStep::Done { content, .. } => {
-                    summary.push_str(&content);
+                    if !content.is_empty() && content != summary {
+                        summary = content;
+                    }
                     break;
                 }
                 _ => {}
@@ -684,6 +946,17 @@ impl<P: LLMProvider> Agent<P> {
         }
 
         Ok(summary)
+    }
+
+    /// Estimate token count for text (rough approximation: 4 chars ≈ 1 token)
+    fn estimate_tokens_for_text(text: &str) -> u32 {
+        (text.len() / 4) as u32
+    }
+
+    /// Get current time as time range
+    fn get_time_range_now() -> (i64, i64) {
+        let now = crate::history::node::now();
+        (now, now)
     }
 
     /// Execute recall_tool_result - special tool for retrieving archived results
