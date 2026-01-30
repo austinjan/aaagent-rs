@@ -31,6 +31,7 @@ export interface SessionConfig {
     top_p?: number;
     frequency_penalty?: number;
     presence_penalty?: number;
+    enable_grounding?: boolean;
   };
   agent: {
     max_rounds: number;
@@ -171,7 +172,9 @@ export function SessionConfigPanel({
                       {model.label}
                     </SelectItem>
                   ))}
-                  <SelectItem value={CUSTOM_MODEL_VALUE}>Custom Model...</SelectItem>
+                  <SelectItem value={CUSTOM_MODEL_VALUE}>
+                    Custom Model...
+                  </SelectItem>
                 </SelectContent>
               </Select>
               {(isCustomModel || selectValue === CUSTOM_MODEL_VALUE) && (

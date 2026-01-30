@@ -16,7 +16,10 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     // Load .env file if it exists (ignore if not found)
-    let _ = dotenvy::dotenv();
+    match dotenvy::dotenv() {
+        Ok(path) => println!("✓ Loaded .env from: {:?}", path),
+        Err(e) => println!("ℹ️ No .env file found: {}", e),
+    }
 
     let cli = Cli::parse();
 

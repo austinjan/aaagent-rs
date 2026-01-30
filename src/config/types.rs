@@ -20,6 +20,8 @@ pub struct ProviderConfig {
     pub frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_grounding: Option<bool>, // Web search grounding (Gemini only)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +57,9 @@ pub enum TemperatureProfile {
 
 impl TemperatureProfiles {
     pub fn get_temperature(&self, model: &str, creativity: f32) -> f32 {
-        let profile = self.profiles.get(model)
+        let profile = self
+            .profiles
+            .get(model)
             .or_else(|| self.profiles.get("default"))
             .expect("Default temperature profile must exist");
 
@@ -105,11 +109,7 @@ impl Default for TemperatureProfiles {
         profiles.insert(
             "gpt-5.2".to_string(),
             TemperatureProfile::Mapped {
-                creativity_map: vec![
-                    (0.0, 0.0),
-                    (0.5, 0.35),
-                    (1.0, 0.7),
-                ],
+                creativity_map: vec![(0.0, 0.0), (0.5, 0.35), (1.0, 0.7)],
             },
         );
 
@@ -139,10 +139,7 @@ impl Default for TemperatureProfiles {
         profiles.insert(
             "default".to_string(),
             TemperatureProfile::Mapped {
-                creativity_map: vec![
-                    (0.0, 0.0),
-                    (1.0, 1.0),
-                ],
+                creativity_map: vec![(0.0, 0.0), (1.0, 1.0)],
             },
         );
 

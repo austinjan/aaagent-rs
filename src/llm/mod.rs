@@ -5,6 +5,7 @@ pub mod helpers;
 pub mod loop_detector;
 pub mod provider;
 pub mod registry;
+pub mod tools;
 
 #[cfg(feature = "openai")]
 pub mod openai;

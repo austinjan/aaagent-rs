@@ -1510,7 +1510,30 @@ async fn run_agent_chat(
     }));
 
     // Create agent with consolidated logging
-    let registry = ToolRegistry::new().register_all_builtin();
+    let mut registry = ToolRegistry::new().register_all_builtin();
+
+    // Add web_search tool if user enabled it in the UI (via enable_grounding config)
+    // The tool works with ANY LLM provider (OpenAI, Anthropic, Gemini) - it internally uses Gemini grounding
+    if session_config.provider.enable_grounding.unwrap_or(false) {
+        if let Ok(web_search_tool) = crate::tools::WebSearchTool::from_env() {
+            crate::logger::log(
+                "✓ Web search tool loaded (uses Gemini with Google Search grounding internally)"
+                    .to_string(),
+            );
+            registry = registry.register(web_search_tool);
+        } else {
+            crate::logger::log("⚠️ Web search enabled but GOOGLE_API_KEY not found".to_string());
+        }
+    }
+
+    // Debug: List all registered tools
+    let tool_names = registry.tool_names();
+    crate::logger::log(format!(
+        "🔧 Registered tools ({}): [{}]",
+        tool_names.len(),
+        tool_names.join(", ")
+    ));
+
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
         max_rounds: session_config.agent.max_rounds as usize,

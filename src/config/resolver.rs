@@ -26,18 +26,13 @@ impl ConfigResolver {
         self.default_session_config_with_preset("general")
     }
 
-    pub fn default_session_config_with_preset(
-        &self,
-        preset_name: &str,
-    ) -> Result<SessionConfig> {
+    pub fn default_session_config_with_preset(&self, preset_name: &str) -> Result<SessionConfig> {
         let preset = self
             .presets
             .get(preset_name)
             .context(format!("Unknown preset: {}", preset_name))?;
 
-        let temperature = self
-            .config_manager
-            .map_creativity(&preset.model, 0.5);
+        let temperature = self.config_manager.map_creativity(&preset.model, 0.5);
 
         Ok(SessionConfig {
             provider: ProviderConfig {
@@ -47,6 +42,7 @@ impl ConfigResolver {
                 top_p: None,
                 frequency_penalty: None,
                 presence_penalty: None,
+                enable_grounding: None,
             },
             agent: AgentConfig {
                 max_rounds: 30,
@@ -89,9 +85,7 @@ impl ConfigResolver {
 
         if let Some(freq_penalty) = config.provider.frequency_penalty {
             if !(-2.0..=2.0).contains(&freq_penalty) {
-                bail!(
-                    "provider.frequency_penalty must be between -2.0 and 2.0"
-                );
+                bail!("provider.frequency_penalty must be between -2.0 and 2.0");
             }
         }
 
@@ -106,9 +100,7 @@ impl ConfigResolver {
         }
 
         if config.session.system_prompt.len() > 10000 {
-            bail!(
-                "session.system_prompt must be at most 10,000 characters"
-            );
+            bail!("session.system_prompt must be at most 10,000 characters");
         }
 
         if config.session.max_context_tokens == 0 {

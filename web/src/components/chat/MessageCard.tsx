@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallCard } from "./ToolCallCard";
+import { GroundingSources, type GroundingMetadata } from "./GroundingSources";
 import {
   Collapsible,
   CollapsibleContent,
@@ -49,6 +50,9 @@ export interface MessageCardProps {
   isCheckpoint?: boolean;
   checkpointNodeId?: string;
   checkpointData?: import("@/types").CheckpointData;
+
+  // For web search grounding (Gemini only)
+  groundingMetadata?: GroundingMetadata;
 }
 
 export function MessageCard({
@@ -66,6 +70,7 @@ export function MessageCard({
   onCreateBranch,
   canCreateCheckpoint = false,
   onCreateCheckpoint,
+  groundingMetadata,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -256,6 +261,11 @@ export function MessageCard({
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           )}
         </div>
+      )}
+
+      {/* Grounding sources (for Assistant messages with web search) */}
+      {role === "assistant" && groundingMetadata && (
+        <GroundingSources metadata={groundingMetadata} />
       )}
     </div>
   );

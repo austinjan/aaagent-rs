@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
 import type { SessionConfig } from "../components/chat/SessionConfigPanel";
@@ -9,7 +8,6 @@ import {
   CopySessionIdButton,
   SessionToolbar,
 } from "../components/session";
-import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
 import {
@@ -21,6 +19,7 @@ import {
   aiRenameSession,
   getSession,
   updateSessionTags,
+  updateConfig,
 } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
@@ -107,6 +106,7 @@ export function Chat() {
       top_p: undefined,
       frequency_penalty: undefined,
       presence_penalty: undefined,
+      enable_grounding: false,
     },
     agent: {
       max_rounds: 30,
@@ -117,6 +117,9 @@ export function Chat() {
       max_context_tokens: 200000,
     },
   });
+
+  // Web search state (quick toggle, synced with config)
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
 
   // Checkpoint modal state
   const [checkpointModalOpen, setCheckpointModalOpen] = useState(false);
@@ -176,6 +179,9 @@ export function Chat() {
       getConfig(sessionId)
         .then((response) => {
           setSessionConfig(response.session_config);
+          setEnableWebSearch(
+            response.session_config.provider.enable_grounding || false,
+          );
         })
         .catch((err) => {
           console.error("Failed to load config:", err);
@@ -191,6 +197,36 @@ export function Chat() {
         });
     }
   }, [sessionId]);
+
+  // Handle web search toggle
+  const handleWebSearchToggle = async (enabled: boolean) => {
+    setEnableWebSearch(enabled);
+
+    // Update config immediately
+    const updatedConfig = {
+      ...sessionConfig,
+      provider: {
+        ...sessionConfig.provider,
+        enable_grounding: enabled,
+      },
+    };
+
+    setSessionConfig(updatedConfig);
+
+    // Save to backend
+    if (sessionId) {
+      try {
+        await updateConfig(sessionId, updatedConfig);
+      } catch (err) {
+        console.error("Failed to update web search setting:", err);
+        // Revert on error
+        setEnableWebSearch(!enabled);
+      }
+    }
+  };
+
+  // Web search is now available for all providers via web_search tool
+  const showWebSearch = true;
 
   const handleSendMessage = async (content: string) => {
     try {
@@ -278,8 +314,8 @@ export function Chat() {
     if (!sessionId) return;
     try {
       await archiveSession(sessionId);
-      // Create a new session after archiving current one
-      await handleNewSession();
+      // Trigger session list refresh, the sidebar will handle switching to another session
+      setSessionListRefresh((prev) => prev + 1);
     } catch (err) {
       console.error("Failed to archive session:", err);
       alert("Failed to archive session. Please try again.");
@@ -404,7 +440,7 @@ export function Chat() {
     <div className="chat-page flex flex-col h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-7xl mx-auto px-4 py-4">
+        <div className="px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -418,15 +454,6 @@ export function Chat() {
               {sessionId && (
                 <CopySessionIdButton sessionId={sessionId} variant="outline" />
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleNewSession}
-                disabled={isLoading}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Session
-              </Button>
             </div>
           </div>
         </div>
@@ -488,11 +515,13 @@ export function Chat() {
               />
 
               {/* Chat Input */}
-              <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
-                  <ChatInput onSend={handleSendMessage} disabled={isLoading} />
-                </div>
-              </div>
+              <ChatInput
+                onSend={handleSendMessage}
+                disabled={isLoading}
+                enableWebSearch={enableWebSearch}
+                onWebSearchToggle={handleWebSearchToggle}
+                showWebSearch={showWebSearch}
+              />
             </>
           ) : (
             /* Tree View */

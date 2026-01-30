@@ -182,6 +182,7 @@ export interface ProviderConfig {
   top_p?: number;
   frequency_penalty?: number;
   presence_penalty?: number;
+  enable_grounding?: boolean; // Web search grounding (Gemini only)
 }
 
 export interface AgentConfig {
@@ -251,6 +252,20 @@ export interface CheckpointDisplayStats {
   compressionRatio: number;
 }
 
+// Grounding metadata for web search (Gemini)
+export interface GroundingMetadata {
+  web_search_queries?: string[];
+  grounding_chunks?: Array<{
+    web?: {
+      uri: string;
+      title?: string;
+    };
+  }>;
+  search_entry_point?: {
+    rendered_content?: string;
+  };
+}
+
 // Convert Node to MessageCard format - matches backend structure exactly
 export interface MessageData {
   id: NodeId;
@@ -279,6 +294,9 @@ export interface MessageData {
   isCheckpoint?: boolean;
   checkpointNodeId?: NodeId; // Links to the original node that has this checkpoint
   checkpointData?: CheckpointData; // Full checkpoint data from backend
+
+  // For web search grounding (Gemini only)
+  groundingMetadata?: GroundingMetadata;
 }
 
 // Convert CheckpointData to CheckpointCard format

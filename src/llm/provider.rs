@@ -75,6 +75,9 @@ pub struct ProviderState {
 
     /// Total conversation loop turns
     pub conversation_turns: u32,
+
+    /// Grounding metadata from last request (Gemini only)
+    pub grounding_metadata: Option<serde_json::Value>,
 }
 
 /// Configuration options for generation
@@ -95,6 +98,9 @@ pub struct ProviderConfig {
     /// Enable thinking/reasoning mode (for supported providers like Claude)
     pub enable_reasoning: bool,
 
+    /// Enable web search grounding (for supported providers like Gemini)
+    pub enable_grounding: bool,
+
     /// Stop sequences
     pub stop_sequences: Vec<String>,
 
@@ -110,6 +116,7 @@ impl Default for ProviderConfig {
             top_p: None,
             top_k: None,
             enable_reasoning: false,
+            enable_grounding: false,
             stop_sequences: Vec::new(),
             extra_options: HashMap::new(),
         }

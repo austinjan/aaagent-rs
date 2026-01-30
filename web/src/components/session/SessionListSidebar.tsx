@@ -100,13 +100,26 @@ export function SessionListSidebar({
     try {
       await archiveSessionApi(sessionId);
 
-      // If we archived the current session, trigger new session creation
-      // (which will also trigger refresh)
+      // Reload session list
+      await loadSessions(activeFilters);
+
+      // If we archived the current session, switch to the first available session
       if (sessionId === currentSessionId) {
-        onNewSession();
-      } else {
-        // For non-current sessions, reload to ensure consistency
-        await loadSessions(activeFilters);
+        if (sessions.length > 0) {
+          // Switch to first session (which is not the archived one)
+          const firstSession = sessions[0];
+          if (firstSession.session_id !== sessionId) {
+            onSessionSelect(firstSession.session_id);
+          } else if (sessions.length > 1) {
+            onSessionSelect(sessions[1].session_id);
+          } else {
+            // No other sessions available, create new one
+            onNewSession();
+          }
+        } else {
+          // No sessions available, create new one
+          onNewSession();
+        }
       }
     } catch (err) {
       console.error("Failed to archive session:", err);
