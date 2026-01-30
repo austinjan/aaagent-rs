@@ -140,6 +140,8 @@ export interface TokenUsage {
 export interface SessionInfo {
   session_id: SessionId;
   name: string | null;
+  tags: string[];
+  archived: boolean;
   created_at: number;
   updated_at: number;
   message_count: number;

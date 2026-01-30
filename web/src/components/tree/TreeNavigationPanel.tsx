@@ -2,7 +2,6 @@
 
 import { useState, useRef, useMemo } from "react";
 import { TreeVisualization } from "./TreeVisualization";
-import { TreeControls } from "./TreeControls";
 import { NodeDetailsPanel } from "./NodeDetailsPanel";
 import type { TreeNode } from "./treeLayout";
 
@@ -29,22 +28,6 @@ export function TreeNavigationPanel({
     if (!selectedNodeId) return null;
     return nodes.find((node) => node.id === selectedNodeId) || null;
   }, [selectedNodeId, nodes]);
-
-  const handleCenterTree = () => {
-    if (containerRef.current) {
-      const svg = containerRef.current.querySelector("svg");
-      if (svg) {
-        // Reset viewBox to show entire tree
-        // The TreeVisualization component handles viewBox calculation
-        // This triggers a re-center by scrolling to top-left
-        containerRef.current.scrollTo({
-          top: 0,
-          left: 0,
-          behavior: "smooth",
-        });
-      }
-    }
-  };
 
   const handleNodeSelect = (nodeId: string) => {
     // Scroll message card into view in the chat container

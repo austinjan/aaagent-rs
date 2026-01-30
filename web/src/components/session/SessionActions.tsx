@@ -11,7 +11,7 @@ interface SessionActionsProps {
 
 export function SessionActions({
   sessionId,
-  sessionName,
+  sessionName: _sessionName,
   onArchive,
   disabled = false,
 }: SessionActionsProps) {

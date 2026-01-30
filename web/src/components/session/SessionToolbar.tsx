@@ -20,14 +20,17 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
 import { SessionConfigPanel } from "../chat/SessionConfigPanel";
+import { TagEditor } from "./TagEditor";
 import type { SessionConfig } from "../chat/SessionConfigPanel";
 
 interface SessionToolbarProps {
   sessionId: string;
   sessionName: string | null;
+  sessionTags: string[];
   currentView: "chat" | "tree";
   config: SessionConfig;
   onRename: (newName: string) => void;
+  onTagsUpdate: (tags: string[]) => Promise<void>;
   onAIRename: () => void;
   onArchive: () => void;
   onViewChange: (view: "chat" | "tree") => void;
@@ -41,9 +44,11 @@ interface SessionToolbarProps {
 export function SessionToolbar({
   sessionId,
   sessionName,
+  sessionTags,
   currentView,
   config,
   onRename,
+  onTagsUpdate,
   onAIRename,
   onArchive,
   onViewChange,
@@ -293,15 +298,35 @@ export function SessionToolbar({
           <DialogHeader>
             <DialogTitle>Session Settings</DialogTitle>
           </DialogHeader>
-          <SessionConfigPanel
-            sessionId={sessionId}
-            config={config}
-            onConfigChanged={(newConfig) => {
-              onConfigChanged(newConfig);
-              setShowSettingsModal(false);
-            }}
-            disabled={disabled}
-          />
+
+          <div className="space-y-6">
+            {/* Tags Section */}
+            <div className="border-b border-border pb-4">
+              <h3 className="text-sm font-semibold mb-3">Tags</h3>
+              <TagEditor
+                sessionId={sessionId}
+                initialTags={sessionTags}
+                onTagsUpdate={async (tags) => {
+                  await onTagsUpdate(tags);
+                }}
+                disabled={disabled}
+              />
+            </div>
+
+            {/* Config Section */}
+            <div>
+              <h3 className="text-sm font-semibold mb-3">Configuration</h3>
+              <SessionConfigPanel
+                sessionId={sessionId}
+                config={config}
+                onConfigChanged={(newConfig) => {
+                  onConfigChanged(newConfig);
+                  setShowSettingsModal(false);
+                }}
+                disabled={disabled}
+              />
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

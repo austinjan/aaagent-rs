@@ -1,9 +1,10 @@
 # Chat UI Session Management Plan
 
 - Feature name: `chat-ui-session-management`
-- Status: ✅ Core Implemented (Minor enhancements pending)
+- Status: ✅ **COMPLETED**
 - Created: 2026-01-08
-- Last updated: 2026-01-23
+- Completed: 2026-01-30
+- Last updated: 2026-01-30
 - Parent plan: [chat-ui-plan.md](./chat-ui-plan.md)
 
 ## 1) Overview
@@ -51,11 +52,18 @@ Implement session lifecycle management to create, load, persist, and manage conv
   - ✅ Multi-turn conversations persist across requests
   - ✅ Sessions survive server restarts
 
-### 📝 PENDING (Minor Enhancements)
-- [ ] `DELETE /api/sessions/:id` - Delete session endpoint (trivial to add)
-- [ ] Advanced filtering in list endpoint (by tags, date range, name search)
-- [ ] `PATCH /api/sessions/:id` - Update name/tags separately from config
-- [ ] Integration tests for full CRUD lifecycle
+### ✅ COMPLETED (2026-01-30)
+- ✅ ~~`DELETE /api/sessions/:id`~~ - Implemented as `PATCH /api/sessions/:id/archive` (soft delete)
+- ✅ **Advanced filtering in list endpoint** - Implemented with query parameters:
+  - `?tags=tag1,tag2` - Filter by tags (must have ALL specified tags)
+  - `?name=search` - Filter by name (case-insensitive contains)
+  - `?created_after=timestamp` - Filter by creation date (after)
+  - `?created_before=timestamp` - Filter by creation date (before)
+- ✅ `PATCH /api/sessions/:id/rename` - Update session name
+- ✅ `POST /api/sessions/:id/ai-rename` - AI-powered session naming
+- ✅ **Tags UI** - Display tags in session list with filter controls
+- ✅ **Filter controls** - Search input with tag/name filtering in session sidebar
+- [ ] Integration tests for full CRUD lifecycle (deferred)
 
 ### 🔧 Architecture Changes from Plan
 The plan originally proposed a `SessionManager` abstraction layer, but the implementation uses **JSONLStore directly** in `AppState`:

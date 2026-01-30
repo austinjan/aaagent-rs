@@ -331,33 +331,63 @@ impl JSONLStore {
 
     /// List all session metadata files
     async fn list_sessions_metadata(&self) -> Result<Vec<Session>> {
-        let sessions_dir = self.session_dir("");
-        if !sessions_dir.exists() {
-            return Ok(Vec::new());
-        }
-
         let mut sessions = Vec::new();
-        let mut entries = fs::read_dir(&sessions_dir).await.context(format!(
-            "Failed to read sessions directory: {}",
-            sessions_dir.display()
-        ))?;
 
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
+        // Scan active sessions directory
+        let sessions_dir = self.session_dir("");
+        if sessions_dir.exists() {
+            let mut entries = fs::read_dir(&sessions_dir).await.context(format!(
+                "Failed to read sessions directory: {}",
+                sessions_dir.display()
+            ))?;
 
-            // Only process .meta.json files
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
 
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if !file_name.ends_with(".meta.json") {
+                // Only process .meta.json files
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
 
-                if let Ok(content) = fs::read_to_string(&path).await {
-                    if let Ok(session) = serde_json::from_str::<Session>(&content) {
-                        sessions.push(session);
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !file_name.ends_with(".meta.json") {
+                        continue;
+                    }
+
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                            sessions.push(session);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scan archived sessions directory
+        let archived_dir = self.base_path.join("archived");
+        if archived_dir.exists() {
+            let mut entries = fs::read_dir(&archived_dir).await.context(format!(
+                "Failed to read archived directory: {}",
+                archived_dir.display()
+            ))?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+
+                // Only process .meta.json files
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !file_name.ends_with(".meta.json") {
+                        continue;
+                    }
+
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                            sessions.push(session);
+                        }
                     }
                 }
             }
@@ -619,8 +649,48 @@ impl TreeStore for JSONLStore {
         session.archived = true;
         session.updated_at = crate::history::node::now();
 
-        // Save the updated session
+        // Save the updated session first
         self.update_session(&session).await?;
+
+        // Create archived directory if it doesn't exist (data/archived)
+        let archived_dir = self.base_path.join("archived");
+        fs::create_dir_all(&archived_dir).await.context(format!(
+            "Failed to create archived directory: {}",
+            archived_dir.display()
+        ))?;
+
+        // Move metadata file
+        let source_meta = self.session_meta_path(&session_id);
+        let dest_meta = archived_dir.join(format!("{}.meta.json", session_id));
+        if source_meta.exists() {
+            fs::rename(&source_meta, &dest_meta).await.context(format!(
+                "Failed to move metadata file from {} to {}",
+                source_meta.display(),
+                dest_meta.display()
+            ))?;
+        }
+
+        // Move nodes JSONL file
+        let source_nodes = self.nodes_jsonl_path(&session_id);
+        let dest_nodes = archived_dir.join(format!("{}.nodes.jsonl", session_id));
+        if source_nodes.exists() {
+            fs::rename(&source_nodes, &dest_nodes)
+                .await
+                .context(format!(
+                    "Failed to move nodes file from {} to {}",
+                    source_nodes.display(),
+                    dest_nodes.display()
+                ))?;
+        }
+
+        // Remove from cache after moving files
+        let mut cache = self.cache.write().await;
+        cache.remove(&session_id);
+
+        crate::logger::log(format!(
+            "[JSONLStore] Archived session {} to archived directory",
+            session_id
+        ));
 
         Ok(())
     }

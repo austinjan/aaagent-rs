@@ -355,6 +355,7 @@ async fn run_agent_loop<P: LLMProvider>(
                         total_usage,
                         all_tool_calls,
                         rounds,
+                        new_node_ids,
                     } => {
                         println!("\n>>> Event: Done");
                         log::info!(
@@ -373,6 +374,7 @@ async fn run_agent_loop<P: LLMProvider>(
                             total_usage.output_tokens,
                             total_usage.cached_tokens
                         );
+                        println!("       New nodes: {}", new_node_ids.len());
                     }
                 }
             })

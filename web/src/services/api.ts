@@ -78,8 +78,39 @@ export async function checkHealth(): Promise<HealthResponse> {
 // Session Management
 // ============================================================================
 
-export async function listSessions(): Promise<ListSessionsResponse> {
-  const response = await fetch(`${API_BASE}/sessions`);
+export interface SessionFilters {
+  tags?: string[]; // Filter by tags (session must have ALL specified tags)
+  name?: string; // Filter by name (case-insensitive contains)
+  created_after?: number; // Unix timestamp
+  created_before?: number; // Unix timestamp
+  include_archived?: boolean; // Include archived sessions (default: false)
+}
+
+export async function listSessions(
+  filters?: SessionFilters,
+): Promise<ListSessionsResponse> {
+  const params = new URLSearchParams();
+
+  if (filters) {
+    if (filters.tags && filters.tags.length > 0) {
+      params.append("tags", filters.tags.join(","));
+    }
+    if (filters.name) {
+      params.append("name", filters.name);
+    }
+    if (filters.created_after !== undefined) {
+      params.append("created_after", filters.created_after.toString());
+    }
+    if (filters.created_before !== undefined) {
+      params.append("created_before", filters.created_before.toString());
+    }
+    if (filters.include_archived !== undefined) {
+      params.append("include_archived", filters.include_archived.toString());
+    }
+  }
+
+  const url = `${API_BASE}/sessions${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await fetch(url);
   return handleResponse<ListSessionsResponse>(response);
 }
 
@@ -143,6 +174,24 @@ export async function aiRenameSession(
     method: "POST",
   });
   return handleResponse<RenameSessionResponse>(response);
+}
+
+export interface UpdateTagsResponse {
+  success: boolean;
+  session_id: string;
+  tags: string[];
+}
+
+export async function updateSessionTags(
+  sessionId: string,
+  tags: string[],
+): Promise<UpdateTagsResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tags`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  return handleResponse<UpdateTagsResponse>(response);
 }
 
 export async function getSessionPath(sessionId: string): Promise<SessionPath> {

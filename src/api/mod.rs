@@ -138,6 +138,10 @@ fn api_routes() -> Router<AppState> {
             axum::routing::patch(sessions::rename_session),
         )
         .route(
+            "/sessions/:session_id/tags",
+            axum::routing::patch(sessions::update_tags),
+        )
+        .route(
             "/sessions/:session_id/ai-rename",
             post(sessions::ai_rename_session),
         )
@@ -241,21 +245,94 @@ struct ConfigResponse {
 mod sessions {
     use super::*;
 
-    pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    #[derive(Deserialize)]
+    pub struct ListSessionsQuery {
+        tags: Option<String>,           // Comma-separated tags
+        name: Option<String>,           // Name search (case-insensitive contains)
+        created_after: Option<i64>,     // Unix timestamp
+        created_before: Option<i64>,    // Unix timestamp
+        include_archived: Option<bool>, // Include archived sessions (default: false)
+    }
+
+    pub async fn list_sessions(
+        State(state): State<AppState>,
+        Query(query): Query<ListSessionsQuery>,
+    ) -> Result<Json<Value>, ApiError> {
         let sessions = state
             .store
             .list_sessions()
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // Filter out archived sessions and convert to session summaries
-        let summaries: Vec<_> = sessions
+        // Parse tags filter
+        let tag_filters: Vec<String> = query
+            .tags
+            .as_ref()
+            .map(|t| t.split(',').map(|s| s.trim().to_lowercase()).collect())
+            .unwrap_or_default();
+
+        // Filter sessions
+        let include_archived = query.include_archived.unwrap_or(false);
+        let filtered_sessions: Vec<_> = sessions
             .iter()
-            .filter(|s| !s.archived)
+            .filter(|s| {
+                // Filter out archived unless explicitly requested
+                if s.archived && !include_archived {
+                    return false;
+                }
+
+                // Filter by tags (session must have ALL specified tags)
+                if !tag_filters.is_empty() {
+                    let session_tags_lower: Vec<String> =
+                        s.tags.iter().map(|t| t.to_lowercase()).collect();
+                    if !tag_filters
+                        .iter()
+                        .all(|filter_tag| session_tags_lower.contains(filter_tag))
+                    {
+                        return false;
+                    }
+                }
+
+                // Filter by name (case-insensitive contains)
+                if let Some(name_query) = &query.name {
+                    if let Some(session_name) = &s.name {
+                        if !session_name
+                            .to_lowercase()
+                            .contains(&name_query.to_lowercase())
+                        {
+                            return false;
+                        }
+                    } else {
+                        return false; // No name, doesn't match
+                    }
+                }
+
+                // Filter by created_after
+                if let Some(after) = query.created_after {
+                    if s.created_at < after {
+                        return false;
+                    }
+                }
+
+                // Filter by created_before
+                if let Some(before) = query.created_before {
+                    if s.created_at > before {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect();
+
+        // Convert to session summaries
+        let summaries: Vec<_> = filtered_sessions
+            .iter()
             .map(|s| {
                 json!({
                     "session_id": s.session_id,
                     "name": s.name,
+                    "tags": s.tags,
                     "created_at": s.created_at,
                     "updated_at": s.updated_at,
                     "message_count": s.stats.total_nodes,
@@ -407,6 +484,46 @@ mod sessions {
             "success": true,
             "session_id": session_id,
             "name": name
+        })))
+    }
+
+    #[derive(Deserialize)]
+    pub struct UpdateTagsRequest {
+        tags: Vec<String>,
+    }
+
+    pub async fn update_tags(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<UpdateTagsRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Update tags request for: {}", session_id));
+
+        // Load and update session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
+
+        // Update tags
+        session.tags = req.tags;
+        session.updated_at = crate::history::node::now();
+
+        // Save
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session tags updated: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "tags": session.tags
         })))
     }
 

@@ -2,10 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
-import {
-  SessionConfigPanel,
-  type SessionConfig,
-} from "../components/chat/SessionConfigPanel";
+import type { SessionConfig } from "../components/chat/SessionConfigPanel";
 import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
 import {
   SessionListSidebar,
@@ -23,12 +20,12 @@ import {
   archiveSession,
   aiRenameSession,
   getSession,
+  updateSessionTags,
 } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
 import { CheckpointCreationModal } from "../components/checkpoint";
-import { SummaryPanel } from "../components/summary";
 
 // Convert MessageData to MessageCardProps
 function toMessageCardProps(msg: MessageData): MessageCardProps {
@@ -97,8 +94,9 @@ export function Chat() {
     [sessionId, loadTree],
   );
 
-  // Session name
+  // Session name and tags
   const [sessionName, setSessionName] = useState<string | null>(null);
+  const [sessionTags, setSessionTags] = useState<string[]>([]);
 
   // Session config (persistent)
   const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
@@ -186,6 +184,7 @@ export function Chat() {
       getSession(sessionId)
         .then((response) => {
           setSessionName(response.name);
+          setSessionTags(response.tags || []);
         })
         .catch((err) => {
           console.error("Failed to load session info:", err);
@@ -258,6 +257,20 @@ export function Chat() {
     } catch (err) {
       console.error("Failed to AI rename session:", err);
       alert("Failed to generate AI name. Please try again.");
+    }
+  };
+
+  const handleUpdateTags = async (tags: string[]) => {
+    if (!sessionId) return;
+    try {
+      const response = await updateSessionTags(sessionId, tags);
+      // Update local state
+      setSessionTags(response.tags);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to update tags:", err);
+      throw err; // Re-throw to let TagEditor handle the error
     }
   };
 
@@ -439,9 +452,11 @@ export function Chat() {
               <SessionToolbar
                 sessionId={sessionId}
                 sessionName={sessionName}
+                sessionTags={sessionTags}
                 currentView={currentView}
                 config={sessionConfig}
                 onRename={handleRenameSession}
+                onTagsUpdate={handleUpdateTags}
                 onAIRename={handleAIRenameSession}
                 onArchive={handleArchiveSession}
                 onViewChange={handleViewChange}
