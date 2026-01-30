@@ -72,6 +72,9 @@ pub trait TreeStore: Send + Sync {
     /// List all sessions
     async fn list_sessions(&self) -> Result<Vec<Session>>;
 
+    /// Archive a session (sets archived flag to true)
+    async fn archive_session(&self, session_id: SessionId) -> Result<()>;
+
     // Batch operations
 
     /// Get multiple nodes in a single operation

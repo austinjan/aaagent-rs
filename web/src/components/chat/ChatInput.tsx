@@ -12,7 +12,7 @@ export interface ChatInputProps {
 export function ChatInput({
   onSend,
   disabled = false,
-  placeholder = "Type your message... (Ctrl+Enter to send)",
+  placeholder = "Type your message... (Enter to send, Shift+Enter for new line)",
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -46,8 +46,8 @@ export function ChatInput({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Ctrl+Enter or Cmd+Enter to send
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    // Enter alone to send (Shift+Enter for new line)
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -92,7 +92,7 @@ export function ChatInput({
               disabled={!canSend}
               title={
                 canSend
-                  ? "Send message (Ctrl+Enter)"
+                  ? "Send message (Enter)"
                   : disabled
                     ? "Waiting for response..."
                     : "Type a message to send"
@@ -105,7 +105,7 @@ export function ChatInput({
         </div>
         {/* Keyboard hint */}
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>Press Ctrl+Enter to send</span>
+          <span>Press Enter to send, Shift+Enter for new line</span>
           <span className="text-right">
             {message.length > 0 && `${message.length} characters`}
           </span>

@@ -7,10 +7,23 @@ import {
   type SessionConfig,
 } from "../components/chat/SessionConfigPanel";
 import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
+import {
+  SessionListSidebar,
+  CopySessionIdButton,
+  SessionToolbar,
+} from "../components/session";
 import { Button } from "../components/ui/button";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
-import { getConfig, switchBranch, createBranch } from "../services/api";
+import {
+  getConfig,
+  switchBranch,
+  createBranch,
+  renameSession,
+  archiveSession,
+  aiRenameSession,
+  getSession,
+} from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
@@ -61,6 +74,31 @@ export function Chat() {
   // Get selection from Zustand store
   const selectedMessageId = useChatStore(selectSelectedNodeId);
   const selectNode = useChatStore((state) => state.selectNode);
+
+  // Session list refresh trigger
+  const [sessionListRefresh, setSessionListRefresh] = useState(0);
+
+  // View state: chat or tree
+  const [currentView, setCurrentView] = useState<"chat" | "tree">("chat");
+
+  // Handle view change with state refresh
+  const handleViewChange = useCallback(
+    async (view: "chat" | "tree") => {
+      setCurrentView(view);
+      if (view === "tree" && sessionId) {
+        // Refresh tree state from backend when switching to tree view
+        try {
+          await loadTree(sessionId);
+        } catch (err) {
+          console.error("Failed to refresh tree state:", err);
+        }
+      }
+    },
+    [sessionId, loadTree],
+  );
+
+  // Session name
+  const [sessionName, setSessionName] = useState<string | null>(null);
 
   // Session config (persistent)
   const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
@@ -134,7 +172,7 @@ export function Chat() {
     };
   }, [initializeSession, loadHistory]);
 
-  // Load config from backend when session is ready
+  // Load config and session info from backend when session is ready
   useEffect(() => {
     if (sessionId) {
       getConfig(sessionId)
@@ -143,6 +181,14 @@ export function Chat() {
         })
         .catch((err) => {
           console.error("Failed to load config:", err);
+        });
+
+      getSession(sessionId)
+        .then((response) => {
+          setSessionName(response.name);
+        })
+        .catch((err) => {
+          console.error("Failed to load session info:", err);
         });
     }
   }, [sessionId]);
@@ -164,10 +210,66 @@ export function Chat() {
       const newSessionId = await resetChat();
       if (newSessionId) {
         persistSession(newSessionId);
+        // Trigger session list refresh
+        setSessionListRefresh((prev) => prev + 1);
       }
       selectNode(null); // Clear selection
     } catch (err) {
       console.error("Failed to create new session:", err);
+    }
+  };
+
+  const handleSessionSelect = async (selectedSessionId: string) => {
+    try {
+      if (selectedSessionId !== sessionId) {
+        await loadHistory(selectedSessionId);
+        persistSession(selectedSessionId);
+        selectNode(null); // Clear selection when switching sessions
+        // Trigger session list refresh to update timestamps
+        setSessionListRefresh((prev) => prev + 1);
+      }
+    } catch (err) {
+      console.error("Failed to load session:", err);
+    }
+  };
+
+  const handleRenameSession = async (newName: string) => {
+    if (!sessionId) return;
+    try {
+      await renameSession(sessionId, newName);
+      // Update local state
+      setSessionName(newName);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to rename session:", err);
+      alert("Failed to rename session. Please try again.");
+    }
+  };
+
+  const handleAIRenameSession = async () => {
+    if (!sessionId) return;
+    try {
+      const response = await aiRenameSession(sessionId);
+      // Update local state with AI-generated name
+      setSessionName(response.name);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to AI rename session:", err);
+      alert("Failed to generate AI name. Please try again.");
+    }
+  };
+
+  const handleArchiveSession = async () => {
+    if (!sessionId) return;
+    try {
+      await archiveSession(sessionId);
+      // Create a new session after archiving current one
+      await handleNewSession();
+    } catch (err) {
+      console.error("Failed to archive session:", err);
+      alert("Failed to archive session. Please try again.");
     }
   };
 
@@ -301,9 +403,7 @@ export function Chat() {
             </div>
             <div className="flex items-center gap-3">
               {sessionId && (
-                <span className="text-xs text-muted-foreground font-mono">
-                  Session: {sessionId.slice(0, 8)}...
-                </span>
+                <CopySessionIdButton sessionId={sessionId} variant="outline" />
               )}
               <Button
                 variant="outline"
@@ -319,51 +419,76 @@ export function Chat() {
         </div>
       </header>
 
-      {/* Main Content: Tree Panel + Chat */}
+      {/* Main Content: Session List + Chat Area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Tree Navigation Panel (Left Sidebar) */}
-        <div className="w-80 border-r border-border flex-shrink-0 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
-            <TreeNavigationPanel
-              nodes={treeNodes}
-              activeLeafId={activeLeafId}
-              selectedNodeId={selectedMessageId}
-              onNodeSelect={handleSelectMessage}
-              onBranchSwitch={handleBranchSwitch}
-            />
-          </div>
-          {/* Summary Panel */}
-          {sessionId && (
-            <div className="p-2 border-t border-border flex-shrink-0">
-              <SummaryPanel sessionId={sessionId} leafId={activeLeafId} />
-            </div>
-          )}
+        {/* Session List Sidebar (Left) */}
+        <div className="w-64 flex-shrink-0">
+          <SessionListSidebar
+            currentSessionId={sessionId}
+            onSessionSelect={handleSessionSelect}
+            onNewSession={handleNewSession}
+            refreshTrigger={sessionListRefresh}
+          />
         </div>
 
         {/* Chat Area (Right Side) */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Session Config Panel */}
-          <SessionConfigPanel
-            sessionId={sessionId}
-            config={sessionConfig}
-            onConfigChanged={setSessionConfig}
-            disabled={isLoading}
-          />
-
-          {/* Chat Container */}
-          <ChatContainer
-            messages={messageCards}
-            selectedMessageId={selectedMessageId || undefined}
-            onSelectMessage={handleSelectMessage}
-            isLoading={isLoading}
-          />
-
-          {/* Chat Input */}
-          <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
-              <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+          {/* Session Toolbar */}
+          {sessionId && (
+            <div className="border-b border-border bg-background p-3">
+              <SessionToolbar
+                sessionId={sessionId}
+                sessionName={sessionName}
+                currentView={currentView}
+                config={sessionConfig}
+                onRename={handleRenameSession}
+                onAIRename={handleAIRenameSession}
+                onArchive={handleArchiveSession}
+                onViewChange={handleViewChange}
+                onConfigChanged={setSessionConfig}
+                onCreateBranch={
+                  selectedMessageId
+                    ? () => handleCreateBranch(selectedMessageId)
+                    : undefined
+                }
+                onCreateCheckpoint={
+                  selectedMessageId
+                    ? () => handleOpenCheckpointModal(selectedMessageId)
+                    : undefined
+                }
+                disabled={isLoading}
+              />
             </div>
-          </div>
+          )}
+
+          {/* Main Content Area - Chat or Tree */}
+          {currentView === "chat" ? (
+            <>
+              {/* Chat Container */}
+              <ChatContainer
+                messages={messageCards}
+                selectedMessageId={selectedMessageId || undefined}
+                onSelectMessage={handleSelectMessage}
+                isLoading={isLoading}
+              />
+
+              {/* Chat Input */}
+              <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
+                  <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+                </div>
+              </div>
+            </>
+          ) : (
+            /* Tree View */
+            <TreeNavigationPanel
+              nodes={treeNodes}
+              activeLeafId={activeLeafId || ""}
+              selectedNodeId={selectedMessageId}
+              onNodeSelect={handleSelectMessage}
+              onBranchSwitch={handleBranchSwitch}
+            />
+          )}
         </div>
       </div>
 

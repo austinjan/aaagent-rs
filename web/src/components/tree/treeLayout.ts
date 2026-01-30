@@ -36,8 +36,8 @@ export interface TreeConfig {
 }
 
 export const DEFAULT_CONFIG: TreeConfig = {
-  nodeSpacing: 50,
-  branchSpacing: 80,
+  nodeSpacing: 80, // Increased for text labels
+  branchSpacing: 400, // Increased for content preview
   nodeSize: 12,
   collapseThreshold: 5,
   edgeStrokeWidth: 6,

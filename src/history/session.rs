@@ -41,6 +41,8 @@ pub struct Session {
     // Metadata
     pub name: Option<String>,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub archived: bool,
     pub config: SessionConfig,
     pub stats: SessionStats,
 
@@ -205,6 +207,7 @@ impl Session {
             head_checkpoint_id: None,
             name: None,
             tags: Vec::new(),
+            archived: false,
             config,
             stats: SessionStats::default(),
             checkpoints: HashMap::new(),

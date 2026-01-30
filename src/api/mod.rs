@@ -129,6 +129,18 @@ fn api_routes() -> Router<AppState> {
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route("/sessions/:session_id", get(sessions::get_session))
+        .route(
+            "/sessions/:session_id/archive",
+            axum::routing::patch(sessions::archive_session),
+        )
+        .route(
+            "/sessions/:session_id/rename",
+            axum::routing::patch(sessions::rename_session),
+        )
+        .route(
+            "/sessions/:session_id/ai-rename",
+            post(sessions::ai_rename_session),
+        )
         .route("/sessions/:session_id/chat", post(sessions::chat))
         .route("/sessions/:session_id/stream/:stream_id", get(sse::stream))
         .route("/sessions/:session_id/path", get(sessions::get_path))
@@ -236,9 +248,10 @@ mod sessions {
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        // Convert to session summaries
+        // Filter out archived sessions and convert to session summaries
         let summaries: Vec<_> = sessions
             .iter()
+            .filter(|s| !s.archived)
             .map(|s| {
                 json!({
                     "session_id": s.session_id,
@@ -246,13 +259,14 @@ mod sessions {
                     "created_at": s.created_at,
                     "updated_at": s.updated_at,
                     "message_count": s.stats.total_nodes,
+                    "archived": s.archived,
                 })
             })
             .collect();
 
         Ok(Json(json!({
             "sessions": summaries,
-            "total": sessions.len()
+            "total": summaries.len()
         })))
     }
 
@@ -327,6 +341,174 @@ mod sessions {
         })))
     }
 
+    pub async fn archive_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Archive session request for: {}", session_id));
+
+        // Archive the session
+        state
+            .store
+            .archive_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session archived successfully: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "archived": true
+        })))
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct RenameSessionRequest {
+        name: String,
+    }
+
+    pub async fn rename_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<RenameSessionRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Rename session request for: {}", session_id));
+
+        // Validate name
+        let name = req.name.trim();
+        if name.is_empty() {
+            return Err(ApiError::BadRequest(
+                "Session name cannot be empty".to_string(),
+            ));
+        }
+
+        // Load and update session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.name = Some(name.to_string());
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session renamed successfully: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "name": name
+        })))
+    }
+
+    pub async fn ai_rename_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("AI rename session request for: {}", session_id));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.set_store(state.store.clone());
+
+        // Get conversation context (first 10 messages or up to 2000 tokens)
+        let context = session
+            .get_context()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Build a summary of the conversation for the LLM
+        let mut conversation_text = String::new();
+        for msg in context.iter().take(10) {
+            conversation_text.push_str(&format!("{:?}: {}\n", msg.role, msg.content));
+        }
+
+        // Create a quick provider for naming
+        let quick_provider =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Ask LLM to generate a short session name
+        let prompt = format!(
+            "Based on the following conversation, provide a very short (3-6 words maximum) descriptive name for this chat session. \
+            Only respond with the session name, nothing else.\n\nConversation:\n{}",
+            conversation_text.chars().take(1000).collect::<String>()
+        );
+
+        use futures::StreamExt;
+        let mut stream = quick_provider
+            .chat(&prompt)
+            .await
+            .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
+
+        // Collect the full response from the stream
+        let mut name = String::new();
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let crate::llm::StreamChunk::Content(text) = chunk {
+                        name.push_str(&text);
+                    }
+                }
+                Err(e) => {
+                    return Err(ApiError::Internal(format!("Streaming error: {}", e)));
+                }
+            }
+        }
+
+        // Extract the generated name and clean it up
+        let mut name = name.trim().to_string();
+
+        // Remove quotes if present
+        if name.starts_with('"') && name.ends_with('"') {
+            name = name[1..name.len() - 1].to_string();
+        }
+        if name.starts_with('\'') && name.ends_with('\'') {
+            name = name[1..name.len() - 1].to_string();
+        }
+
+        // Truncate if too long
+        if name.len() > 60 {
+            name = format!("{}...", &name[..60]);
+        }
+
+        // Update session
+        session.name = Some(name.clone());
+        session.updated_at = crate::history::node::now();
+
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Session AI-renamed successfully: {} -> {}",
+            session_id, name
+        ));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "name": name
+        })))
+    }
+
     pub async fn chat(
         Path(session_id): Path<String>,
         State(state): State<AppState>,
@@ -340,12 +522,36 @@ mod sessions {
         }
 
         // Load session from storage
-        let stored_session = state
+        let mut stored_session = state
             .store
             .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Set session name to first user message if not already set
+        if stored_session.name.is_none()
+            || stored_session
+                .name
+                .as_ref()
+                .map_or(false, |n| n.is_empty() || n == "New Session")
+        {
+            // Truncate message to 50 characters for session name
+            let name = if req.message.len() > 50 {
+                format!("{}...", &req.message[..50])
+            } else {
+                req.message.clone()
+            };
+            stored_session.name = Some(name);
+            stored_session.updated_at = crate::history::node::now();
+
+            // Save updated session with name
+            state
+                .store
+                .update_session(&stored_session)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
 
         let session_config = stored_session
             .metadata

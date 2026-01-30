@@ -2,6 +2,7 @@
 // Following OpenAI's official Rust implementation pattern
 
 use crate::llm::provider::*;
+use crate::logger;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -418,10 +419,16 @@ impl LLMProvider for OpenAIProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ProviderError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
+
+            // Log the error
+            logger::log(format!("❌ OpenAI HTTP error {}: {}", status, error_text));
+
+            // Classify by HTTP status code
+            return Err(match status.as_u16() {
+                401 | 403 => ProviderError::AuthenticationFailed,
+                429 => ProviderError::RateLimitExceeded,
+                _ => ProviderError::ApiError(format!("OpenAI HTTP {}: {}", status, error_text)),
+            });
         }
 
         // Create SSE stream
@@ -464,6 +471,12 @@ impl LLMProvider for OpenAIProvider {
                                         s.last_request_time = Some(std::time::SystemTime::now());
                                     }
 
+                                    // Log successful completion
+                                    logger::log(format!(
+                                        "✓ OpenAI chat completed: {} tokens",
+                                        token_usage.input_tokens + token_usage.output_tokens
+                                    ));
+
                                     // Send Done event with usage
                                     yield Ok(StreamChunk::Done {
                                         finish_reason: FinishReason::Stop,
@@ -489,8 +502,9 @@ impl LLMProvider for OpenAIProvider {
                                 }
                             }
                             Err(e) => {
+                                logger::log(format!("❌ OpenAI parse error: {}", e));
                                 yield Err(ProviderError::ApiError(format!(
-                                    "Failed to parse chunk: {}",
+                                    "OpenAI failed to parse chunk: {}",
                                     e
                                 )));
                                 break;
@@ -498,7 +512,8 @@ impl LLMProvider for OpenAIProvider {
                         }
                     }
                     Err(e) => {
-                        yield Err(ProviderError::ApiError(format!("Stream error: {}", e)));
+                        logger::log(format!("❌ OpenAI stream error: {}", e));
+                        yield Err(ProviderError::ApiError(format!("OpenAI stream error: {}", e)));
                         break;
                     }
                 }
@@ -572,10 +587,21 @@ impl LLMProvider for OpenAIProvider {
                         .text()
                         .await
                         .unwrap_or_else(|_| "Unknown error".to_string());
-                    let _ = event_tx.send(Err(ProviderError::ApiError(format!(
-                        "HTTP {}: {}",
-                        status, error_text
-                    ))));
+
+                    // Log the error
+                    logger::log(format!("❌ OpenAI HTTP error {}: {}", status, error_text));
+
+                    // Classify by HTTP status code
+                    let error = match status.as_u16() {
+                        401 | 403 => ProviderError::AuthenticationFailed,
+                        429 => ProviderError::RateLimitExceeded,
+                        _ => ProviderError::ApiError(format!(
+                            "OpenAI HTTP {}: {}",
+                            status, error_text
+                        )),
+                    };
+
+                    let _ = event_tx.send(Err(error));
                     break;
                 }
 
@@ -618,6 +644,12 @@ impl LLMProvider for OpenAIProvider {
                                             s.last_request_time =
                                                 Some(std::time::SystemTime::now());
                                         }
+
+                                        // Log successful completion
+                                        logger::log(format!(
+                                            "✓ OpenAI chat_loop completed: {} tokens",
+                                            token_usage.input_tokens + token_usage.output_tokens
+                                        ));
 
                                         // Send appropriate completion event
                                         let tool_calls = std::mem::replace(
@@ -690,8 +722,9 @@ impl LLMProvider for OpenAIProvider {
                                     }
                                 }
                                 Err(e) => {
+                                    logger::log(format!("❌ OpenAI parse error: {}", e));
                                     let _ = event_tx.send(Err(ProviderError::ApiError(format!(
-                                        "Failed to parse chunk: {}",
+                                        "OpenAI failed to parse chunk: {}",
                                         e
                                     ))));
                                     return;
@@ -699,8 +732,11 @@ impl LLMProvider for OpenAIProvider {
                             }
                         }
                         Err(e) => {
-                            let _ = event_tx
-                                .send(Err(ProviderError::ApiError(format!("Stream error: {}", e))));
+                            logger::log(format!("❌ OpenAI stream error: {}", e));
+                            let _ = event_tx.send(Err(ProviderError::ApiError(format!(
+                                "OpenAI stream error: {}",
+                                e
+                            ))));
                             return;
                         }
                     }

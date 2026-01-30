@@ -79,6 +79,24 @@ export function TreeNode({
 
   const tooltipText = getTooltipContent();
 
+  // Format timestamp
+  const getTimeText = () => {
+    if (!node.timestamp) return "";
+    const date = new Date(node.timestamp);
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    return `${hours}:${minutes}`;
+  };
+
+  // Get content preview (first line or 30 chars)
+  const getContentPreview = () => {
+    if (node.hasCheckpoint && node.checkpointSummary) {
+      return node.checkpointSummary.slice(0, 30);
+    }
+    const firstLine = node.content.split("\n")[0];
+    return firstLine.length > 30 ? firstLine.slice(0, 30) + "..." : firstLine;
+  };
+
   return (
     <g
       className={`node-tree ${isSelected ? "selected" : ""} ${node.isActive ? "active" : "inactive"}`}
@@ -146,6 +164,47 @@ export function TreeNode({
           />
         </circle>
       )}
+
+      {/* Text labels - role and content preview */}
+      <g>
+        {/* Role label */}
+        <text
+          x={size + 12}
+          y={-8}
+          fontSize="11"
+          fontWeight="600"
+          fill={strokeColor}
+          opacity={opacity}
+          style={{ userSelect: "none" }}
+        >
+          {node.hasCheckpoint ? "📌 Checkpoint" : getRoleLabel()}
+        </text>
+
+        {/* Content preview */}
+        <text
+          x={size + 12}
+          y={6}
+          fontSize="10"
+          fill="hsl(var(--muted-foreground))"
+          style={{ userSelect: "none" }}
+        >
+          {getContentPreview()}
+        </text>
+
+        {/* Timestamp */}
+        {node.timestamp && (
+          <text
+            x={size + 12}
+            y={18}
+            fontSize="9"
+            fill="hsl(var(--muted-foreground))"
+            opacity={0.6}
+            style={{ userSelect: "none" }}
+          >
+            {getTimeText()}
+          </text>
+        )}
+      </g>
 
       {/* Rich tooltip - show on hover */}
       <title>{tooltipText}</title>

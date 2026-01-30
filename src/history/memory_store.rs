@@ -406,6 +406,19 @@ impl TreeStore for MemoryStore {
         Ok(sessions.values().cloned().collect())
     }
 
+    async fn archive_session(&self, session_id: SessionId) -> Result<()> {
+        // Get the session and set archived flag
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(&session_id) {
+            session.archived = true;
+            session.updated_at = crate::history::node::now();
+        } else {
+            return Err(anyhow::anyhow!("Session not found: {}", session_id));
+        }
+
+        Ok(())
+    }
+
     async fn get_nodes_batch(&self, node_ids: Vec<NodeId>) -> Result<Vec<Node>> {
         let nodes = self.nodes.read().await;
         let mut result = Vec::new();

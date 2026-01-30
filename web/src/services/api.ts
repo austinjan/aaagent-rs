@@ -99,6 +99,52 @@ export async function getSession(sessionId: string): Promise<SessionInfo> {
   return handleResponse<SessionInfo>(response);
 }
 
+export interface ArchiveSessionResponse {
+  success: boolean;
+  session_id: string;
+  archived: boolean;
+}
+
+export async function archiveSession(
+  sessionId: string,
+): Promise<ArchiveSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/archive`, {
+    method: "PATCH",
+  });
+  return handleResponse<ArchiveSessionResponse>(response);
+}
+
+export interface RenameSessionRequest {
+  name: string;
+}
+
+export interface RenameSessionResponse {
+  success: boolean;
+  session_id: string;
+  name: string;
+}
+
+export async function renameSession(
+  sessionId: string,
+  name: string,
+): Promise<RenameSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/rename`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return handleResponse<RenameSessionResponse>(response);
+}
+
+export async function aiRenameSession(
+  sessionId: string,
+): Promise<RenameSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/ai-rename`, {
+    method: "POST",
+  });
+  return handleResponse<RenameSessionResponse>(response);
+}
+
 export async function getSessionPath(sessionId: string): Promise<SessionPath> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/path`);
   return handleResponse<SessionPath>(response);
@@ -171,11 +217,14 @@ export async function switchBranch(
   sessionId: string,
   nodeId: string,
 ): Promise<SwitchBranchResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/switch-branch`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ node_id: nodeId } as SwitchBranchRequest),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/switch-branch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId } as SwitchBranchRequest),
+    },
+  );
   return handleResponse<SwitchBranchResponse>(response);
 }
 
@@ -183,11 +232,14 @@ export async function createBranch(
   sessionId: string,
   fromNodeId: string,
 ): Promise<CreateBranchResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/branch-from`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ from_node_id: fromNodeId } as CreateBranchRequest),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/branch-from`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from_node_id: fromNodeId } as CreateBranchRequest),
+    },
+  );
   return handleResponse<CreateBranchResponse>(response);
 }
 
@@ -213,7 +265,11 @@ export interface TreeNodeData {
   kind: string;
   role: string | null;
   content: string | null;
-  tool_calls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  tool_calls?: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
   tool_call_id?: string;
   created_at: number;
   children_count: number;
@@ -232,7 +288,9 @@ export interface SessionTreeResponse {
   total_nodes: number;
 }
 
-export async function getSessionTree(sessionId: string): Promise<SessionTreeResponse> {
+export async function getSessionTree(
+  sessionId: string,
+): Promise<SessionTreeResponse> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree`);
   return handleResponse<SessionTreeResponse>(response);
 }
@@ -256,11 +314,14 @@ export async function createCheckpoint(
   sessionId: string,
   req: CreateCheckpointRequest,
 ): Promise<CreateCheckpointResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/checkpoints`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
   return handleResponse<CreateCheckpointResponse>(response);
 }
 
@@ -268,11 +329,14 @@ export async function previewCheckpoint(
   sessionId: string,
   req: PreviewCheckpointRequest,
 ): Promise<PreviewCheckpointResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints/preview`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/checkpoints/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
   return handleResponse<PreviewCheckpointResponse>(response);
 }
 

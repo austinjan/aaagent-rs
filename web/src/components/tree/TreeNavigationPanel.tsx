@@ -1,8 +1,9 @@
 // TreeNavigationPanel - Main component for tree-based conversation navigation
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { TreeVisualization } from "./TreeVisualization";
 import { TreeControls } from "./TreeControls";
+import { NodeDetailsPanel } from "./NodeDetailsPanel";
 import type { TreeNode } from "./treeLayout";
 
 export interface TreeNavigationPanelProps {
@@ -20,8 +21,14 @@ export function TreeNavigationPanel({
   onNodeSelect,
   onBranchSwitch,
 }: TreeNavigationPanelProps) {
-  const [showInactive, setShowInactive] = useState(true);
+  const [showInactive] = useState(true); // Always show inactive branches
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Find the selected node from nodes array
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return null;
+    return nodes.find((node) => node.id === selectedNodeId) || null;
+  }, [selectedNodeId, nodes]);
 
   const handleCenterTree = () => {
     if (containerRef.current) {
@@ -77,15 +84,8 @@ export function TreeNavigationPanel({
   };
 
   return (
-    <div className="tree-panel h-full flex flex-col bg-background border-r border-border">
-      {/* Controls */}
-      <TreeControls
-        showInactive={showInactive}
-        onToggleInactive={() => setShowInactive(!showInactive)}
-        onCenterTree={handleCenterTree}
-      />
-
-      {/* Visualization */}
+    <div className="tree-panel h-full flex bg-background">
+      {/* Tree Visualization */}
       <div ref={containerRef} className="flex-1 overflow-auto bg-background">
         <TreeVisualization
           nodes={nodes}
@@ -96,6 +96,16 @@ export function TreeNavigationPanel({
           onNodeDoubleClick={handleNodeDoubleClick}
         />
       </div>
+
+      {/* Node Details Panel */}
+      {selectedNode && (
+        <div className="w-96 flex-shrink-0">
+          <NodeDetailsPanel
+            node={selectedNode}
+            onClose={() => onNodeSelect?.("")}
+          />
+        </div>
+      )}
     </div>
   );
 }
