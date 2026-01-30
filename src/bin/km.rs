@@ -67,16 +67,9 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Start the web server for chat UI
-    Serve {
-        /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
-        port: u16,
-    },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Load .env file if it exists (ignore if not found)
     let _ = dotenvy::dotenv();
 
@@ -144,24 +137,6 @@ async fn main() {
                     eprintln!("Error: {}", e);
                 }
             }
-        }
-        Commands::Serve { port } => {
-            println!("Starting aaagent-rs chat UI server...");
-
-            // Create router
-            let app = aaagent::api::create_router().await;
-
-            // Start server
-            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("Failed to bind to address");
-
-            println!("Server running on http://{}", addr);
-            println!("Open http://localhost:{} in your browser", port);
-
-            axum::serve(listener, app).await.expect("Server error");
         }
     }
 }

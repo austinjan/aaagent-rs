@@ -1,8 +1,8 @@
 // TreeNavigationPanel - Main component for tree-based conversation navigation
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { TreeVisualization } from "./TreeVisualization";
-import { TreeControls } from "./TreeControls";
+import { NodeDetailsPanel } from "./NodeDetailsPanel";
 import type { TreeNode } from "./treeLayout";
 
 export interface TreeNavigationPanelProps {
@@ -20,52 +20,23 @@ export function TreeNavigationPanel({
   onNodeSelect,
   onBranchSwitch,
 }: TreeNavigationPanelProps) {
-  const [showInactive, setShowInactive] = useState(true);
+  const [showInactive] = useState(true); // Always show inactive branches
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleCenterTree = () => {
-    if (containerRef.current) {
-      const svg = containerRef.current.querySelector("svg");
-      if (svg) {
-        // Reset viewBox to show entire tree
-        // The TreeVisualization component handles viewBox calculation
-        // This triggers a re-center by scrolling to top-left
-        containerRef.current.scrollTo({
-          top: 0,
-          left: 0,
-          behavior: "smooth",
-        });
-      }
-    }
-  };
+  // Find the selected node from nodes array
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return null;
+    return nodes.find((node) => node.id === selectedNodeId) || null;
+  }, [selectedNodeId, nodes]);
 
   const handleNodeSelect = (nodeId: string) => {
     // Scroll message card into view in the chat container
     setTimeout(() => {
-      // First try exact match, then try prefix match (for tool call messages)
-      let messageCard = document.getElementById(`message-${nodeId}`);
-      let actualMessageId = nodeId;
-
-      if (!messageCard) {
-        // For assistant messages with tool calls but no content, the ID might be like:
-        // message-{nodeId}-tc-{toolCallId}
-        // Find any element that starts with the nodeId prefix
-        const allCards = document.querySelectorAll(`[id^="message-${nodeId}"]`);
-        if (allCards.length > 0) {
-          messageCard = allCards[0] as HTMLElement;
-          // Extract the actual message ID from the element ID
-          const elementId = messageCard.id;
-          if (elementId.startsWith("message-")) {
-            actualMessageId = elementId.substring("message-".length);
-          }
-        }
-      }
-
-      // Select the message with the actual ID (might be different from nodeId for tool calls)
-      onNodeSelect?.(actualMessageId);
-
+      // Direct lookup - no synthetic ID handling needed
+      const messageCard = document.getElementById(`message-${nodeId}`);
       const chatContainer = document.querySelector(".chat-container");
 
+      // Scroll to the message card if found
       if (messageCard && chatContainer) {
         const containerRect = chatContainer.getBoundingClientRect();
         const cardRect = messageCard.getBoundingClientRect();
@@ -83,11 +54,10 @@ export function TreeNavigationPanel({
           top: targetScroll,
           behavior: "smooth",
         });
-      } else if (!messageCard) {
-        // No message card found - still select the node ID
-        // This handles cases where the message might not be rendered yet
-        onNodeSelect?.(nodeId);
       }
+
+      // Always select the node ID
+      onNodeSelect?.(nodeId);
     }, 100);
   };
 
@@ -97,15 +67,8 @@ export function TreeNavigationPanel({
   };
 
   return (
-    <div className="tree-panel h-full flex flex-col bg-background border-r border-border">
-      {/* Controls */}
-      <TreeControls
-        showInactive={showInactive}
-        onToggleInactive={() => setShowInactive(!showInactive)}
-        onCenterTree={handleCenterTree}
-      />
-
-      {/* Visualization */}
+    <div className="tree-panel h-full flex bg-background">
+      {/* Tree Visualization */}
       <div ref={containerRef} className="flex-1 overflow-auto bg-background">
         <TreeVisualization
           nodes={nodes}
@@ -117,6 +80,15 @@ export function TreeNavigationPanel({
         />
       </div>
 
+      {/* Node Details Panel */}
+      {selectedNode && (
+        <div className="w-96 flex-shrink-0">
+          <NodeDetailsPanel
+            node={selectedNode}
+            onClose={() => onNodeSelect?.("")}
+          />
+        </div>
+      )}
     </div>
   );
 }

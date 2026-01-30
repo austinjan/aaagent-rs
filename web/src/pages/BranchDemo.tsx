@@ -3,7 +3,7 @@ import { MessageCard } from "@/components/chat/MessageCard";
 import { BranchIndicator } from "@/components/branch/BranchIndicator";
 import { CheckpointBadge } from "@/components/branch/CheckpointBadge";
 import type { BranchInfo } from "@/components/branch/BranchIndicator";
-import type { CheckpointData } from "@/components/chat/MessageCard";
+import type { CheckpointData } from "@/types";
 
 // Fake data for demonstration
 const FAKE_BRANCHES: BranchInfo[] = [
@@ -39,11 +39,17 @@ const FAKE_BRANCHES: BranchInfo[] = [
 const FAKE_CHECKPOINT: CheckpointData = {
   summary:
     "Discussion about implementing a real-time chat feature with WebSocket support. User requested help with message persistence and offline sync. Assistant suggested using IndexedDB for local storage and optimistic updates for better UX.",
+  created_at: Math.floor(Date.now() / 1000),
+  strategy: "manual",
   stats: {
-    nodesCovered: 15,
-    originalTokens: 12500,
-    compressedTokens: 800,
-    compressionRatio: 0.936,
+    nodes_covered: 15,
+    total_tokens: 12500,
+    summary_tokens: 800,
+    compression_ratio: 0.936,
+    covered_time_range: [
+      Math.floor((Date.now() - 1000 * 60 * 60 * 2) / 1000),
+      Math.floor(Date.now() / 1000),
+    ],
   },
 };
 
@@ -53,8 +59,6 @@ interface DemoMessage {
   content: string;
   thinking?: string;
   timestamp: Date;
-  hasCheckpoint?: boolean;
-  checkpoint?: CheckpointData;
 }
 
 export function BranchDemo() {
@@ -96,8 +100,6 @@ export function BranchDemo() {
       content:
         "I'd be happy to help you implement a real-time chat feature! Let me outline the key components we'll need:\n\n1. **WebSocket Connection** - For real-time messaging\n2. **Message Queue** - For handling offline messages\n3. **Local Storage** - Using IndexedDB for persistence\n4. **Sync Engine** - For reconciling local and server state\n\nWould you like me to start with any specific part?",
       timestamp: new Date(Date.now() - 1000 * 60 * 60 * 1.5),
-      hasCheckpoint: true,
-      checkpoint: FAKE_CHECKPOINT,
     },
     {
       id: "msg-3",
@@ -212,7 +214,17 @@ This includes exponential backoff for reconnection. Want me to add message handl
               </h3>
               <CheckpointBadge
                 summary={FAKE_CHECKPOINT.summary}
-                stats={FAKE_CHECKPOINT.stats}
+                stats={
+                  FAKE_CHECKPOINT.stats
+                    ? {
+                        nodesCovered: FAKE_CHECKPOINT.stats.nodes_covered,
+                        originalTokens: FAKE_CHECKPOINT.stats.total_tokens,
+                        compressedTokens: FAKE_CHECKPOINT.stats.summary_tokens,
+                        compressionRatio:
+                          FAKE_CHECKPOINT.stats.compression_ratio,
+                      }
+                    : undefined
+                }
                 isExpanded={checkpointExpanded}
                 onToggle={setCheckpointExpanded}
               />
@@ -242,8 +254,6 @@ This includes exponential backoff for reconnection. Want me to add message handl
                 isSelected={selectedId === msg.id}
                 onSelect={setSelectedId}
                 onCreateBranch={handleCreateBranch}
-                hasCheckpoint={msg.hasCheckpoint}
-                checkpoint={msg.checkpoint}
               />
             ))}
           </div>
@@ -262,7 +272,7 @@ This includes exponential backoff for reconnection. Want me to add message handl
                   checkpointExpanded,
                 },
                 null,
-                2
+                2,
               )}
             </pre>
           </div>

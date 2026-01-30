@@ -1,8 +1,30 @@
 # Session Storage Implementation Plan
 
-**Status:** In Progress  
+**Status:** ⚠️ DEPRECATED - Superseded by JSONLStore Implementation  
 **Created:** 2026-01-12  
+**Deprecated:** 2026-01-30  
 **Goal:** Add persistent file-based session storage to replace placeholder data
+
+---
+
+## ⚠️ DEPRECATION NOTICE
+
+This plan has been **superseded** by the superior **JSONLStore** implementation in `src/history/jsonl_store.rs`.
+
+**Why deprecated:**
+- JSONLStore provides better performance (append-only JSONL format)
+- Already implemented and working in production
+- More robust (atomic writes, lazy caching, suitable for 10k+ nodes)
+- All goals from this plan are already achieved
+
+**See instead:**
+- Implementation: `src/history/jsonl_store.rs`
+- Status: Issue #1 in `KNOWN_ISSUES.md` - ✅ FIXED
+- Format: `data/sessions/{session_id}.meta.json` + `{session_id}.nodes.jsonl`
+
+---
+
+## Original Plan (For Historical Reference)
 
 ---
 

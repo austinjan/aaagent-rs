@@ -182,7 +182,7 @@ impl GeminiProvider {
     }
 
     fn convert_tools(tools: &[Tool]) -> Vec<GeminiTool> {
-        vec![GeminiTool {
+        vec![GeminiTool::FunctionDeclarations {
             function_declarations: tools
                 .iter()
                 .map(|tool| GeminiFunctionDeclaration {
@@ -192,6 +192,42 @@ impl GeminiProvider {
                 })
                 .collect(),
         }]
+    }
+
+    fn build_tools_with_grounding(
+        tools: Option<&[Tool]>,
+        enable_grounding: bool,
+    ) -> Option<Vec<GeminiTool>> {
+        let mut gemini_tools = Vec::new();
+
+        // Add function declarations if provided
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                gemini_tools.push(GeminiTool::FunctionDeclarations {
+                    function_declarations: tools
+                        .iter()
+                        .map(|tool| GeminiFunctionDeclaration {
+                            name: tool.name.clone(),
+                            description: Some(tool.description.clone()),
+                            parameters: tool.parameters.clone(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        // Add Google Search if enabled
+        if enable_grounding {
+            gemini_tools.push(GeminiTool::GoogleSearch {
+                google_search: GoogleSearchTool::default(),
+            });
+        }
+
+        if gemini_tools.is_empty() {
+            None
+        } else {
+            Some(gemini_tools)
+        }
     }
 
     fn parse_tool_response_json(payload: &str) -> serde_json::Value {
@@ -292,11 +328,23 @@ impl GeminiProvider {
         tools: Option<Vec<GeminiTool>>,
         cfg: &ProviderConfig,
     ) -> GenerateContentRequest {
-        let tool_config = tools.as_ref().map(|_| GeminiToolConfig {
-            function_calling_config: Some(GeminiFunctionCallingConfig {
-                mode: "AUTO".to_string(),
-            }),
+        // IMPORTANT: Only add toolConfig for function calling tools, NOT for Google Search grounding
+        // When using grounding, toolConfig should be omitted or it will cause empty responses
+        let has_function_declarations = tools.as_ref().map_or(false, |tool_list| {
+            tool_list
+                .iter()
+                .any(|t| matches!(t, GeminiTool::FunctionDeclarations { .. }))
         });
+
+        let tool_config = if has_function_declarations {
+            Some(GeminiToolConfig {
+                function_calling_config: Some(GeminiFunctionCallingConfig {
+                    mode: "AUTO".to_string(),
+                }),
+            })
+        } else {
+            None
+        };
 
         GenerateContentRequest {
             contents,
@@ -304,6 +352,17 @@ impl GeminiProvider {
             system_instruction,
             generation_config: Self::build_generation_config(cfg),
             tool_config,
+        }
+    }
+
+    fn update_grounding_metadata(&self, metadata: Option<GroundingMetadata>) {
+        if let Some(meta) = metadata {
+            if let Ok(mut state) = self.state.write() {
+                // Store as JSON for generic access
+                if let Ok(json) = serde_json::to_value(&meta) {
+                    state.grounding_metadata = Some(json);
+                }
+            }
         }
     }
 }
@@ -345,7 +404,17 @@ impl LLMProvider for GeminiProvider {
         }];
 
         let (contents, system_instruction, _) = self.build_request_body(&history, &cfg, None);
-        let request_body = self.build_stream_request(contents, system_instruction, None, &cfg);
+
+        // Build tools with grounding support
+        // IMPORTANT: For simple chat(), only add grounding tool if enabled, no function calling
+        let tools = if cfg.enable_grounding {
+            Some(vec![GeminiTool::GoogleSearch {
+                google_search: GoogleSearchTool::default(),
+            }])
+        } else {
+            None
+        };
+        let request_body = self.build_stream_request(contents, system_instruction, tools, &cfg);
 
         let response = self
             .client
@@ -373,6 +442,7 @@ impl LLMProvider for GeminiProvider {
         }
 
         let usage_state = self.state.clone();
+        let provider_clone = self.clone();
         let byte_stream = response.bytes_stream();
         let event_stream = byte_stream.eventsource();
 
@@ -389,6 +459,11 @@ impl LLMProvider for GeminiProvider {
 
                         match serde_json::from_str::<GenerateContentResponse>(&event.data) {
                             Ok(resp) => {
+                                // Store grounding metadata if present
+                                if resp.grounding_metadata.is_some() {
+                                    provider_clone.update_grounding_metadata(resp.grounding_metadata.clone());
+                                }
+
                                 if let Some(candidates) = resp.candidates {
                                     if let Some(candidate) = candidates.into_iter().next() {
                                         if let Some(content) = candidate.content {
@@ -400,6 +475,8 @@ impl LLMProvider for GeminiProvider {
                                             }
                                         }
 
+                                        // Accumulate usage stats but don't send Done yet
+                                        // Done should only be sent when stream actually ends
                                         if let Some(usage) = resp.usage_metadata {
                                             if let Ok(mut state) = usage_state.write() {
                                                 state.input_tokens +=
@@ -413,14 +490,6 @@ impl LLMProvider for GeminiProvider {
                                                 state.last_request_time =
                                                     Some(std::time::SystemTime::now());
                                             }
-
-                                            yield Ok(StreamChunk::Done {
-                                                finish_reason: Self::parse_finish_reason(
-                                                    candidate.finish_reason,
-                                                ),
-                                                usage: Self::convert_usage(&usage),
-                                                full_content: full_content.clone(),
-                                            });
                                         }
                                     }
                                 }
@@ -469,8 +538,14 @@ impl LLMProvider for GeminiProvider {
             let tools_opt = tools;
 
             loop {
-                let (contents, system_instruction, gemini_tools) =
+                let (contents, system_instruction, _) =
                     provider_clone.build_request_body(&history, &cfg, tools_opt.as_deref());
+
+                // Build tools with grounding support
+                let gemini_tools = GeminiProvider::build_tools_with_grounding(
+                    tools_opt.as_deref(),
+                    cfg.enable_grounding,
+                );
 
                 let request_body = provider_clone.build_stream_request(
                     contents,
@@ -531,6 +606,13 @@ impl LLMProvider for GeminiProvider {
                                 Ok(resp) => {
                                     if let Some(usage) = resp.usage_metadata {
                                         loop_usage = Some(usage);
+                                    }
+
+                                    // Store grounding metadata if present
+                                    if resp.grounding_metadata.is_some() {
+                                        provider_clone.update_grounding_metadata(
+                                            resp.grounding_metadata.clone(),
+                                        );
                                     }
 
                                     if let Some(candidates) = resp.candidates.clone() {
@@ -724,6 +806,54 @@ struct GenerateContentRequest {
     tool_config: Option<GeminiToolConfig>,
 }
 
+/// Grounding metadata from Google Search
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundingMetadata {
+    #[serde(rename = "webSearchQueries")]
+    pub web_search_queries: Option<Vec<String>>,
+    #[serde(rename = "searchEntryPoint")]
+    pub search_entry_point: Option<SearchEntryPoint>,
+    #[serde(rename = "groundingChunks")]
+    pub grounding_chunks: Option<Vec<GroundingChunk>>,
+    #[serde(rename = "groundingSupports")]
+    pub grounding_supports: Option<Vec<GroundingSupport>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchEntryPoint {
+    #[serde(rename = "renderedContent")]
+    pub rendered_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundingChunk {
+    pub web: Option<WebChunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebChunk {
+    pub uri: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundingSupport {
+    #[serde(rename = "groundingChunkIndices")]
+    pub grounding_chunk_indices: Option<Vec<i32>>,
+    #[serde(rename = "confidenceScores")]
+    pub confidence_scores: Option<Vec<f32>>,
+    pub segment: Option<Segment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Segment {
+    #[serde(rename = "startIndex")]
+    pub start_index: Option<i32>,
+    #[serde(rename = "endIndex")]
+    pub end_index: Option<i32>,
+    pub text: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct GeminiContent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -759,9 +889,21 @@ struct GeminiFunctionResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct GeminiTool {
-    #[serde(rename = "functionDeclarations")]
-    function_declarations: Vec<GeminiFunctionDeclaration>,
+#[serde(untagged)]
+enum GeminiTool {
+    FunctionDeclarations {
+        #[serde(rename = "functionDeclarations")]
+        function_declarations: Vec<GeminiFunctionDeclaration>,
+    },
+    GoogleSearch {
+        #[serde(rename = "google_search")]
+        google_search: GoogleSearchTool,
+    },
+}
+
+#[derive(Debug, Serialize, Default)]
+struct GoogleSearchTool {
+    // Empty object for enabling Google Search
 }
 
 #[derive(Debug, Serialize)]
@@ -808,6 +950,8 @@ struct GenerateContentResponse {
     candidates: Option<Vec<GeminiCandidate>>,
     #[serde(rename = "usageMetadata")]
     usage_metadata: Option<UsageMetadata>,
+    #[serde(rename = "groundingMetadata")]
+    grounding_metadata: Option<GroundingMetadata>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

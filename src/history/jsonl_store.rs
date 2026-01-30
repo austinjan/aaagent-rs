@@ -2,11 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::RwLock;
 
 use super::node::{Node, NodeFlags, NodeId, SessionId};
 use super::session::Session;
@@ -113,10 +113,7 @@ impl JSONLStore {
     ///
     /// `sync_every_writes` controls how often writes call `sync_all`.
     /// Use 1 for durability on every write (default behavior).
-    pub async fn new_with_sync_every(
-        base_path: PathBuf,
-        sync_every_writes: u64,
-    ) -> Result<Self> {
+    pub async fn new_with_sync_every(base_path: PathBuf, sync_every_writes: u64) -> Result<Self> {
         let sessions_dir = base_path.join("sessions");
         fs::create_dir_all(&sessions_dir).await.context(format!(
             "Failed to create sessions directory: {}",
@@ -125,12 +122,20 @@ impl JSONLStore {
 
         crate::logger::log(format!(
             "[JSONLStore] Initialized (lazy cache, fsync every {} writes)",
-            if sync_every_writes == 0 { 1 } else { sync_every_writes }
+            if sync_every_writes == 0 {
+                1
+            } else {
+                sync_every_writes
+            }
         ));
         Ok(Self {
             base_path,
             cache: Arc::new(RwLock::new(HashMap::new())),
-            sync_every_writes: if sync_every_writes == 0 { 1 } else { sync_every_writes },
+            sync_every_writes: if sync_every_writes == 0 {
+                1
+            } else {
+                sync_every_writes
+            },
             write_counter: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -196,10 +201,7 @@ impl JSONLStore {
         Ok(nodes)
     }
 
-    async fn get_session_cache(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Arc<RwLock<SessionCache>>> {
+    async fn get_session_cache(&self, session_id: &SessionId) -> Result<Arc<RwLock<SessionCache>>> {
         if let Some(cache) = self.get_session_cache_if_loaded(session_id).await {
             return Ok(cache);
         }
@@ -222,10 +224,7 @@ impl JSONLStore {
         caches.get(session_id).cloned()
     }
 
-    async fn find_node_in_cache(
-        &self,
-        node_id: &NodeId,
-    ) -> Option<(SessionId, Node)> {
+    async fn find_node_in_cache(&self, node_id: &NodeId) -> Option<(SessionId, Node)> {
         let cache_entries: Vec<(SessionId, Arc<RwLock<SessionCache>>)> = {
             let caches = self.cache.read().await;
             caches
@@ -332,33 +331,63 @@ impl JSONLStore {
 
     /// List all session metadata files
     async fn list_sessions_metadata(&self) -> Result<Vec<Session>> {
-        let sessions_dir = self.session_dir("");
-        if !sessions_dir.exists() {
-            return Ok(Vec::new());
-        }
-
         let mut sessions = Vec::new();
-        let mut entries = fs::read_dir(&sessions_dir).await.context(format!(
-            "Failed to read sessions directory: {}",
-            sessions_dir.display()
-        ))?;
 
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
+        // Scan active sessions directory
+        let sessions_dir = self.session_dir("");
+        if sessions_dir.exists() {
+            let mut entries = fs::read_dir(&sessions_dir).await.context(format!(
+                "Failed to read sessions directory: {}",
+                sessions_dir.display()
+            ))?;
 
-            // Only process .meta.json files
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
 
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if !file_name.ends_with(".meta.json") {
+                // Only process .meta.json files
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
 
-                if let Ok(content) = fs::read_to_string(&path).await {
-                    if let Ok(session) = serde_json::from_str::<Session>(&content) {
-                        sessions.push(session);
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !file_name.ends_with(".meta.json") {
+                        continue;
+                    }
+
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                            sessions.push(session);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scan archived sessions directory
+        let archived_dir = self.base_path.join("archived");
+        if archived_dir.exists() {
+            let mut entries = fs::read_dir(&archived_dir).await.context(format!(
+                "Failed to read archived directory: {}",
+                archived_dir.display()
+            ))?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+
+                // Only process .meta.json files
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !file_name.ends_with(".meta.json") {
+                        continue;
+                    }
+
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        if let Ok(session) = serde_json::from_str::<Session>(&content) {
+                            sessions.push(session);
+                        }
                     }
                 }
             }
@@ -607,6 +636,63 @@ impl TreeStore for JSONLStore {
 
     async fn list_sessions(&self) -> Result<Vec<Session>> {
         self.list_sessions_metadata().await
+    }
+
+    async fn archive_session(&self, session_id: SessionId) -> Result<()> {
+        // Load the session
+        let mut session = self
+            .get_session(session_id.clone())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+
+        // Set archived flag
+        session.archived = true;
+        session.updated_at = crate::history::node::now();
+
+        // Save the updated session first
+        self.update_session(&session).await?;
+
+        // Create archived directory if it doesn't exist (data/archived)
+        let archived_dir = self.base_path.join("archived");
+        fs::create_dir_all(&archived_dir).await.context(format!(
+            "Failed to create archived directory: {}",
+            archived_dir.display()
+        ))?;
+
+        // Move metadata file
+        let source_meta = self.session_meta_path(&session_id);
+        let dest_meta = archived_dir.join(format!("{}.meta.json", session_id));
+        if source_meta.exists() {
+            fs::rename(&source_meta, &dest_meta).await.context(format!(
+                "Failed to move metadata file from {} to {}",
+                source_meta.display(),
+                dest_meta.display()
+            ))?;
+        }
+
+        // Move nodes JSONL file
+        let source_nodes = self.nodes_jsonl_path(&session_id);
+        let dest_nodes = archived_dir.join(format!("{}.nodes.jsonl", session_id));
+        if source_nodes.exists() {
+            fs::rename(&source_nodes, &dest_nodes)
+                .await
+                .context(format!(
+                    "Failed to move nodes file from {} to {}",
+                    source_nodes.display(),
+                    dest_nodes.display()
+                ))?;
+        }
+
+        // Remove from cache after moving files
+        let mut cache = self.cache.write().await;
+        cache.remove(&session_id);
+
+        crate::logger::log(format!(
+            "[JSONLStore] Archived session {} to archived directory",
+            session_id
+        ));
+
+        Ok(())
     }
 
     async fn get_nodes_batch(&self, node_ids: Vec<NodeId>) -> Result<Vec<Node>> {

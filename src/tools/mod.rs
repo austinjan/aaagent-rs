@@ -6,11 +6,13 @@ pub mod editor_edit;
 pub mod output_handler;
 pub mod read;
 pub mod shell;
+pub mod web_search;
 
 pub use editor_edit::EditorEditTool;
 pub use output_handler::{handle_large_output, DEFAULT_OUTPUT_THRESHOLD};
 pub use read::ReadTool;
 pub use shell::ShellTool;
+pub use web_search::WebSearchTool;
 
 use crate::llm::ToolCall;
 use std::future::Future;

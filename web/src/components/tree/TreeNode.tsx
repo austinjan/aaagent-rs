@@ -28,14 +28,14 @@ export function TreeNode({
   // Checkpoint nodes use gold color, others use role color
   const strokeColor = node.hasCheckpoint
     ? checkpointColor
-    : (NODE_COLORS[node.role] || NODE_COLORS.system);
+    : NODE_COLORS[node.role] || NODE_COLORS.system;
   const baseSize = node.hasCheckpoint
     ? DEFAULT_CONFIG.nodeSize + 4
     : DEFAULT_CONFIG.nodeSize;
   const size = isSelected ? baseSize * 1.3 : baseSize;
 
   // In-context nodes are fully visible, others are dimmed
-  const opacity = node.inContext ? 1.0 : (node.isActive ? 0.5 : 0.2);
+  const opacity = node.inContext ? 1.0 : node.isActive ? 0.5 : 0.2;
 
   const handleClick = () => {
     onSelect?.(node.id);
@@ -56,10 +56,46 @@ export function TreeNode({
     return "transparent";
   };
 
-  // Tooltip: simple content preview (no checkpoint details)
-  const tooltipText = node.hasCheckpoint
-    ? "📌 Checkpoint"
-    : node.content.slice(0, 100) + (node.content.length > 100 ? "..." : "");
+  // Rich tooltip with role, timestamp, and content preview
+  const getRoleLabel = () => {
+    const labels: Record<string, string> = {
+      user: "👤 User",
+      assistant: "🤖 Assistant",
+      system: "⚙️ System",
+      tool: "🔧 Tool",
+    };
+    return labels[node.role] || node.role;
+  };
+
+  const getTooltipContent = () => {
+    if (node.hasCheckpoint) {
+      const summary = node.checkpointSummary || "Checkpoint created";
+      return `📌 Checkpoint\n\n${summary.slice(0, 200)}${summary.length > 200 ? "..." : ""}`;
+    }
+
+    const preview = node.content.slice(0, 200);
+    return `${getRoleLabel()}\n\n${preview}${node.content.length > 200 ? "..." : ""}`;
+  };
+
+  const tooltipText = getTooltipContent();
+
+  // Format timestamp
+  const getTimeText = () => {
+    if (!node.timestamp) return "";
+    const date = new Date(node.timestamp);
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    return `${hours}:${minutes}`;
+  };
+
+  // Get content preview (first line or 30 chars)
+  const getContentPreview = () => {
+    if (node.hasCheckpoint && node.checkpointSummary) {
+      return node.checkpointSummary.slice(0, 30);
+    }
+    const firstLine = node.content.split("\n")[0];
+    return firstLine.length > 30 ? firstLine.slice(0, 30) + "..." : firstLine;
+  };
 
   return (
     <g
@@ -107,7 +143,6 @@ export function TreeNode({
         </>
       )}
 
-
       {/* Loading spinner - dashed ring */}
       {node.status === "loading" && (
         <circle
@@ -130,7 +165,48 @@ export function TreeNode({
         </circle>
       )}
 
-      {/* Tooltip - show on hover */}
+      {/* Text labels - role and content preview */}
+      <g>
+        {/* Role label */}
+        <text
+          x={size + 12}
+          y={-8}
+          fontSize="11"
+          fontWeight="600"
+          fill={strokeColor}
+          opacity={opacity}
+          style={{ userSelect: "none" }}
+        >
+          {node.hasCheckpoint ? "📌 Checkpoint" : getRoleLabel()}
+        </text>
+
+        {/* Content preview */}
+        <text
+          x={size + 12}
+          y={6}
+          fontSize="10"
+          fill="hsl(var(--muted-foreground))"
+          style={{ userSelect: "none" }}
+        >
+          {getContentPreview()}
+        </text>
+
+        {/* Timestamp */}
+        {node.timestamp && (
+          <text
+            x={size + 12}
+            y={18}
+            fontSize="9"
+            fill="hsl(var(--muted-foreground))"
+            opacity={0.6}
+            style={{ userSelect: "none" }}
+          >
+            {getTimeText()}
+          </text>
+        )}
+      </g>
+
+      {/* Rich tooltip - show on hover */}
       <title>{tooltipText}</title>
     </g>
   );

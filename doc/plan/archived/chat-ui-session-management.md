@@ -1,9 +1,10 @@
 # Chat UI Session Management Plan
 
 - Feature name: `chat-ui-session-management`
-- Status: In Progress
+- Status: ✅ **COMPLETED**
 - Created: 2026-01-08
-- Last updated: 2026-01-13
+- Completed: 2026-01-30
+- Last updated: 2026-01-30
 - Parent plan: [chat-ui-plan.md](./chat-ui-plan.md)
 
 ## 1) Overview
@@ -25,11 +26,57 @@ Implement session lifecycle management to create, load, persist, and manage conv
 - Session export/import (future feature)
 - Session templates (future feature)
 
-## 1.2) Recent Progress (2026-01-13)
+## 1.1) Implementation Status (2026-01-23)
 
-- Implemented `SessionStore` trait and `FileSessionStore` with CRUD + list support in `src/storage/`.
-- Added unit tests covering file-based session persistence and listing.
-- Next: wire storage into API endpoints and add in-memory store for tests.
+### ✅ COMPLETED
+- **JSONLStore Implementation** (`src/history/jsonl_store.rs`):
+  - ✅ Append-only JSONL format for tree nodes
+  - ✅ Session metadata in JSON format
+  - ✅ Lazy in-memory cache for performance
+  - ✅ Atomic writes (O_APPEND for nodes, tmp+rename for metadata)
+  - ✅ Full `TreeStore` trait implementation
+  - ✅ Session CRUD: `get_session()`, `update_session()`, `list_sessions()`
+
+- **API Endpoints** (`src/api/mod.rs`):
+  - ✅ `POST /api/sessions` - Create session with config
+  - ✅ `GET /api/sessions` - List all sessions
+  - ✅ `GET /api/sessions/:id` - Get session metadata
+  - ✅ `POST /api/sessions/:id/chat` - Send message (loads existing session)
+  - ✅ `GET /api/sessions/:id/path` - Get conversation path
+  - ✅ `GET /api/sessions/:id/config` - Get session config
+  - ✅ `PATCH /api/sessions/:id/config` - Update config
+
+- **Data Persistence**:
+  - ✅ `data/sessions/{id}.meta.json` - Session metadata
+  - ✅ `data/sessions/{id}.nodes.jsonl` - Append-only tree nodes
+  - ✅ Multi-turn conversations persist across requests
+  - ✅ Sessions survive server restarts
+
+### ✅ COMPLETED (2026-01-30)
+- ✅ ~~`DELETE /api/sessions/:id`~~ - Implemented as `PATCH /api/sessions/:id/archive` (soft delete)
+- ✅ **Advanced filtering in list endpoint** - Implemented with query parameters:
+  - `?tags=tag1,tag2` - Filter by tags (must have ALL specified tags)
+  - `?name=search` - Filter by name (case-insensitive contains)
+  - `?created_after=timestamp` - Filter by creation date (after)
+  - `?created_before=timestamp` - Filter by creation date (before)
+- ✅ `PATCH /api/sessions/:id/rename` - Update session name
+- ✅ `POST /api/sessions/:id/ai-rename` - AI-powered session naming
+- ✅ **Tags UI** - Display tags in session list with filter controls
+- ✅ **Filter controls** - Search input with tag/name filtering in session sidebar
+- [ ] Integration tests for full CRUD lifecycle (deferred)
+
+### 🔧 Architecture Changes from Plan
+The plan originally proposed a `SessionManager` abstraction layer, but the implementation uses **JSONLStore directly** in `AppState`:
+```rust
+pub struct AppState {
+    pub store: Arc<JSONLStore>,  // Direct JSONLStore usage
+}
+```
+
+This is simpler and works well because:
+- JSONLStore already implements both `TreeStore` (for nodes) and session persistence (metadata)
+- No need for separate `SessionStore` + `TreeStore` abstraction
+- Cache management is built into JSONLStore
 
 ## 1.1) Data Directory Structure
 
@@ -1231,6 +1278,8 @@ cargo run -- data-info
 ## 10) Future Enhancements
 
 ### Phase 2
+- [ ] `DELETE /api/sessions/:id` endpoint (5 min implementation)
+- [ ] Advanced filtering in `GET /api/sessions` (tags, date range, name)
 - [ ] Session export/import (JSON format to `data/exports/`)
 - [ ] Session templates (save config as reusable template)
 - [ ] Session search (full-text search in messages)
@@ -1246,8 +1295,44 @@ cargo run -- data-info
 
 ---
 
+## 11) Verification
+
+To verify session persistence is working:
+
+```bash
+# 1. Start server
+cargo run -- serve
+
+# 2. Create a session
+curl -X POST http://localhost:3000/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Test Session"}'
+# Note the session_id from response
+
+# 3. Send a message
+curl -X POST http://localhost:3000/api/sessions/{session_id}/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello"}'
+
+# 4. Restart server
+# Stop server (Ctrl+C), then restart
+
+# 5. Verify session persists
+curl http://localhost:3000/api/sessions/{session_id}
+# Should return session metadata
+
+# 6. Send follow-up message (multi-turn)
+curl -X POST http://localhost:3000/api/sessions/{session_id}/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Remember what I said?"}'
+# LLM should remember previous conversation
+```
+
+---
+
 ## Changelog
 
 - 2026-01-08: Initial draft - session lifecycle management plan
 - 2026-01-08: Added data directory structure - all persistent data in `data/`
-- 2026-01-13: Added storage progress notes for FileSessionStore implementation and tests.
+- 2026-01-13: Added storage progress notes for FileSessionStore implementation and tests
+- 2026-01-23: Updated status to "Core Implemented" - JSONLStore fully working, multi-turn conversations functional

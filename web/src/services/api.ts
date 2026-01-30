@@ -78,8 +78,39 @@ export async function checkHealth(): Promise<HealthResponse> {
 // Session Management
 // ============================================================================
 
-export async function listSessions(): Promise<ListSessionsResponse> {
-  const response = await fetch(`${API_BASE}/sessions`);
+export interface SessionFilters {
+  tags?: string[]; // Filter by tags (session must have ALL specified tags)
+  name?: string; // Filter by name (case-insensitive contains)
+  created_after?: number; // Unix timestamp
+  created_before?: number; // Unix timestamp
+  include_archived?: boolean; // Include archived sessions (default: false)
+}
+
+export async function listSessions(
+  filters?: SessionFilters,
+): Promise<ListSessionsResponse> {
+  const params = new URLSearchParams();
+
+  if (filters) {
+    if (filters.tags && filters.tags.length > 0) {
+      params.append("tags", filters.tags.join(","));
+    }
+    if (filters.name) {
+      params.append("name", filters.name);
+    }
+    if (filters.created_after !== undefined) {
+      params.append("created_after", filters.created_after.toString());
+    }
+    if (filters.created_before !== undefined) {
+      params.append("created_before", filters.created_before.toString());
+    }
+    if (filters.include_archived !== undefined) {
+      params.append("include_archived", filters.include_archived.toString());
+    }
+  }
+
+  const url = `${API_BASE}/sessions${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await fetch(url);
   return handleResponse<ListSessionsResponse>(response);
 }
 
@@ -97,6 +128,70 @@ export async function createSession(
 export async function getSession(sessionId: string): Promise<SessionInfo> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}`);
   return handleResponse<SessionInfo>(response);
+}
+
+export interface ArchiveSessionResponse {
+  success: boolean;
+  session_id: string;
+  archived: boolean;
+}
+
+export async function archiveSession(
+  sessionId: string,
+): Promise<ArchiveSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/archive`, {
+    method: "PATCH",
+  });
+  return handleResponse<ArchiveSessionResponse>(response);
+}
+
+export interface RenameSessionRequest {
+  name: string;
+}
+
+export interface RenameSessionResponse {
+  success: boolean;
+  session_id: string;
+  name: string;
+}
+
+export async function renameSession(
+  sessionId: string,
+  name: string,
+): Promise<RenameSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/rename`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return handleResponse<RenameSessionResponse>(response);
+}
+
+export async function aiRenameSession(
+  sessionId: string,
+): Promise<RenameSessionResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/ai-rename`, {
+    method: "POST",
+  });
+  return handleResponse<RenameSessionResponse>(response);
+}
+
+export interface UpdateTagsResponse {
+  success: boolean;
+  session_id: string;
+  tags: string[];
+}
+
+export async function updateSessionTags(
+  sessionId: string,
+  tags: string[],
+): Promise<UpdateTagsResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tags`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+  return handleResponse<UpdateTagsResponse>(response);
 }
 
 export async function getSessionPath(sessionId: string): Promise<SessionPath> {
@@ -171,11 +266,14 @@ export async function switchBranch(
   sessionId: string,
   nodeId: string,
 ): Promise<SwitchBranchResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/switch-branch`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ node_id: nodeId } as SwitchBranchRequest),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/switch-branch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId } as SwitchBranchRequest),
+    },
+  );
   return handleResponse<SwitchBranchResponse>(response);
 }
 
@@ -183,11 +281,14 @@ export async function createBranch(
   sessionId: string,
   fromNodeId: string,
 ): Promise<CreateBranchResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/branch-from`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ from_node_id: fromNodeId } as CreateBranchRequest),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/branch-from`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from_node_id: fromNodeId } as CreateBranchRequest),
+    },
+  );
   return handleResponse<CreateBranchResponse>(response);
 }
 
@@ -213,7 +314,11 @@ export interface TreeNodeData {
   kind: string;
   role: string | null;
   content: string | null;
-  tool_calls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  tool_calls?: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+  }>;
   tool_call_id?: string;
   created_at: number;
   children_count: number;
@@ -232,7 +337,9 @@ export interface SessionTreeResponse {
   total_nodes: number;
 }
 
-export async function getSessionTree(sessionId: string): Promise<SessionTreeResponse> {
+export async function getSessionTree(
+  sessionId: string,
+): Promise<SessionTreeResponse> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree`);
   return handleResponse<SessionTreeResponse>(response);
 }
@@ -256,11 +363,14 @@ export async function createCheckpoint(
   sessionId: string,
   req: CreateCheckpointRequest,
 ): Promise<CreateCheckpointResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/checkpoints`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
   return handleResponse<CreateCheckpointResponse>(response);
 }
 
@@ -268,11 +378,14 @@ export async function previewCheckpoint(
   sessionId: string,
   req: PreviewCheckpointRequest,
 ): Promise<PreviewCheckpointResponse> {
-  const response = await fetch(`${API_BASE}/sessions/${sessionId}/checkpoints/preview`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/checkpoints/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
   return handleResponse<PreviewCheckpointResponse>(response);
 }
 

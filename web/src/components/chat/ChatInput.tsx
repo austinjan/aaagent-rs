@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Globe } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -7,12 +7,18 @@ export interface ChatInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  enableWebSearch?: boolean;
+  onWebSearchToggle?: (enabled: boolean) => void;
+  showWebSearch?: boolean; // Show web search toggle (only for Gemini models)
 }
 
 export function ChatInput({
   onSend,
   disabled = false,
-  placeholder = "Type your message... (Ctrl+Enter to send)",
+  placeholder = "Type your message... (Enter to send, Shift+Enter for new line)",
+  enableWebSearch = false,
+  onWebSearchToggle,
+  showWebSearch = false,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -46,8 +52,8 @@ export function ChatInput({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Ctrl+Enter or Cmd+Enter to send
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    // Enter alone to send (Shift+Enter for new line)
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
@@ -58,6 +64,32 @@ export function ChatInput({
   return (
     <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="max-w-4xl mx-auto px-4 py-4">
+        {/* Web Search Toggle (available for all models) */}
+        {showWebSearch && (
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                variant={enableWebSearch ? "default" : "outline"}
+                size="sm"
+                onClick={() => onWebSearchToggle?.(!enableWebSearch)}
+                disabled={disabled}
+                className={cn(
+                  "gap-2 transition-all",
+                  enableWebSearch && "bg-primary text-primary-foreground",
+                )}
+              >
+                <Globe className="h-4 w-4" />
+                <span>Web Search</span>
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {enableWebSearch
+                  ? "AI will search the web for real-time information"
+                  : "Enable to search the web for current events and facts"}
+              </span>
+            </div>
+          </div>
+        )}
+
         <div
           className={cn(
             "flex gap-3 rounded-lg border p-2 transition-all",
@@ -92,7 +124,7 @@ export function ChatInput({
               disabled={!canSend}
               title={
                 canSend
-                  ? "Send message (Ctrl+Enter)"
+                  ? "Send message (Enter)"
                   : disabled
                     ? "Waiting for response..."
                     : "Type a message to send"
@@ -105,7 +137,7 @@ export function ChatInput({
         </div>
         {/* Keyboard hint */}
         <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>Press Ctrl+Enter to send</span>
+          <span>Press Enter to send, Shift+Enter for new line</span>
           <span className="text-right">
             {message.length > 0 && `${message.length} characters`}
           </span>

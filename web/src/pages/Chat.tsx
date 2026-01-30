@@ -1,21 +1,30 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
-import {
-  SessionConfigPanel,
-  type SessionConfig,
-} from "../components/chat/SessionConfigPanel";
+import type { SessionConfig } from "../components/chat/SessionConfigPanel";
 import { TreeNavigationPanel } from "../components/tree/TreeNavigationPanel";
-import { Button } from "../components/ui/button";
+import {
+  SessionListSidebar,
+  CopySessionIdButton,
+  SessionToolbar,
+} from "../components/session";
 import { useChat } from "../hooks/useChat";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
-import { getConfig, switchBranch, createBranch } from "../services/api";
+import {
+  getConfig,
+  switchBranch,
+  createBranch,
+  renameSession,
+  archiveSession,
+  aiRenameSession,
+  getSession,
+  updateSessionTags,
+  updateConfig,
+} from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData } from "../types/backend";
 import { Role } from "../types/backend";
 import { CheckpointCreationModal } from "../components/checkpoint";
-import { SummaryPanel } from "../components/summary";
 
 // Convert MessageData to MessageCardProps
 function toMessageCardProps(msg: MessageData): MessageCardProps {
@@ -36,9 +45,6 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
     is_error: msg.is_error,
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
-    // Pass checkpoint data if present
-    hasCheckpoint: msg.hasCheckpoint,
-    checkpoint: msg.checkpoint,
   };
 }
 
@@ -65,6 +71,32 @@ export function Chat() {
   const selectedMessageId = useChatStore(selectSelectedNodeId);
   const selectNode = useChatStore((state) => state.selectNode);
 
+  // Session list refresh trigger
+  const [sessionListRefresh, setSessionListRefresh] = useState(0);
+
+  // View state: chat or tree
+  const [currentView, setCurrentView] = useState<"chat" | "tree">("chat");
+
+  // Handle view change with state refresh
+  const handleViewChange = useCallback(
+    async (view: "chat" | "tree") => {
+      setCurrentView(view);
+      if (view === "tree" && sessionId) {
+        // Refresh tree state from backend when switching to tree view
+        try {
+          await loadTree(sessionId);
+        } catch (err) {
+          console.error("Failed to refresh tree state:", err);
+        }
+      }
+    },
+    [sessionId, loadTree],
+  );
+
+  // Session name and tags
+  const [sessionName, setSessionName] = useState<string | null>(null);
+  const [sessionTags, setSessionTags] = useState<string[]>([]);
+
   // Session config (persistent)
   const [sessionConfig, setSessionConfig] = useState<SessionConfig>({
     provider: {
@@ -74,6 +106,7 @@ export function Chat() {
       top_p: undefined,
       frequency_penalty: undefined,
       presence_penalty: undefined,
+      enable_grounding: false,
     },
     agent: {
       max_rounds: 30,
@@ -85,9 +118,14 @@ export function Chat() {
     },
   });
 
+  // Web search state (quick toggle, synced with config)
+  const [enableWebSearch, setEnableWebSearch] = useState(false);
+
   // Checkpoint modal state
   const [checkpointModalOpen, setCheckpointModalOpen] = useState(false);
-  const [checkpointTargetNodeId, setCheckpointTargetNodeId] = useState<string | null>(null);
+  const [checkpointTargetNodeId, setCheckpointTargetNodeId] = useState<
+    string | null
+  >(null);
 
   const persistSession = (sessionId: string) => {
     localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
@@ -135,18 +173,60 @@ export function Chat() {
     };
   }, [initializeSession, loadHistory]);
 
-  // Load config from backend when session is ready
+  // Load config and session info from backend when session is ready
   useEffect(() => {
     if (sessionId) {
       getConfig(sessionId)
         .then((response) => {
           setSessionConfig(response.session_config);
+          setEnableWebSearch(
+            response.session_config.provider.enable_grounding || false,
+          );
         })
         .catch((err) => {
           console.error("Failed to load config:", err);
         });
+
+      getSession(sessionId)
+        .then((response) => {
+          setSessionName(response.name);
+          setSessionTags(response.tags || []);
+        })
+        .catch((err) => {
+          console.error("Failed to load session info:", err);
+        });
     }
   }, [sessionId]);
+
+  // Handle web search toggle
+  const handleWebSearchToggle = async (enabled: boolean) => {
+    setEnableWebSearch(enabled);
+
+    // Update config immediately
+    const updatedConfig = {
+      ...sessionConfig,
+      provider: {
+        ...sessionConfig.provider,
+        enable_grounding: enabled,
+      },
+    };
+
+    setSessionConfig(updatedConfig);
+
+    // Save to backend
+    if (sessionId) {
+      try {
+        await updateConfig(sessionId, updatedConfig);
+      } catch (err) {
+        console.error("Failed to update web search setting:", err);
+        // Revert on error
+        setEnableWebSearch(!enabled);
+      }
+    }
+  };
+
+  // Web search is now available for all providers via web_search tool
+  const showWebSearch = true;
 
   const handleSendMessage = async (content: string) => {
     try {
@@ -165,10 +245,80 @@ export function Chat() {
       const newSessionId = await resetChat();
       if (newSessionId) {
         persistSession(newSessionId);
+        // Trigger session list refresh
+        setSessionListRefresh((prev) => prev + 1);
       }
       selectNode(null); // Clear selection
     } catch (err) {
       console.error("Failed to create new session:", err);
+    }
+  };
+
+  const handleSessionSelect = async (selectedSessionId: string) => {
+    try {
+      if (selectedSessionId !== sessionId) {
+        await loadHistory(selectedSessionId);
+        persistSession(selectedSessionId);
+        selectNode(null); // Clear selection when switching sessions
+        // Trigger session list refresh to update timestamps
+        setSessionListRefresh((prev) => prev + 1);
+      }
+    } catch (err) {
+      console.error("Failed to load session:", err);
+    }
+  };
+
+  const handleRenameSession = async (newName: string) => {
+    if (!sessionId) return;
+    try {
+      await renameSession(sessionId, newName);
+      // Update local state
+      setSessionName(newName);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to rename session:", err);
+      alert("Failed to rename session. Please try again.");
+    }
+  };
+
+  const handleAIRenameSession = async () => {
+    if (!sessionId) return;
+    try {
+      const response = await aiRenameSession(sessionId);
+      // Update local state with AI-generated name
+      setSessionName(response.name);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to AI rename session:", err);
+      alert("Failed to generate AI name. Please try again.");
+    }
+  };
+
+  const handleUpdateTags = async (tags: string[]) => {
+    if (!sessionId) return;
+    try {
+      const response = await updateSessionTags(sessionId, tags);
+      // Update local state
+      setSessionTags(response.tags);
+      // Trigger session list refresh
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to update tags:", err);
+      throw err; // Re-throw to let TagEditor handle the error
+    }
+  };
+
+  const handleArchiveSession = async () => {
+    if (!sessionId) return;
+    try {
+      await archiveSession(sessionId);
+      // Trigger session list refresh, the sidebar will handle switching to another session
+      setSessionListRefresh((prev) => prev + 1);
+    } catch (err) {
+      console.error("Failed to archive session:", err);
+      alert("Failed to archive session. Please try again.");
     }
   };
 
@@ -182,7 +332,10 @@ export function Chat() {
         console.log("Switching branch to node:", nodeId);
         const response = await switchBranch(sessionId, nodeId);
         if (response.success) {
-          console.log("Branch switch success, new active leaf:", response.active_leaf_id);
+          console.log(
+            "Branch switch success, new active leaf:",
+            response.active_leaf_id,
+          );
           setActiveLeaf(response.active_leaf_id);
           // Reload the session to get the updated path
           await loadHistory(sessionId);
@@ -193,7 +346,7 @@ export function Chat() {
         console.error("Failed to switch branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory, loadTree]
+    [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
   const handleCreateBranch = useCallback(
@@ -214,7 +367,7 @@ export function Chat() {
         console.error("Failed to create branch:", err);
       }
     },
-    [sessionId, setActiveLeaf, loadHistory, loadTree]
+    [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
   // Keyboard shortcut: Ctrl+B to create branch from selected message
@@ -249,7 +402,7 @@ export function Chat() {
         await loadTree(sessionId);
       }
     },
-    [sessionId, loadHistory, loadTree]
+    [sessionId, loadHistory, loadTree],
   );
 
   // Calculate node count for checkpoint modal (count from target to root or last checkpoint)
@@ -262,7 +415,10 @@ export function Chat() {
   // Estimate tokens for checkpoint (rough estimate)
   const getEstimatedTokensForCheckpoint = useCallback(() => {
     // Rough estimate: 4 chars per token
-    const totalChars = messages.reduce((sum, msg) => sum + msg.content.length, 0);
+    const totalChars = messages.reduce(
+      (sum, msg) => sum + msg.content.length,
+      0,
+    );
     return Math.round(totalChars / 4);
   }, [messages]);
 
@@ -272,13 +428,19 @@ export function Chat() {
     onCreateBranch: handleCreateBranch,
     canCreateCheckpoint: !isLoading,
     onCreateCheckpoint: handleOpenCheckpointModal,
+    // Pass through checkpoint message fields if present
+    ...(msg.isCheckpoint && {
+      isCheckpoint: msg.isCheckpoint,
+      checkpointNodeId: msg.checkpointNodeId,
+      checkpointData: msg.checkpointData,
+    }),
   }));
 
   return (
     <div className="chat-page flex flex-col h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="max-w-7xl mx-auto px-4 py-4">
+        <div className="px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -290,70 +452,87 @@ export function Chat() {
             </div>
             <div className="flex items-center gap-3">
               {sessionId && (
-                <span className="text-xs text-muted-foreground font-mono">
-                  Session: {sessionId.slice(0, 8)}...
-                </span>
+                <CopySessionIdButton sessionId={sessionId} variant="outline" />
               )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleNewSession}
-                disabled={isLoading}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Session
-              </Button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content: Tree Panel + Chat */}
+      {/* Main Content: Session List + Chat Area */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Tree Navigation Panel (Left Sidebar) */}
-        <div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
-          <TreeNavigationPanel
-            nodes={treeNodes}
-            activeLeafId={activeLeafId}
-            selectedNodeId={selectedMessageId}
-            onNodeSelect={handleSelectMessage}
-            onBranchSwitch={handleBranchSwitch}
+        {/* Session List Sidebar (Left) */}
+        <div className="w-64 flex-shrink-0">
+          <SessionListSidebar
+            currentSessionId={sessionId}
+            onSessionSelect={handleSessionSelect}
+            onNewSession={handleNewSession}
+            refreshTrigger={sessionListRefresh}
           />
-          {/* Summary Panel */}
-          {sessionId && (
-            <div className="p-2 border-t border-border">
-              <SummaryPanel
-                sessionId={sessionId}
-                leafId={activeLeafId}
-              />
-            </div>
-          )}
         </div>
 
         {/* Chat Area (Right Side) */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Session Config Panel */}
-          <SessionConfigPanel
-            sessionId={sessionId}
-            config={sessionConfig}
-            onConfigChanged={setSessionConfig}
-            disabled={isLoading}
-          />
-
-          {/* Chat Container */}
-          <ChatContainer
-            messages={messageCards}
-            selectedMessageId={selectedMessageId || undefined}
-            onSelectMessage={handleSelectMessage}
-            isLoading={isLoading}
-          />
-
-          {/* Chat Input */}
-          <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-            <div className="max-w-4xl mx-auto px-4 py-3 space-y-2">
-              <ChatInput onSend={handleSendMessage} disabled={isLoading} />
+          {/* Session Toolbar */}
+          {sessionId && (
+            <div className="border-b border-border bg-background p-3">
+              <SessionToolbar
+                sessionId={sessionId}
+                sessionName={sessionName}
+                sessionTags={sessionTags}
+                currentView={currentView}
+                config={sessionConfig}
+                onRename={handleRenameSession}
+                onTagsUpdate={handleUpdateTags}
+                onAIRename={handleAIRenameSession}
+                onArchive={handleArchiveSession}
+                onViewChange={handleViewChange}
+                onConfigChanged={setSessionConfig}
+                onCreateBranch={
+                  selectedMessageId
+                    ? () => handleCreateBranch(selectedMessageId)
+                    : undefined
+                }
+                onCreateCheckpoint={
+                  selectedMessageId
+                    ? () => handleOpenCheckpointModal(selectedMessageId)
+                    : undefined
+                }
+                disabled={isLoading}
+              />
             </div>
-          </div>
+          )}
+
+          {/* Main Content Area - Chat or Tree */}
+          {currentView === "chat" ? (
+            <>
+              {/* Chat Container */}
+              <ChatContainer
+                messages={messageCards}
+                selectedMessageId={selectedMessageId || undefined}
+                onSelectMessage={handleSelectMessage}
+                isLoading={isLoading}
+              />
+
+              {/* Chat Input */}
+              <ChatInput
+                onSend={handleSendMessage}
+                disabled={isLoading}
+                enableWebSearch={enableWebSearch}
+                onWebSearchToggle={handleWebSearchToggle}
+                showWebSearch={showWebSearch}
+              />
+            </>
+          ) : (
+            /* Tree View */
+            <TreeNavigationPanel
+              nodes={treeNodes}
+              activeLeafId={activeLeafId || ""}
+              selectedNodeId={selectedMessageId}
+              onNodeSelect={handleSelectMessage}
+              onBranchSwitch={handleBranchSwitch}
+            />
+          )}
         </div>
       </div>
 

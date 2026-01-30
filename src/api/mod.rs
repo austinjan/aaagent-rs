@@ -43,18 +43,17 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Initialize JSONL store with lazy loading
-        crate::logger::log(format!("[Startup] Initializing JSONL store (sync_every: {})", 
-            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())));
+        crate::logger::log(format!(
+            "[Startup] Initializing JSONL store (sync_every: {})",
+            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())
+        ));
         let sync_every_writes = std::env::var("AAAGENT_JSONL_SYNC_EVERY")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(1);
         let store = Arc::new(
-            crate::history::JSONLStore::new_with_sync_every(
-                "data".into(),
-                sync_every_writes,
-            )
-            .await?,
+            crate::history::JSONLStore::new_with_sync_every("data".into(), sync_every_writes)
+                .await?,
         );
 
         // Run startup cleanup in background
@@ -130,6 +129,22 @@ fn api_routes() -> Router<AppState> {
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route("/sessions/:session_id", get(sessions::get_session))
+        .route(
+            "/sessions/:session_id/archive",
+            axum::routing::patch(sessions::archive_session),
+        )
+        .route(
+            "/sessions/:session_id/rename",
+            axum::routing::patch(sessions::rename_session),
+        )
+        .route(
+            "/sessions/:session_id/tags",
+            axum::routing::patch(sessions::update_tags),
+        )
+        .route(
+            "/sessions/:session_id/ai-rename",
+            post(sessions::ai_rename_session),
+        )
         .route("/sessions/:session_id/chat", post(sessions::chat))
         .route("/sessions/:session_id/stream/:stream_id", get(sse::stream))
         .route("/sessions/:session_id/path", get(sessions::get_path))
@@ -168,10 +183,7 @@ fn api_routes() -> Router<AppState> {
             post(sessions::create_branch),
         )
         // Tree visualization
-        .route(
-            "/sessions/:session_id/tree",
-            get(sessions::get_tree),
-        )
+        .route("/sessions/:session_id/tree", get(sessions::get_tree))
         // Context as markdown string
         .route(
             "/sessions/:session_id/context-string",
@@ -233,30 +245,105 @@ struct ConfigResponse {
 mod sessions {
     use super::*;
 
-    pub async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    #[derive(Deserialize)]
+    pub struct ListSessionsQuery {
+        tags: Option<String>,           // Comma-separated tags
+        name: Option<String>,           // Name search (case-insensitive contains)
+        created_after: Option<i64>,     // Unix timestamp
+        created_before: Option<i64>,    // Unix timestamp
+        include_archived: Option<bool>, // Include archived sessions (default: false)
+    }
+
+    pub async fn list_sessions(
+        State(state): State<AppState>,
+        Query(query): Query<ListSessionsQuery>,
+    ) -> Result<Json<Value>, ApiError> {
         let sessions = state
             .store
             .list_sessions()
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
 
+        // Parse tags filter
+        let tag_filters: Vec<String> = query
+            .tags
+            .as_ref()
+            .map(|t| t.split(',').map(|s| s.trim().to_lowercase()).collect())
+            .unwrap_or_default();
+
+        // Filter sessions
+        let include_archived = query.include_archived.unwrap_or(false);
+        let filtered_sessions: Vec<_> = sessions
+            .iter()
+            .filter(|s| {
+                // Filter out archived unless explicitly requested
+                if s.archived && !include_archived {
+                    return false;
+                }
+
+                // Filter by tags (session must have ALL specified tags)
+                if !tag_filters.is_empty() {
+                    let session_tags_lower: Vec<String> =
+                        s.tags.iter().map(|t| t.to_lowercase()).collect();
+                    if !tag_filters
+                        .iter()
+                        .all(|filter_tag| session_tags_lower.contains(filter_tag))
+                    {
+                        return false;
+                    }
+                }
+
+                // Filter by name (case-insensitive contains)
+                if let Some(name_query) = &query.name {
+                    if let Some(session_name) = &s.name {
+                        if !session_name
+                            .to_lowercase()
+                            .contains(&name_query.to_lowercase())
+                        {
+                            return false;
+                        }
+                    } else {
+                        return false; // No name, doesn't match
+                    }
+                }
+
+                // Filter by created_after
+                if let Some(after) = query.created_after {
+                    if s.created_at < after {
+                        return false;
+                    }
+                }
+
+                // Filter by created_before
+                if let Some(before) = query.created_before {
+                    if s.created_at > before {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect();
+
         // Convert to session summaries
-        let summaries: Vec<_> = sessions
+        let summaries: Vec<_> = filtered_sessions
             .iter()
             .map(|s| {
                 json!({
                     "session_id": s.session_id,
                     "name": s.name,
+                    "tags": s.tags,
                     "created_at": s.created_at,
                     "updated_at": s.updated_at,
                     "message_count": s.stats.total_nodes,
+                    "archived": s.archived,
                 })
             })
             .collect();
 
         Ok(Json(json!({
             "sessions": summaries,
-            "total": sessions.len()
+            "total": summaries.len()
         })))
     }
 
@@ -331,6 +418,214 @@ mod sessions {
         })))
     }
 
+    pub async fn archive_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Archive session request for: {}", session_id));
+
+        // Archive the session
+        state
+            .store
+            .archive_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session archived successfully: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "archived": true
+        })))
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub struct RenameSessionRequest {
+        name: String,
+    }
+
+    pub async fn rename_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<RenameSessionRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Rename session request for: {}", session_id));
+
+        // Validate name
+        let name = req.name.trim();
+        if name.is_empty() {
+            return Err(ApiError::BadRequest(
+                "Session name cannot be empty".to_string(),
+            ));
+        }
+
+        // Load and update session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.name = Some(name.to_string());
+        session.updated_at = crate::history::node::now();
+
+        // Save updated session
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session renamed successfully: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "name": name
+        })))
+    }
+
+    #[derive(Deserialize)]
+    pub struct UpdateTagsRequest {
+        tags: Vec<String>,
+    }
+
+    pub async fn update_tags(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+        Json(req): Json<UpdateTagsRequest>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Update tags request for: {}", session_id));
+
+        // Load and update session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
+
+        // Update tags
+        session.tags = req.tags;
+        session.updated_at = crate::history::node::now();
+
+        // Save
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!("Session tags updated: {}", session_id));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "tags": session.tags
+        })))
+    }
+
+    pub async fn ai_rename_session(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("AI rename session request for: {}", session_id));
+
+        // Load session
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.set_store(state.store.clone());
+
+        // Get conversation context (first 10 messages or up to 2000 tokens)
+        let context = session
+            .get_context()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Build a summary of the conversation for the LLM
+        let mut conversation_text = String::new();
+        for msg in context.iter().take(10) {
+            conversation_text.push_str(&format!("{:?}: {}\n", msg.role, msg.content));
+        }
+
+        // Create a quick provider for naming
+        let quick_provider =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Ask LLM to generate a short session name
+        let prompt = format!(
+            "Based on the following conversation, provide a very short (3-6 words maximum) descriptive name for this chat session. \
+            Only respond with the session name, nothing else.\n\nConversation:\n{}",
+            conversation_text.chars().take(1000).collect::<String>()
+        );
+
+        use futures::StreamExt;
+        let mut stream = quick_provider
+            .chat(&prompt)
+            .await
+            .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
+
+        // Collect the full response from the stream
+        let mut name = String::new();
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let crate::llm::StreamChunk::Content(text) = chunk {
+                        name.push_str(&text);
+                    }
+                }
+                Err(e) => {
+                    return Err(ApiError::Internal(format!("Streaming error: {}", e)));
+                }
+            }
+        }
+
+        // Extract the generated name and clean it up
+        let mut name = name.trim().to_string();
+
+        // Remove quotes if present
+        if name.starts_with('"') && name.ends_with('"') {
+            name = name[1..name.len() - 1].to_string();
+        }
+        if name.starts_with('\'') && name.ends_with('\'') {
+            name = name[1..name.len() - 1].to_string();
+        }
+
+        // Truncate if too long
+        if name.len() > 60 {
+            name = format!("{}...", &name[..60]);
+        }
+
+        // Update session
+        session.name = Some(name.clone());
+        session.updated_at = crate::history::node::now();
+
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        crate::logger::log(format!(
+            "Session AI-renamed successfully: {} -> {}",
+            session_id, name
+        ));
+
+        Ok(Json(json!({
+            "success": true,
+            "session_id": session_id,
+            "name": name
+        })))
+    }
+
     pub async fn chat(
         Path(session_id): Path<String>,
         State(state): State<AppState>,
@@ -344,12 +639,36 @@ mod sessions {
         }
 
         // Load session from storage
-        let stored_session = state
+        let mut stored_session = state
             .store
             .get_session(session_id.clone())
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Set session name to first user message if not already set
+        if stored_session.name.is_none()
+            || stored_session
+                .name
+                .as_ref()
+                .map_or(false, |n| n.is_empty() || n == "New Session")
+        {
+            // Truncate message to 50 characters for session name
+            let name = if req.message.len() > 50 {
+                format!("{}...", &req.message[..50])
+            } else {
+                req.message.clone()
+            };
+            stored_session.name = Some(name);
+            stored_session.updated_at = crate::history::node::now();
+
+            // Save updated session with name
+            state
+                .store
+                .update_session(&stored_session)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
 
         let session_config = stored_session
             .metadata
@@ -384,18 +703,33 @@ mod sessions {
                 message,
                 session_config_for_task,
                 config_manager,
-                store_for_task,
+                store_for_task.clone(),
                 tx.clone(),
             )
             .await;
 
             // If agent failed, send error to frontend
             match result {
-                Ok(_) => {
+                Ok(updated_session) => {
                     crate::logger::log(format!(
                         "Agent chat completed successfully for stream: {}",
                         stream_id_clone
                     ));
+
+                    // Save updated session back to storage
+                    if let Err(e) = store_for_task.update_session(&updated_session).await {
+                        crate::logger::log(format!(
+                            "ERROR: Failed to save session after chat: {}",
+                            e
+                        ));
+                    } else {
+                        crate::logger::log(format!(
+                            "Session {} saved successfully (active_leaf: {}, stats: {} nodes)",
+                            updated_session.session_id,
+                            updated_session.active_leaf_id,
+                            updated_session.stats.total_nodes
+                        ));
+                    }
                 }
                 Err(e) => {
                     crate::logger::log(format!(
@@ -412,9 +746,7 @@ mod sessions {
                         .send(crate::agent::AgentEvent::Content(error_msg.clone()))
                         .await
                     {
-                        Ok(_) => {
-                            crate::logger::log("Error message sent successfully".to_string())
-                        }
+                        Ok(_) => crate::logger::log("Error message sent successfully".to_string()),
                         Err(send_err) => crate::logger::log(format!(
                             "ERROR: Failed to send error message: {}",
                             send_err
@@ -443,9 +775,6 @@ mod sessions {
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
-
-            // TODO: Save updated session back to storage
-            // For now, sessions are not persisted after chat
         });
 
         Ok(Json(ChatResponse { stream_id }))
@@ -571,8 +900,12 @@ mod sessions {
         fn from(param: ContextStringStrategyParam) -> Self {
             match param {
                 ContextStringStrategyParam::Full => crate::history::ContextStringStrategy::Full,
-                ContextStringStrategyParam::Default => crate::history::ContextStringStrategy::Default,
-                ContextStringStrategyParam::Aggressive => crate::history::ContextStringStrategy::Aggressive,
+                ContextStringStrategyParam::Default => {
+                    crate::history::ContextStringStrategy::Default
+                }
+                ContextStringStrategyParam::Aggressive => {
+                    crate::history::ContextStringStrategy::Aggressive
+                }
             }
         }
     }
@@ -588,11 +921,21 @@ mod sessions {
             .store
             .get_session(session_id.clone())
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(|e| {
+                eprintln!("[API] Failed to load session {}: {}", session_id, e);
+                ApiError::Internal(format!("Failed to load session: {}", e))
+            })?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Use provided leaf_id or default to active_leaf_id
-        let leaf_id = query.leaf_id.unwrap_or_else(|| session.active_leaf_id.clone());
+        let leaf_id = query
+            .leaf_id
+            .unwrap_or_else(|| session.active_leaf_id.clone());
+
+        eprintln!(
+            "[API] Getting context string for session {} from leaf {} with strategy {:?}",
+            session_id, leaf_id, query.strategy
+        );
 
         // Convert strategy
         let strategy: crate::history::ContextStringStrategy = query.strategy.into();
@@ -601,7 +944,13 @@ mod sessions {
         let content = session
             .get_context_string_from(leaf_id.clone(), strategy)
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            .map_err(|e| {
+                eprintln!(
+                    "[API] Failed to get context string from leaf {}: {}",
+                    leaf_id, e
+                );
+                ApiError::Internal(format!("Failed to get context string: {}", e))
+            })?;
 
         Ok(Json(json!({
             "session_id": session_id,
@@ -669,9 +1018,9 @@ mod sessions {
         let mut agent = crate::agent::Agent::new(session, provider, registry);
 
         // Optionally set quick provider
-        if let Ok(quick_provider) = provider_factory::create_quick_provider(
-            state.config_resolver.config_manager(),
-        ) {
+        if let Ok(quick_provider) =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+        {
             agent.set_quick_provider(quick_provider);
         }
 
@@ -748,9 +1097,9 @@ mod sessions {
         let mut agent = crate::agent::Agent::new(session, provider, registry);
 
         // Optionally set quick provider
-        if let Ok(quick_provider) = provider_factory::create_quick_provider(
-            state.config_resolver.config_manager(),
-        ) {
+        if let Ok(quick_provider) =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+        {
             agent.set_quick_provider(quick_provider);
         }
 
@@ -926,10 +1275,7 @@ mod sessions {
 
         let path: Vec<String> = path_nodes.iter().rev().map(|n| n.node_id.clone()).collect();
 
-        crate::logger::log(format!(
-            "Branch switched successfully to: {}",
-            req.node_id
-        ));
+        crate::logger::log(format!("Branch switched successfully to: {}", req.node_id));
 
         Ok(Json(SwitchBranchResponse {
             success: true,
@@ -1051,10 +1397,8 @@ mod sessions {
         }
 
         // Build node map for path traversal
-        let node_map: std::collections::HashMap<String, &crate::history::Node> = all_nodes
-            .iter()
-            .map(|n| (n.node_id.clone(), n))
-            .collect();
+        let node_map: std::collections::HashMap<String, &crate::history::Node> =
+            all_nodes.iter().map(|n| (n.node_id.clone(), n)).collect();
 
         // Calculate context range: traverse from active_leaf to checkpoint or root
         let mut context_node_ids: Vec<String> = Vec::new();
@@ -1136,6 +1480,7 @@ mod sessions {
 }
 
 /// Run agent chat in background task
+/// Returns the updated session on success
 async fn run_agent_chat(
     session: crate::history::Session,
     message: String,
@@ -1143,7 +1488,7 @@ async fn run_agent_chat(
     config_manager: Arc<ConfigResolver>,
     store: Arc<crate::history::JSONLStore>,
     tx: tokio::sync::mpsc::Sender<crate::agent::AgentEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<crate::history::Session> {
     use crate::agent::{Agent, AgentConfig};
     use crate::llm::{LoopDetectorConfig, ToolRegistry};
 
@@ -1165,7 +1510,30 @@ async fn run_agent_chat(
     }));
 
     // Create agent with consolidated logging
-    let registry = ToolRegistry::new().register_all_builtin();
+    let mut registry = ToolRegistry::new().register_all_builtin();
+
+    // Add web_search tool if user enabled it in the UI (via enable_grounding config)
+    // The tool works with ANY LLM provider (OpenAI, Anthropic, Gemini) - it internally uses Gemini grounding
+    if session_config.provider.enable_grounding.unwrap_or(false) {
+        if let Ok(web_search_tool) = crate::tools::WebSearchTool::from_env() {
+            crate::logger::log(
+                "✓ Web search tool loaded (uses Gemini with Google Search grounding internally)"
+                    .to_string(),
+            );
+            registry = registry.register(web_search_tool);
+        } else {
+            crate::logger::log("⚠️ Web search enabled but GOOGLE_API_KEY not found".to_string());
+        }
+    }
+
+    // Debug: List all registered tools
+    let tool_names = registry.tool_names();
+    crate::logger::log(format!(
+        "🔧 Registered tools ({}): [{}]",
+        tool_names.len(),
+        tool_names.join(", ")
+    ));
+
     let mut agent = Agent::new(session, provider, registry);
     agent.set_config(AgentConfig {
         max_rounds: session_config.agent.max_rounds as usize,
@@ -1197,7 +1565,8 @@ async fn run_agent_chat(
     match result {
         Ok(_) => {
             crate::logger::log("run_agent_chat: Chat completed successfully".to_string());
-            Ok(())
+            // Return the updated session
+            Ok(agent.session)
         }
         Err(e) => {
             // Just return the error - it will be handled by the spawned task
@@ -1208,11 +1577,11 @@ async fn run_agent_chat(
 
 mod sse {
     use super::{ApiError, AppState};
+    use crate::history::TreeStore;
     use axum::{
         extract::{Path, State},
         response::sse::{Event, Sse},
     };
-    use crate::history::TreeStore;
     use futures::stream::Stream;
     use std::{convert::Infallible, time::Duration};
     use tokio_stream::wrappers::ReceiverStream;

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { MessageCard } from "./MessageCard";
+import { CheckpointMessageCard } from "./CheckpointMessageCard";
 import type { MessageCardProps } from "./MessageCard";
 
 export interface ChatContainerProps {
@@ -38,7 +39,7 @@ export function ChatContainer({
       ref={containerRef}
       className="chat-container flex-1 overflow-y-auto p-4 bg-background"
     >
-      <div className="max-w-4xl mx-auto space-y-3">
+      <div className="max-w-4xl mx-auto space-y-4">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             <div className="text-center">
@@ -48,14 +49,34 @@ export function ChatContainer({
           </div>
         ) : (
           <>
-            {messages.map((message) => (
-              <MessageCard
-                key={message.id}
-                {...message}
-                isSelected={message.id === selectedMessageId}
-                onSelect={handleSelectMessage}
-              />
-            ))}
+            {messages.map((message) => {
+              // Render checkpoint message card for synthetic checkpoint messages
+              if (
+                message.isCheckpoint &&
+                message.checkpointData &&
+                message.checkpointNodeId
+              ) {
+                return (
+                  <CheckpointMessageCard
+                    key={message.id}
+                    id={message.id}
+                    checkpointNodeId={message.checkpointNodeId}
+                    checkpointData={message.checkpointData}
+                    timestamp={message.timestamp || new Date()}
+                  />
+                );
+              }
+
+              // Render normal message card
+              return (
+                <MessageCard
+                  key={message.id}
+                  {...message}
+                  isSelected={message.id === selectedMessageId}
+                  onSelect={handleSelectMessage}
+                />
+              );
+            })}
             {isLoading && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
                 <div className="flex gap-1">
