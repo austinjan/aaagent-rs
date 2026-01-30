@@ -35,68 +35,25 @@ function convertNodesToMessages(nodes: NodeData[]): MessageData[] {
     // Skip root/system nodes that aren't messages
     if (node.kind === "Root") continue;
 
-    // Case 1: Assistant with tool_calls - create base message + separate tool call messages
-    if (
-      node.role === "Assistant" &&
-      node.tool_calls &&
-      node.tool_calls.length > 0
-    ) {
-      // Add base assistant message (if it has content)
-      if (node.content) {
-        messages.push({
-          id: node.node_id,
-          role: Role.Assistant,
-          content: node.content,
-          timestamp: new Date(node.created_at * 1000),
-          isStreaming: false,
-        });
-      }
+    if (!node.role) continue;
 
-      // Add separate message for each tool call
-      for (const toolCall of node.tool_calls) {
-        messages.push({
-          id: `${node.node_id}-tc-${toolCall.id}`,
-          role: Role.Assistant,
-          content: "",
-          timestamp: new Date(node.created_at * 1000),
-          tool_calls: [
-            {
-              id: toolCall.id,
-              name: toolCall.name,
-              arguments: toolCall.arguments,
-            },
-          ],
-          isStreaming: false,
-        });
-      }
-    }
-    // Case 2: Tool result message
-    else if (node.role === "Tool" && node.tool_call_id) {
-      messages.push({
-        id: node.node_id,
-        role: Role.Tool,
-        content: node.content,
-        timestamp: new Date(node.created_at * 1000),
-        tool_call_id: node.tool_call_id,
-        is_error: false,
-        isStreaming: false,
-      });
-    }
-    // Case 3: Regular message (User, System, or Assistant without tool calls)
-    else if (node.role) {
-      let role: Role = Role.User;
-      if (node.role === "Assistant") role = Role.Assistant;
-      else if (node.role === "System") role = Role.System;
-      else if (node.role === "Tool") role = Role.Tool;
+    // Map role from backend to frontend
+    let role: Role = Role.User;
+    if (node.role === "Assistant") role = Role.Assistant;
+    else if (node.role === "System") role = Role.System;
+    else if (node.role === "Tool") role = Role.Tool;
 
-      messages.push({
-        id: node.node_id,
-        role,
-        content: node.content,
-        timestamp: new Date(node.created_at * 1000),
-        isStreaming: false,
-      });
-    }
+    // Create one message per node - keep tool_calls array intact
+    messages.push({
+      id: node.node_id,
+      role,
+      content: node.content,
+      tool_calls: node.tool_calls, // Pass entire array, don't split
+      tool_call_id: node.tool_call_id,
+      is_error: false,
+      timestamp: new Date(node.created_at * 1000),
+      isStreaming: false,
+    });
   }
 
   return messages;
@@ -205,10 +162,20 @@ export function useChat(options: UseChatOptions = {}) {
         }
 
         case "tool_calls": {
-          // Mark last Assistant message as complete, create separate messages for each tool call
+          // Add tool_calls to the last Assistant message
           const lastMsgTools = currentMessages[currentMessages.length - 1];
-          if (lastMsgTools?.isStreaming) {
-            store.updateMessage(lastMsgTools.id, { isStreaming: false });
+          if (
+            lastMsgTools?.isStreaming &&
+            lastMsgTools.role === Role.Assistant
+          ) {
+            store.updateMessage(lastMsgTools.id, {
+              isStreaming: false,
+              tool_calls: event.tool_calls as Array<{
+                id: string;
+                name: string;
+                arguments: Record<string, unknown>;
+              }>,
+            });
             store.stopStreaming();
           }
 
@@ -224,29 +191,7 @@ export function useChat(options: UseChatOptions = {}) {
             );
           }
 
-          // Create separate message for each tool call
-          const toolCallMessages: MessageData[] = (
-            event.tool_calls as Array<{
-              id: string;
-              name: string;
-              arguments: Record<string, unknown>;
-            }>
-          ).map((tc) => ({
-            id: nextMessageId("tool-call", tc.id),
-            role: Role.Assistant,
-            content: "",
-            timestamp: new Date(),
-            tool_calls: [
-              {
-                id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
-              },
-            ],
-            isStreaming: false,
-          }));
-
-          toolCallMessages.forEach((msg) => store.addMessage(msg));
+          // Don't create separate messages - tool_calls are now part of the assistant message
           break;
         }
 
@@ -522,18 +467,8 @@ export function useChat(options: UseChatOptions = {}) {
 
       const pathResponse = await getSessionPath(loadSessionId);
 
-      // Convert nodes to messages - handle tool calls and tool results properly
+      // Convert nodes to messages - one message per node
       const loadedMessages: MessageData[] = [];
-
-      // Build a map of tool_call_id -> tool_name for quick lookup
-      const toolCallMap = new Map<string, string>();
-      for (const node of pathResponse.nodes) {
-        if (node.role === Role.Assistant && node.tool_calls) {
-          for (const tc of node.tool_calls) {
-            toolCallMap.set(tc.id, tc.name);
-          }
-        }
-      }
 
       for (const node of pathResponse.nodes) {
         if (node.kind !== NodeKind.Message) continue;
@@ -562,66 +497,18 @@ export function useChat(options: UseChatOptions = {}) {
         const shouldAddCheckpointMessage =
           node.has_checkpoint && node.checkpoint;
 
-        // Case 1: Assistant message with tool_calls - create base message + separate tool call messages
-        if (
-          node.role === Role.Assistant &&
-          node.tool_calls &&
-          node.tool_calls.length > 0
-        ) {
-          // Add base assistant message (if it has content)
-          if (node.content) {
-            loadedMessages.push({
-              id: node.node_id,
-              role: Role.Assistant,
-              content: node.content,
-              timestamp: new Date(node.created_at * 1000),
-              isStreaming: false,
-              ...checkpointInfo,
-            });
-          }
-
-          // Add separate message for each tool call
-          for (const toolCall of node.tool_calls) {
-            loadedMessages.push({
-              id: `${node.node_id}-tc-${toolCall.id}`,
-              role: Role.Assistant,
-              content: "",
-              timestamp: new Date(node.created_at * 1000),
-              tool_calls: [
-                {
-                  id: toolCall.id,
-                  name: toolCall.name,
-                  arguments: toolCall.arguments,
-                },
-              ],
-              isStreaming: false,
-            });
-          }
-        }
-        // Case 2: Tool result message
-        else if (node.role === Role.Tool && node.tool_call_id) {
-          loadedMessages.push({
-            id: node.node_id,
-            role: Role.Tool,
-            content: node.content,
-            timestamp: new Date(node.created_at * 1000),
-            tool_call_id: node.tool_call_id,
-            is_error: false, // Could check content for error markers
-            isStreaming: false,
-            ...checkpointInfo,
-          });
-        }
-        // Case 3: Regular message (User, System, or Assistant without tool calls)
-        else {
-          loadedMessages.push({
-            id: node.node_id,
-            role: node.role || Role.User,
-            content: node.content,
-            timestamp: new Date(node.created_at * 1000),
-            isStreaming: false,
-            ...checkpointInfo,
-          });
-        }
+        // Create one message per node - keep tool_calls array intact
+        loadedMessages.push({
+          id: node.node_id,
+          role: node.role || Role.User,
+          content: node.content,
+          tool_calls: node.tool_calls, // Pass entire array
+          tool_call_id: node.tool_call_id,
+          is_error: false,
+          timestamp: new Date(node.created_at * 1000),
+          isStreaming: false,
+          ...checkpointInfo,
+        });
 
         // Add checkpoint message card if this node has a checkpoint
         if (shouldAddCheckpointMessage && node.checkpoint) {
@@ -698,8 +585,12 @@ export function useChat(options: UseChatOptions = {}) {
     if (fullTreeNodes.length > 0) {
       return fullTreeNodes;
     }
+
     // Fallback: convert messages to linear tree (no branches visible)
-    return messages.map((msg, index) => {
+    // IMPORTANT: Filter out synthetic checkpoint messages (they're not real tree nodes)
+    const realMessages = messages.filter((msg) => !msg.isCheckpoint);
+
+    return realMessages.map((msg, index) => {
       let role: "user" | "assistant" | "system" | "tool" = "system";
       if (msg.role === Role.User) role = "user";
       else if (msg.role === Role.Assistant) role = "assistant";
@@ -707,20 +598,29 @@ export function useChat(options: UseChatOptions = {}) {
 
       return {
         id: msg.id,
-        parent_id: index > 0 ? messages[index - 1].id : null,
+        parent_id: index > 0 ? realMessages[index - 1].id : null,
         role,
         content: msg.content,
         seq: index,
-        hasCheckpoint: false,
+        hasCheckpoint: msg.hasCheckpoint || false,
       };
     });
   }, [fullTreeNodes, messages]);
 
   // Get active leaf ID from tree or fallback to last message
+  // IMPORTANT: Skip synthetic checkpoint messages (they don't exist in backend)
   const activeLeafId = useMemo(() => {
     if (treeActiveLeafId) return treeActiveLeafId;
     if (messages.length === 0) return "";
-    return messages[messages.length - 1].id;
+
+    // Find the last non-checkpoint message (checkpoint IDs start with "checkpoint-")
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (!messages[i].id.startsWith("checkpoint-")) {
+        return messages[i].id;
+      }
+    }
+
+    return "";
   }, [treeActiveLeafId, messages]);
 
   return React.useMemo(

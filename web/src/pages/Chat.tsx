@@ -322,17 +322,19 @@ export function Chat() {
       {/* Main Content: Tree Panel + Chat */}
       <div className="flex flex-1 overflow-hidden">
         {/* Tree Navigation Panel (Left Sidebar) */}
-        <div className="w-80 border-r border-border flex-shrink-0 flex flex-col">
-          <TreeNavigationPanel
-            nodes={treeNodes}
-            activeLeafId={activeLeafId}
-            selectedNodeId={selectedMessageId}
-            onNodeSelect={handleSelectMessage}
-            onBranchSwitch={handleBranchSwitch}
-          />
+        <div className="w-80 border-r border-border flex-shrink-0 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto">
+            <TreeNavigationPanel
+              nodes={treeNodes}
+              activeLeafId={activeLeafId}
+              selectedNodeId={selectedMessageId}
+              onNodeSelect={handleSelectMessage}
+              onBranchSwitch={handleBranchSwitch}
+            />
+          </div>
           {/* Summary Panel */}
           {sessionId && (
-            <div className="p-2 border-t border-border">
+            <div className="p-2 border-t border-border flex-shrink-0">
               <SummaryPanel sessionId={sessionId} leafId={activeLeafId} />
             </div>
           )}

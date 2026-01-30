@@ -39,7 +39,7 @@ export function ChatContainer({
       ref={containerRef}
       className="chat-container flex-1 overflow-y-auto p-4 bg-background"
     >
-      <div className="max-w-4xl mx-auto space-y-3">
+      <div className="max-w-4xl mx-auto space-y-4">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             <div className="text-center">

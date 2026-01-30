@@ -75,15 +75,15 @@ export function MessageCard({
   const isErrorMessage = content.startsWith("❌") || is_error;
 
   const roleStyles = {
-    user: "bg-[hsl(var(--role-user)/0.08)] border-[hsl(var(--role-user)/0.25)] hover:border-[hsl(var(--role-user)/0.4)]",
+    user: "bg-[hsl(var(--role-user)/0.12)] backdrop-blur-sm border-[hsl(var(--role-user)/0.25)] hover:border-[hsl(var(--role-user)/0.4)]",
     assistant: isErrorMessage
-      ? "bg-red-500/10 border-red-500/30 hover:border-red-500/50"
-      : "bg-[hsl(var(--role-assistant)/0.08)] border-[hsl(var(--role-assistant)/0.25)] hover:border-[hsl(var(--role-assistant)/0.4)]",
+      ? "bg-red-500/12 backdrop-blur-sm border-red-500/30 hover:border-red-500/50"
+      : "bg-[hsl(var(--role-assistant)/0.12)] backdrop-blur-sm border-[hsl(var(--role-assistant)/0.25)] hover:border-[hsl(var(--role-assistant)/0.4)]",
     system:
-      "bg-[hsl(var(--role-system)/0.08)] border-[hsl(var(--role-system)/0.25)] hover:border-[hsl(var(--role-system)/0.4)]",
+      "bg-[hsl(var(--role-system)/0.12)] backdrop-blur-sm border-[hsl(var(--role-system)/0.25)] hover:border-[hsl(var(--role-system)/0.4)]",
     tool: isErrorMessage
-      ? "bg-red-500/10 border-red-500/30 hover:border-red-500/50"
-      : "bg-[hsl(var(--role-tool)/0.08)] border-[hsl(var(--role-tool)/0.25)] hover:border-[hsl(var(--role-tool)/0.4)]",
+      ? "bg-red-500/12 backdrop-blur-sm border-red-500/30 hover:border-red-500/50"
+      : "bg-[hsl(var(--role-tool)/0.12)] backdrop-blur-sm border-[hsl(var(--role-tool)/0.25)] hover:border-[hsl(var(--role-tool)/0.4)]",
   };
 
   const roleLabelColors = {
@@ -121,9 +121,11 @@ export function MessageCard({
     <div
       id={`message-${id}`}
       className={cn(
-        "group message-card rounded-lg border-2 p-4 transition-all cursor-pointer relative",
+        "group message-card rounded-lg border-2 p-4 transition-all cursor-pointer relative isolate",
         roleStyles[role],
-        isSelected ? "shadow-lg scale-[1.02] bg-accent/10" : "shadow-sm",
+        isSelected
+          ? "shadow-lg scale-[1.01] bg-accent/10 z-10 my-2"
+          : "shadow-sm z-0",
       )}
       onClick={handleClick}
     >

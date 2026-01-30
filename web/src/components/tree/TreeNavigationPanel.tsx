@@ -42,30 +42,11 @@ export function TreeNavigationPanel({
   const handleNodeSelect = (nodeId: string) => {
     // Scroll message card into view in the chat container
     setTimeout(() => {
-      // First try exact match, then try prefix match (for tool call messages)
-      let messageCard = document.getElementById(`message-${nodeId}`);
-      let actualMessageId = nodeId;
-
-      if (!messageCard) {
-        // For assistant messages with tool calls but no content, the ID might be like:
-        // message-{nodeId}-tc-{toolCallId}
-        // Find any element that starts with the nodeId prefix
-        const allCards = document.querySelectorAll(`[id^="message-${nodeId}"]`);
-        if (allCards.length > 0) {
-          messageCard = allCards[0] as HTMLElement;
-          // Extract the actual message ID from the element ID
-          const elementId = messageCard.id;
-          if (elementId.startsWith("message-")) {
-            actualMessageId = elementId.substring("message-".length);
-          }
-        }
-      }
-
-      // Select the message with the actual ID (might be different from nodeId for tool calls)
-      onNodeSelect?.(actualMessageId);
-
+      // Direct lookup - no synthetic ID handling needed
+      const messageCard = document.getElementById(`message-${nodeId}`);
       const chatContainer = document.querySelector(".chat-container");
 
+      // Scroll to the message card if found
       if (messageCard && chatContainer) {
         const containerRect = chatContainer.getBoundingClientRect();
         const cardRect = messageCard.getBoundingClientRect();
@@ -83,11 +64,10 @@ export function TreeNavigationPanel({
           top: targetScroll,
           behavior: "smooth",
         });
-      } else if (!messageCard) {
-        // No message card found - still select the node ID
-        // This handles cases where the message might not be rendered yet
-        onNodeSelect?.(nodeId);
       }
+
+      // Always select the node ID
+      onNodeSelect?.(nodeId);
     }, 100);
   };
 
@@ -116,7 +96,6 @@ export function TreeNavigationPanel({
           onNodeDoubleClick={handleNodeDoubleClick}
         />
       </div>
-
     </div>
   );
 }

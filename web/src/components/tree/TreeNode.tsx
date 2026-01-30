@@ -28,14 +28,14 @@ export function TreeNode({
   // Checkpoint nodes use gold color, others use role color
   const strokeColor = node.hasCheckpoint
     ? checkpointColor
-    : (NODE_COLORS[node.role] || NODE_COLORS.system);
+    : NODE_COLORS[node.role] || NODE_COLORS.system;
   const baseSize = node.hasCheckpoint
     ? DEFAULT_CONFIG.nodeSize + 4
     : DEFAULT_CONFIG.nodeSize;
   const size = isSelected ? baseSize * 1.3 : baseSize;
 
   // In-context nodes are fully visible, others are dimmed
-  const opacity = node.inContext ? 1.0 : (node.isActive ? 0.5 : 0.2);
+  const opacity = node.inContext ? 1.0 : node.isActive ? 0.5 : 0.2;
 
   const handleClick = () => {
     onSelect?.(node.id);
@@ -56,10 +56,28 @@ export function TreeNode({
     return "transparent";
   };
 
-  // Tooltip: simple content preview (no checkpoint details)
-  const tooltipText = node.hasCheckpoint
-    ? "📌 Checkpoint"
-    : node.content.slice(0, 100) + (node.content.length > 100 ? "..." : "");
+  // Rich tooltip with role, timestamp, and content preview
+  const getRoleLabel = () => {
+    const labels: Record<string, string> = {
+      user: "👤 User",
+      assistant: "🤖 Assistant",
+      system: "⚙️ System",
+      tool: "🔧 Tool",
+    };
+    return labels[node.role] || node.role;
+  };
+
+  const getTooltipContent = () => {
+    if (node.hasCheckpoint) {
+      const summary = node.checkpointSummary || "Checkpoint created";
+      return `📌 Checkpoint\n\n${summary.slice(0, 200)}${summary.length > 200 ? "..." : ""}`;
+    }
+
+    const preview = node.content.slice(0, 200);
+    return `${getRoleLabel()}\n\n${preview}${node.content.length > 200 ? "..." : ""}`;
+  };
+
+  const tooltipText = getTooltipContent();
 
   return (
     <g
@@ -107,7 +125,6 @@ export function TreeNode({
         </>
       )}
 
-
       {/* Loading spinner - dashed ring */}
       {node.status === "loading" && (
         <circle
@@ -130,7 +147,7 @@ export function TreeNode({
         </circle>
       )}
 
-      {/* Tooltip - show on hover */}
+      {/* Rich tooltip - show on hover */}
       <title>{tooltipText}</title>
     </g>
   );

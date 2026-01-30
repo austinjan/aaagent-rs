@@ -43,18 +43,17 @@ impl AppState {
         let config_resolver = Arc::new(ConfigResolver::new()?);
 
         // Initialize JSONL store with lazy loading
-        crate::logger::log(format!("[Startup] Initializing JSONL store (sync_every: {})", 
-            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())));
+        crate::logger::log(format!(
+            "[Startup] Initializing JSONL store (sync_every: {})",
+            std::env::var("AAAGENT_JSONL_SYNC_EVERY").unwrap_or_else(|_| "1".to_string())
+        ));
         let sync_every_writes = std::env::var("AAAGENT_JSONL_SYNC_EVERY")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(1);
         let store = Arc::new(
-            crate::history::JSONLStore::new_with_sync_every(
-                "data".into(),
-                sync_every_writes,
-            )
-            .await?,
+            crate::history::JSONLStore::new_with_sync_every("data".into(), sync_every_writes)
+                .await?,
         );
 
         // Run startup cleanup in background
@@ -168,10 +167,7 @@ fn api_routes() -> Router<AppState> {
             post(sessions::create_branch),
         )
         // Tree visualization
-        .route(
-            "/sessions/:session_id/tree",
-            get(sessions::get_tree),
-        )
+        .route("/sessions/:session_id/tree", get(sessions::get_tree))
         // Context as markdown string
         .route(
             "/sessions/:session_id/context-string",
@@ -384,18 +380,33 @@ mod sessions {
                 message,
                 session_config_for_task,
                 config_manager,
-                store_for_task,
+                store_for_task.clone(),
                 tx.clone(),
             )
             .await;
 
             // If agent failed, send error to frontend
             match result {
-                Ok(_) => {
+                Ok(updated_session) => {
                     crate::logger::log(format!(
                         "Agent chat completed successfully for stream: {}",
                         stream_id_clone
                     ));
+
+                    // Save updated session back to storage
+                    if let Err(e) = store_for_task.update_session(&updated_session).await {
+                        crate::logger::log(format!(
+                            "ERROR: Failed to save session after chat: {}",
+                            e
+                        ));
+                    } else {
+                        crate::logger::log(format!(
+                            "Session {} saved successfully (active_leaf: {}, stats: {} nodes)",
+                            updated_session.session_id,
+                            updated_session.active_leaf_id,
+                            updated_session.stats.total_nodes
+                        ));
+                    }
                 }
                 Err(e) => {
                     crate::logger::log(format!(
@@ -412,9 +423,7 @@ mod sessions {
                         .send(crate::agent::AgentEvent::Content(error_msg.clone()))
                         .await
                     {
-                        Ok(_) => {
-                            crate::logger::log("Error message sent successfully".to_string())
-                        }
+                        Ok(_) => crate::logger::log("Error message sent successfully".to_string()),
                         Err(send_err) => crate::logger::log(format!(
                             "ERROR: Failed to send error message: {}",
                             send_err
@@ -443,9 +452,6 @@ mod sessions {
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
-
-            // TODO: Save updated session back to storage
-            // For now, sessions are not persisted after chat
         });
 
         Ok(Json(ChatResponse { stream_id }))
@@ -571,8 +577,12 @@ mod sessions {
         fn from(param: ContextStringStrategyParam) -> Self {
             match param {
                 ContextStringStrategyParam::Full => crate::history::ContextStringStrategy::Full,
-                ContextStringStrategyParam::Default => crate::history::ContextStringStrategy::Default,
-                ContextStringStrategyParam::Aggressive => crate::history::ContextStringStrategy::Aggressive,
+                ContextStringStrategyParam::Default => {
+                    crate::history::ContextStringStrategy::Default
+                }
+                ContextStringStrategyParam::Aggressive => {
+                    crate::history::ContextStringStrategy::Aggressive
+                }
             }
         }
     }
@@ -588,11 +598,21 @@ mod sessions {
             .store
             .get_session(session_id.clone())
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(|e| {
+                eprintln!("[API] Failed to load session {}: {}", session_id, e);
+                ApiError::Internal(format!("Failed to load session: {}", e))
+            })?
             .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
 
         // Use provided leaf_id or default to active_leaf_id
-        let leaf_id = query.leaf_id.unwrap_or_else(|| session.active_leaf_id.clone());
+        let leaf_id = query
+            .leaf_id
+            .unwrap_or_else(|| session.active_leaf_id.clone());
+
+        eprintln!(
+            "[API] Getting context string for session {} from leaf {} with strategy {:?}",
+            session_id, leaf_id, query.strategy
+        );
 
         // Convert strategy
         let strategy: crate::history::ContextStringStrategy = query.strategy.into();
@@ -601,7 +621,13 @@ mod sessions {
         let content = session
             .get_context_string_from(leaf_id.clone(), strategy)
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            .map_err(|e| {
+                eprintln!(
+                    "[API] Failed to get context string from leaf {}: {}",
+                    leaf_id, e
+                );
+                ApiError::Internal(format!("Failed to get context string: {}", e))
+            })?;
 
         Ok(Json(json!({
             "session_id": session_id,
@@ -669,9 +695,9 @@ mod sessions {
         let mut agent = crate::agent::Agent::new(session, provider, registry);
 
         // Optionally set quick provider
-        if let Ok(quick_provider) = provider_factory::create_quick_provider(
-            state.config_resolver.config_manager(),
-        ) {
+        if let Ok(quick_provider) =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+        {
             agent.set_quick_provider(quick_provider);
         }
 
@@ -748,9 +774,9 @@ mod sessions {
         let mut agent = crate::agent::Agent::new(session, provider, registry);
 
         // Optionally set quick provider
-        if let Ok(quick_provider) = provider_factory::create_quick_provider(
-            state.config_resolver.config_manager(),
-        ) {
+        if let Ok(quick_provider) =
+            provider_factory::create_quick_provider(state.config_resolver.config_manager())
+        {
             agent.set_quick_provider(quick_provider);
         }
 
@@ -926,10 +952,7 @@ mod sessions {
 
         let path: Vec<String> = path_nodes.iter().rev().map(|n| n.node_id.clone()).collect();
 
-        crate::logger::log(format!(
-            "Branch switched successfully to: {}",
-            req.node_id
-        ));
+        crate::logger::log(format!("Branch switched successfully to: {}", req.node_id));
 
         Ok(Json(SwitchBranchResponse {
             success: true,
@@ -1051,10 +1074,8 @@ mod sessions {
         }
 
         // Build node map for path traversal
-        let node_map: std::collections::HashMap<String, &crate::history::Node> = all_nodes
-            .iter()
-            .map(|n| (n.node_id.clone(), n))
-            .collect();
+        let node_map: std::collections::HashMap<String, &crate::history::Node> =
+            all_nodes.iter().map(|n| (n.node_id.clone(), n)).collect();
 
         // Calculate context range: traverse from active_leaf to checkpoint or root
         let mut context_node_ids: Vec<String> = Vec::new();
@@ -1136,6 +1157,7 @@ mod sessions {
 }
 
 /// Run agent chat in background task
+/// Returns the updated session on success
 async fn run_agent_chat(
     session: crate::history::Session,
     message: String,
@@ -1143,7 +1165,7 @@ async fn run_agent_chat(
     config_manager: Arc<ConfigResolver>,
     store: Arc<crate::history::JSONLStore>,
     tx: tokio::sync::mpsc::Sender<crate::agent::AgentEvent>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<crate::history::Session> {
     use crate::agent::{Agent, AgentConfig};
     use crate::llm::{LoopDetectorConfig, ToolRegistry};
 
@@ -1197,7 +1219,8 @@ async fn run_agent_chat(
     match result {
         Ok(_) => {
             crate::logger::log("run_agent_chat: Chat completed successfully".to_string());
-            Ok(())
+            // Return the updated session
+            Ok(agent.session)
         }
         Err(e) => {
             // Just return the error - it will be handled by the spawned task
@@ -1208,11 +1231,11 @@ async fn run_agent_chat(
 
 mod sse {
     use super::{ApiError, AppState};
+    use crate::history::TreeStore;
     use axum::{
         extract::{Path, State},
         response::sse::{Event, Sse},
     };
-    use crate::history::TreeStore;
     use futures::stream::Stream;
     use std::{convert::Infallible, time::Duration};
     use tokio_stream::wrappers::ReceiverStream;
