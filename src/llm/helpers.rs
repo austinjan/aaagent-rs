@@ -4,6 +4,7 @@
 //! like chat loops with tool execution.
 
 use super::{LLMProvider, LoopStep, Message, Tool, ToolCall, ToolResult};
+use crate::tools::handle_large_output;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -75,7 +76,19 @@ impl ChatLoopConfig {
         }
     }
 
-    /// Register a tool executor
+    /// Register a tool executor (lightweight alternative to ToolRegistry)
+    ///
+    /// This provides a simple way to register tool executors without implementing
+    /// the full `ToolProvider` trait. Useful for:
+    /// - Quick prototypes and demos
+    /// - Unit tests
+    /// - Simple scripts that don't need the full Agent infrastructure
+    ///
+    /// For production code, prefer using `with_registry()` with a `ToolRegistry`,
+    /// which provides better tool definition management and is used by the `Agent` struct.
+    ///
+    /// Note: Tool outputs from custom executors are processed through `handle_large_output`
+    /// to maintain consistency with the registry path.
     pub fn with_tool<F, Fut>(mut self, name: impl Into<String>, executor: F) -> Self
     where
         F: Fn(ToolCall) -> Fut + Send + 'static,
@@ -327,13 +340,21 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                         if let Some(result) = registry.execute(call).await {
                             result
                         } else if let Some(executor) = config.tool_executors.get(&call.name) {
-                            // Tool not in registry, try executor
+                            // Tool not in registry, fallback to custom executor.
+                            // Custom executors bypass ToolRegistry, so we must call
+                            // handle_large_output here to maintain consistent behavior.
                             match executor(call.clone()).await {
-                                Ok(output) => ToolResult {
-                                    tool_call_id: call.id.clone(),
-                                    content: output,
-                                    is_error: false,
-                                },
+                                Ok(output) => {
+                                    let processed = handle_large_output(&output, &call.name, None)
+                                        .unwrap_or_else(|e| {
+                                            format!("Error handling output: {}. Original output: {}", e, output)
+                                        });
+                                    ToolResult {
+                                        tool_call_id: call.id.clone(),
+                                        content: processed,
+                                        is_error: false,
+                                    }
+                                }
                                 Err(error) => ToolResult {
                                     tool_call_id: call.id.clone(),
                                     content: error,
@@ -348,13 +369,20 @@ pub async fn chat_loop_with_tools<P: LLMProvider>(
                             }
                         }
                     } else if let Some(executor) = config.tool_executors.get(&call.name) {
-                        // No registry, use executor directly
+                        // No registry configured, use custom executor directly.
+                        // Must call handle_large_output to match ToolRegistry behavior.
                         match executor(call.clone()).await {
-                            Ok(output) => ToolResult {
-                                tool_call_id: call.id.clone(),
-                                content: output,
-                                is_error: false,
-                            },
+                            Ok(output) => {
+                                let processed = handle_large_output(&output, &call.name, None)
+                                    .unwrap_or_else(|e| {
+                                        format!("Error handling output: {}. Original output: {}", e, output)
+                                    });
+                                ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    content: processed,
+                                    is_error: false,
+                                }
+                            }
                             Err(error) => ToolResult {
                                 tool_call_id: call.id.clone(),
                                 content: error,
