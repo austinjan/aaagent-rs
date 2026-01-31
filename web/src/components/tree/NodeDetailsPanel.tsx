@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Clock, User, Bot, Wrench, AlertCircle, CheckCircle2, Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
-import type { TreeNode } from "./treeLayout";
+import type { TreeNode, ToolCall } from "./treeLayout";
 
 export interface NodeDetailsPanelProps {
   node: TreeNode | null;
@@ -216,6 +216,53 @@ export function NodeDetailsPanel({ node, onClose }: NodeDetailsPanelProps) {
               ) : (
                 <span className="text-muted-foreground">✗ No</span>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Tool Call ID (for tool result nodes) */}
+        {node.tool_call_id && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Tool Call ID
+            </label>
+            <div className="mt-1">
+              <code className="text-xs bg-muted px-2 py-1 rounded font-mono">
+                {node.tool_call_id}
+              </code>
+            </div>
+          </div>
+        )}
+
+        {/* Tool Calls (for assistant nodes that invoked tools) */}
+        {node.tool_calls && node.tool_calls.length > 0 && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Tool Calls ({node.tool_calls.length})
+            </label>
+            <div className="mt-2 space-y-3">
+              {node.tool_calls.map((toolCall: ToolCall, index: number) => (
+                <div
+                  key={toolCall.id || index}
+                  className="p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-md"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wrench className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+                    <span className="font-medium text-orange-700 dark:text-orange-300">
+                      {toolCall.name}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    ID: <code className="bg-muted px-1 rounded">{toolCall.id}</code>
+                  </div>
+                  <div className="mt-2">
+                    <div className="text-xs text-muted-foreground mb-1">Arguments:</div>
+                    <pre className="text-xs bg-muted p-2 rounded overflow-x-auto max-h-[200px] overflow-y-auto">
+                      {JSON.stringify(toolCall.arguments, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

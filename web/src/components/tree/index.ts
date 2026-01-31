@@ -15,5 +15,5 @@ export type { TreeEdgeProps } from './TreeEdge';
 export { TreeControls } from './TreeControls';
 export type { TreeControlsProps } from './TreeControls';
 
-export type { TreeNode as TreeNodeData, PositionedNode, TreeConfig } from './treeLayout';
+export type { TreeNode as TreeNodeData, PositionedNode, TreeConfig, ToolCall } from './treeLayout';
 export { layoutTree, buildChildrenMap, getActivePath, collapseInactiveBranches, DEFAULT_CONFIG } from './treeLayout';
