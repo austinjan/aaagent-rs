@@ -1,6 +1,7 @@
 # Skill System Implementation Plan
 
 > 實施計劃：在 Rust 專案中實現類似 Codex CLI 的 Skill 功能
+> Updated: 2026-01-31 - Incorporated improvements from OpenClaw implementation
 
 ## 📋 目錄
 
@@ -22,13 +23,26 @@
 
 ### 核心特性
 
-- ✅ **兩階段注入與發現**：Discovery (Brief清單) -> Details (透過工具或指令按需載入)
-- ✅ **詳情讀取工具**：提供內建 `get_skill_details` 工具讓 LLM 主動探索技能內容
+- ✅ **兩階段注入與發現**：Discovery (Brief XML清單) -> Details (透過 Read 工具按需載入)
+- ✅ **使用現有 Read 工具**：LLM 使用已知的 Read 工具讀取 SKILL.md 全文
+- ✅ **資格過濾**：根據二進制檔案、環境變數、配置、作業系統過濾技能
+- ✅ **調用控制**：user-invocable 和 disable-model-invocation 標誌
 - ✅ **優先級覆蓋**：同名技能按範圍優先級自動去重
 - ✅ **YAML + TOML 配置**：靈活的元資料定義
-- ✅ **快取機制**：提升載入效能
+- ✅ **Per-skill 配置**：用戶可在 config.yaml 中配置個別技能
+- ✅ **環境變數注入**：自動注入 API 金鑰到技能指定的環境變數
+- ✅ **即時載入**：每次請求重新掃描技能以支援動態修改
 - ✅ **非同步載入**：不阻塞主執行緒
-- ✅ **錯誤處理**：詳細的錯誤報告和容錯機制
+- ✅ **錯誤處理**：錯誤訊息簡單清楚，輸出到 Logs 並回傳 API
+
+### 產品決策與假設
+
+- **同名衝突**：依據預設優先順序覆寫（以 Scope 優先級為準）
+- **動態修改**：提供手動 reload API，不做自動 watcher（MVP）
+- **目標規模**：50~100 skills；不加內建觀測指標
+- **使用情境**：Web application，提供 API 取代 CLI
+- **安全策略**：MVP 允許所有路徑與符號連結
+- **可觀測性**：skill 被調用需記錄並透過 streaming 同步到 UI
 
 ### 技術棧
 
@@ -37,9 +51,10 @@
   - `serde` - 序列化/反序列化
   - `tokio` - 非同步運行時
   - `walkdir` - 目錄遍歷
-  - `yaml-front-matter` - YAML frontmatter 解析
+  - `serde_yaml` - YAML frontmatter 解析
   - `toml` - TOML 配置解析
   - `thiserror` - 錯誤處理
+  - `which` - 二進制檔案檢測
 
 ---
 
@@ -55,26 +70,26 @@
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    SkillsManager                            │
-│  - Cache management                                         │
 │  - Skill discovery coordination                             │
+│  - Per-skill config resolution                              │
 └────────────────────────┬────────────────────────────────────┘
                          │
-         ┌───────────────┼───────────────┐
-         ▼               ▼               ▼
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│   Loader    │  │  Injection  │  │   Render    │
-│             │  │             │  │             │
-│ - Discovery │  │ - Context   │  │ - Docs      │
-│ - Parsing   │  │   injection │  │   generation│
-└─────────────┘  └─────────────┘  └─────────────┘
+         ┌───────────────┼───────────────┬───────────────┐
+         ▼               ▼               ▼               ▼
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│   Loader    │  │  Eligibility│  │   Render    │  │  Env        │
+│             │  │   Filter    │  │             │  │  Injection  │
+│ - Discovery │  │ - bins/env  │  │ - XML list  │  │             │
+│ - Parsing   │  │ - OS/config │  │ - Sys prompt│  │ - API keys  │
+└─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    File System                              │
 │                                                             │
-│  Repo: .skills/          User: ~/.myapp/skills/            │
-│  System: ~/.myapp/skills/.system/                          │
-│  Admin: /etc/myapp/skills/                                 │
+│  Repo: .skills/          User: ~/.aaagent/skills/          │
+│  System: ~/.aaagent/skills/.system/                        │
+│  Admin: /etc/aaagent/skills/                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -84,25 +99,26 @@
 1. 初始化階段
    Application → SkillsManager::new()
                 → SystemSkills::install()
-                → Extract embedded skills to ~/.myapp/skills/.system/
+                → Extract embedded skills to ~/.aaagent/skills/.system/
 
 2. 載入階段
-   User requests skills for working directory
+   User/UI requests skills via API (list/reload)
                 → SkillsManager::skills_for_cwd(cwd)
                 → Loader::skill_roots_for_cwd()
                 → Loader::load_skills_from_roots()
                 → Parse SKILL.md + SKILL.toml
                 → Deduplicate by priority
-                → Cache results
-                → Return SkillLoadOutcome
+                → Filter by eligibility
+                → Return SkillSnapshot
 
 3. 執行階段
-   User selects skill
-                → UserInput::Skill { name, path }
-                → Injection::build_skill_injections()
-                → Load skill file content
-                → Inject into agent context
-                → Agent executes skill instructions
+   Agent starts
+                → Apply environment overrides (inject API keys)
+                → Build system prompt with XML skill list
+                → LLM scans <available_skills>
+                → LLM calls Read tool to fetch SKILL.md content
+                → LLM follows skill instructions
+                → Cleanup: restore environment
 ```
 
 ---
@@ -117,10 +133,12 @@ src/skills/
 ├── model.rs            # 資料結構定義
 ├── error.rs            # 錯誤類型定義
 ├── loader.rs           # 技能發現與載入
-├── manager.rs          # 快取與管理
+├── eligibility.rs      # 資格過濾邏輯
+├── manager.rs          # 組裝快照與管理
 ├── system.rs           # 系統技能安裝
-├── injection.rs        # 上下文注入
-├── render.rs           # 文檔渲染
+├── config.rs           # Per-skill 配置解析
+├── env_override.rs     # 環境變數注入
+├── render.rs           # XML 渲染
 └── tests/
     ├── fixtures/       # 測試用技能範例
     └── integration.rs  # 整合測試
@@ -130,13 +148,15 @@ src/skills/
 
 | 模組 | 職責 | 關鍵函數 |
 |------|------|----------|
-| `model.rs` | 定義資料結構 | `SkillMetadata`, `SkillScope`, `SkillLoadOutcome` |
+| `model.rs` | 定義資料結構 | `SkillMetadata`, `SkillScope`, `SkillSnapshot`, `SkillRequirements` |
 | `error.rs` | 錯誤類型 | `SkillError`, `Result<T>` |
 | `loader.rs` | 發現和解析技能 | `load_skills_from_roots()`, `parse_skill_md()` |
-| `manager.rs` | 快取管理 | `SkillsManager::skills_for_cwd()` |
+| `eligibility.rs` | 資格過濾 | `filter_eligible_skills()`, `check_requirements()` |
+| `manager.rs` | 快照組裝 | `SkillsManager::build_snapshot()` |
 | `system.rs` | 內建技能安裝 | `install_system_skills()` |
-| `injection.rs` | 注入到執行上下文 | `build_skill_injections()` |
-| `render.rs` | 生成文檔 | `render_skills_section()` |
+| `config.rs` | Per-skill 配置 | `resolve_skill_config()` |
+| `env_override.rs` | 環境變數注入 | `apply_env_overrides()`, `restore_env()` |
+| `render.rs` | 生成 XML | `render_skills_xml()` |
 
 ---
 
@@ -147,7 +167,7 @@ src/skills/
 **目標**：建立基本的資料結構和錯誤處理
 
 - [ ] 步驟 1.1：創建模組結構
-- [ ] 步驟 1.2：定義資料模型 (`model.rs`)
+- [ ] 步驟 1.2：定義資料模型 (`model.rs`) - 包含 SkillRequirements, SkillInvocation
 - [ ] 步驟 1.3：定義錯誤類型 (`error.rs`)
 - [ ] 步驟 1.4：編寫單元測試
 
@@ -156,47 +176,75 @@ src/skills/
 **目標**：實現技能發現和解析邏輯
 
 - [ ] 步驟 2.1：實現目錄遍歷
-- [ ] 步驟 2.2：實現 YAML frontmatter 解析
+- [ ] 步驟 2.2：實現 YAML frontmatter 解析（包含 metadata JSON5）
 - [ ] 步驟 2.3：實現 TOML 配置解析
 - [ ] 步驟 2.4：實現優先級去重邏輯
 - [ ] 步驟 2.5：編寫整合測試
 
-### Phase 3: 管理器與快取（第 6-7 天）
+### Phase 3: 資格過濾（第 6-7 天）
 
-**目標**：實現快取機制和管理器
+**目標**：實現技能資格檢查
 
-- [ ] 步驟 3.1：實現 `SkillsManager` 結構
-- [ ] 步驟 3.2：實現快取邏輯
-- [ ] 步驟 3.3：實現強制重載機制
-- [ ] 步驟 3.4：編寫效能測試
+- [ ] 步驟 3.1：實現二進制檔案檢測 (`which` crate)
+- [ ] 步驟 3.2：實現環境變數檢查
+- [ ] 步驟 3.3：實現配置路徑檢查
+- [ ] 步驟 3.4：實現作業系統過濾
+- [ ] 步驟 3.5：編寫過濾邏輯測試
 
-### Phase 4: 系統技能（第 8-9 天）
+### Phase 4: 管理器與快照（第 8-9 天）
+
+**目標**：實現快照組裝與管理器
+
+- [ ] 步驟 4.1：實現 `SkillsManager` 結構
+- [ ] 步驟 4.2：實現 `build_snapshot()` 方法
+- [ ] 步驟 4.3：編寫效能測試
+
+### Phase 5: Per-skill 配置（第 10-11 天）
+
+**目標**：實現用戶配置解析
+
+- [ ] 步驟 5.1：定義 config.yaml 中的 skills 區段格式
+- [ ] 步驟 5.2：實現 `resolve_skill_config()`
+- [ ] 步驟 5.3：實現 enabled/disabled 過濾
+- [ ] 步驟 5.4：編寫配置測試
+
+### Phase 6: 環境變數注入（第 12-13 天）
+
+**目標**：實現 API 金鑰注入
+
+- [ ] 步驟 6.1：實現 `apply_env_overrides()`
+- [ ] 步驟 6.2：實現 `restore_env()` 清理函數
+- [ ] 步驟 6.3：實現 primaryEnv → apiKey 映射
+- [ ] 步驟 6.4：編寫注入測試
+
+### Phase 7: 系統技能（第 14-15 天）
 
 **目標**：實現內建技能管理
 
-- [ ] 步驟 4.1：設計嵌入式技能格式
-- [ ] 步驟 4.2：實現技能解壓縮邏輯
-- [ ] 步驟 4.3：實現 fingerprinting 避免重複解壓
-- [ ] 步驟 4.4：創建範例系統技能
+- [ ] 步驟 7.1：設計嵌入式技能格式
+- [ ] 步驟 7.2：實現技能解壓縮邏輯
+- [ ] 步驟 7.3：實現 fingerprinting 避免重複解壓
+- [ ] 步驟 7.4：創建範例系統技能
 
-### Phase 5: 注入與渲染（第 10-11 天）
+### Phase 8: XML 渲染與系統提示（第 16-17 天）
 
-**目標**：實現執行時注入和文檔生成
+**目標**：實現 XML 格式和系統提示集成
 
-- [ ] 步驟 5.1：實現 `render_skills_section` (簡短 Brief 清單)
-- [ ] 步驟 5.2：實現內建工具 `get_skill_details` 的執行邏輯
-- [ ] 步驟 5.3：實現 XML/Markdown 注入格式
-- [ ] 步驟 5.4：在 System Prompt 中加入技能使用規範 (Interaction Rules)
-- [ ] 步驟 5.5：編寫端到端測試
+- [ ] 步驟 8.1：實現 `render_skills_xml()` (XML 格式)
+- [ ] 步驟 8.2：實現系統提示技能區段
+- [ ] 步驟 8.3：實現調用控制過濾 (disable-model-invocation)
+- [ ] 步驟 8.4：編寫端到端測試
 
-### Phase 6: 整合與優化（第 12-14 天）
+### Phase 9: 整合與優化（第 18-20 天）
 
 **目標**：整合到主應用並優化
 
-- [ ] 步驟 6.1：與應用主邏輯整合
-- [ ] 步驟 6.2：效能分析與優化
-- [ ] 步驟 6.3：撰寫使用文檔
-- [ ] 步驟 6.4：進行完整測試
+- [ ] 步驟 9.1：與 Agent 主邏輯整合
+- [ ] 步驟 9.2：提供 Web API（list skills / get skill details / reload）
+- [ ] 步驟 9.3：技能調用事件記錄並透過 streaming 提供給 UI
+- [ ] 步驟 9.4：效能分析與優化
+- [ ] 步驟 9.5：撰寫使用文檔
+- [ ] 步驟 9.6：進行完整測試
 
 ---
 
@@ -208,7 +256,7 @@ src/skills/
 
 ```bash
 mkdir -p src/skills/tests/fixtures
-touch src/skills/{mod.rs,model.rs,error.rs,loader.rs,manager.rs,system.rs,injection.rs,render.rs}
+touch src/skills/{mod.rs,model.rs,error.rs,loader.rs,eligibility.rs,manager.rs,system.rs,config.rs,env_override.rs,render.rs}
 touch src/skills/tests/{integration.rs}
 ```
 
@@ -216,15 +264,89 @@ touch src/skills/tests/{integration.rs}
 
 ```rust
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// 技能範圍，定義技能的來源和優先級
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SkillScope {
-    Admin,  // 優先級最低
-    System,
-    User,
-    Repo,   // 優先級最高
+    Admin,  // 優先級最低 (/etc/aaagent/skills/)
+    System, // ~/.aaagent/skills/.system/
+    User,   // ~/.aaagent/skills/
+    Repo,   // 優先級最高 (.skills/ in project)
+}
+
+/// 技能資格要求（來自 metadata.requires）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillRequirements {
+    /// 所有必須存在的二進制檔案
+    #[serde(default)]
+    pub bins: Vec<String>,
+
+    /// 至少一個必須存在的二進制檔案
+    #[serde(default, rename = "anyBins")]
+    pub any_bins: Vec<String>,
+
+    /// 必須存在的環境變數
+    #[serde(default)]
+    pub env: Vec<String>,
+
+    /// 必須為真的配置路徑（點分隔）
+    #[serde(default)]
+    pub config: Vec<String>,
+}
+
+/// 技能調用控制
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInvocation {
+    /// 用戶可透過 slash command 調用（預設 true）
+    #[serde(default = "default_true")]
+    pub user_invocable: bool,
+
+    /// 對模型隱藏（預設 false）
+    #[serde(default)]
+    pub disable_model_invocation: bool,
+}
+
+fn default_true() -> bool { true }
+
+impl Default for SkillInvocation {
+    fn default() -> Self {
+        Self {
+            user_invocable: true,
+            disable_model_invocation: false,
+        }
+    }
+}
+
+/// 技能元資料（來自 metadata 欄位的 JSON5）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillOpenClawMetadata {
+    /// 總是可用（跳過資格檢查）
+    #[serde(default)]
+    pub always: bool,
+
+    /// 備用配置查找鍵
+    #[serde(rename = "skillKey")]
+    pub skill_key: Option<String>,
+
+    /// 主要環境變數（用於 API 金鑰注入）
+    #[serde(rename = "primaryEnv")]
+    pub primary_env: Option<String>,
+
+    /// UI 表情符號
+    pub emoji: Option<String>,
+
+    /// 文檔 URL
+    pub homepage: Option<String>,
+
+    /// 支援的作業系統
+    #[serde(default)]
+    pub os: Vec<String>,
+
+    /// 資格要求
+    #[serde(default)]
+    pub requires: SkillRequirements,
 }
 
 /// 技能元資料
@@ -236,14 +358,18 @@ pub struct SkillMetadata {
     /// 完整描述
     pub description: String,
 
-    /// 簡短描述（選用）
-    pub short_description: Option<String>,
-
     /// SKILL.md 檔案路徑
     pub path: PathBuf,
 
     /// 技能範圍
     pub scope: SkillScope,
+
+    /// 調用控制
+    #[serde(default)]
+    pub invocation: SkillInvocation,
+
+    /// OpenClaw 風格元資料
+    pub openclaw_metadata: Option<SkillOpenClawMetadata>,
 
     /// 介面元資料（來自 SKILL.toml，選用）
     pub interface: Option<SkillInterface>,
@@ -265,13 +391,34 @@ pub struct SkillInterface {
 pub struct SkillFrontmatter {
     pub name: String,
     pub description: String,
-    pub metadata: Option<SkillMetadataSection>,
+
+    /// JSON5 編碼的元資料
+    pub metadata: Option<String>,
+
+    /// 用戶可調用（預設 true）
+    #[serde(default = "default_true", rename = "user-invocable")]
+    pub user_invocable: bool,
+
+    /// 禁用模型調用（預設 false）
+    #[serde(default, rename = "disable-model-invocation")]
+    pub disable_model_invocation: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SkillMetadataSection {
-    #[serde(rename = "short-description")]
-    pub short_description: Option<String>,
+/// 技能快照（用於傳遞給 Agent）
+#[derive(Debug, Clone)]
+pub struct SkillSnapshot {
+    /// 格式化的 XML 用於系統提示
+    pub prompt: String,
+
+    /// 技能列表（含 primaryEnv 用於環境注入）
+    pub skills: Vec<SkillSnapshotEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillSnapshotEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub primary_env: Option<String>,
 }
 
 /// 技能載入結果
@@ -302,44 +449,47 @@ impl SkillLoadOutcome {
 #### 步驟 1.3：定義錯誤類型 (`error.rs`)
 
 ```rust
+use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+/// 技能錯誤 - 必須包含路徑和清楚的訊息
+#[derive(Error, Debug, Serialize)]
 pub enum SkillError {
-    #[error("Failed to read skill file {path}: {source}")]
-    FileRead {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    #[error("Cannot read skill '{path}': {message}")]
+    FileRead { path: PathBuf, message: String },
 
-    #[error("Failed to parse YAML frontmatter in {path}: {source}")]
-    YamlParse {
-        path: PathBuf,
-        source: serde_yaml::Error,
-    },
+    #[error("Invalid YAML in '{path}': {message}")]
+    YamlParse { path: PathBuf, message: String },
 
-    #[error("Failed to parse TOML config in {path}: {source}")]
-    TomlParse {
-        path: PathBuf,
-        source: toml::de::Error,
-    },
+    #[error("Invalid TOML in '{path}': {message}")]
+    TomlParse { path: PathBuf, message: String },
 
-    #[error("Missing frontmatter in skill file {path}")]
+    #[error("Missing frontmatter in '{path}'")]
     MissingFrontmatter { path: PathBuf },
 
-    #[error("Invalid skill name '{name}' in {path}: {reason}")]
-    InvalidName {
-        name: String,
-        path: PathBuf,
-        reason: String,
-    },
+    #[error("Invalid skill name '{name}' in '{path}': {reason}")]
+    InvalidName { name: String, path: PathBuf, reason: String },
 
-    #[error("Failed to install system skills: {0}")]
+    #[error("Skill '{name}' not found")]
+    NotFound { name: String },
+
+    #[error("Skill '{name}' not eligible: {reason}")]
+    NotEligible { name: String, reason: String },
+
+    #[error("System skill install failed: {0}")]
     SystemInstall(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl SkillError {
+    /// 記錄到 log 並返回可序列化的訊息
+    pub fn log_and_serialize(&self) -> String {
+        log::error!("{}", self);
+        self.to_string()
+    }
 }
 
 pub type Result<T> = std::result::Result<T, SkillError>;
@@ -347,707 +497,587 @@ pub type Result<T> = std::result::Result<T, SkillError>;
 
 ---
 
-### Phase 2: 載入器實現
+### Phase 3: 資格過濾
 
-#### 步驟 2.1-2.4：實現載入器 (`loader.rs`)
+#### 步驟 3.1-3.4：實現資格過濾 (`eligibility.rs`)
 
 ```rust
 use crate::skills::{
     error::{Result, SkillError},
-    model::{SkillFrontmatter, SkillInterface, SkillLoadOutcome, SkillMetadata, SkillScope},
+    model::{SkillMetadata, SkillRequirements},
 };
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-
-/// 定義 Repo 內的預設技能存放路徑
-const REPO_SKILL_PATHS: &[&str] = &[
-    ".skills",
-    ".agent/skills",
-    ".codex/skills",
-    "skills",
-];
-
-/// 獲取指定工作目錄的所有技能根目錄
-pub fn skill_roots_for_cwd(app_home: &Path, cwd: &Path) -> Vec<(PathBuf, SkillScope)> {
-    let mut roots = Vec::new();
-
-    // 1. Repo scope: 從 cwd 向上找專案根目錄標識
-    if let Some(repo_root) = find_project_root(cwd) {
-        for sub_path in REPO_SKILL_PATHS {
-            let repo_skills = repo_root.join(sub_path);
-            if repo_skills.exists() && repo_skills.is_dir() {
-                roots.push((repo_skills, SkillScope::Repo));
-            }
-        }
-    }
-
-    // 2. User scope: ~/.myapp/skills/
-    let user_skills = app_home.join("skills");
-    if user_skills.exists() {
-        roots.push((user_skills, SkillScope::User));
-    }
-
-    // 3. System scope: ~/.myapp/skills/.system/
-    let system_skills = app_home.join("skills").join(".system");
-    if system_skills.exists() {
-        roots.push((system_skills, SkillScope::System));
-    }
-
-    // 4. Admin scope: /etc/myapp/skills/ (Unix only)
-    #[cfg(unix)]
-    {
-        let admin_skills = PathBuf::from("/etc/myapp/skills");
-        if admin_skills.exists() {
-            roots.push((admin_skills, SkillScope::Admin));
-        }
-    }
-
-    roots
-}
-
-/// 從技能根目錄載入所有技能
-pub fn load_skills_from_roots(roots: &[(PathBuf, SkillScope)]) -> SkillLoadOutcome {
-    let mut outcome = SkillLoadOutcome::new();
-    let mut skills_by_name: HashMap<String, SkillMetadata> = HashMap::new();
-
-    for (root, scope) in roots {
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            // 只處理 SKILL.md 檔案
-            if path.file_name() != Some(std::ffi::OsStr::new("SKILL.md")) {
-                continue;
-            }
-
-            match parse_skill(path, *scope) {
-                Ok(skill) => {
-                    // 優先級去重：較高優先級的覆蓋較低優先級的
-                    if let Some(existing) = skills_by_name.get(&skill.name) {
-                        if skill.scope > existing.scope {
-                            skills_by_name.insert(skill.name.clone(), skill);
-                        }
-                        // 否則保留現有的（優先級更高）
-                    } else {
-                        skills_by_name.insert(skill.name.clone(), skill);
-                    }
-                }
-                Err(e) => outcome.add_error(e),
-            }
-        }
-    }
-
-    // 將去重後的技能加入結果
-    for skill in skills_by_name.into_values() {
-        outcome.add_skill(skill);
-    }
-
-    outcome
-}
-
-/// 解析單個技能檔案
-fn parse_skill(path: &Path, scope: SkillScope) -> Result<SkillMetadata> {
-    // 讀取檔案內容
-    let content = std::fs::read_to_string(path).map_err(|e| SkillError::FileRead {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-
-    // 解析 YAML frontmatter
-    let frontmatter = extract_frontmatter(&content, path)?;
-
-    // 驗證技能名稱
-    validate_skill_name(&frontmatter.name, path)?;
-
-    // 嘗試讀取 SKILL.toml（選用）
-    let interface = parse_skill_toml(path)?;
-
-    // 提取簡短描述（優先使用 frontmatter 中的）
-    let short_description = frontmatter
-        .metadata
-        .and_then(|m| m.short_description)
-        .or_else(|| interface.as_ref()?.short_description.clone());
-
-    Ok(SkillMetadata {
-        name: frontmatter.name,
-        description: frontmatter.description,
-        short_description,
-        path: path.to_path_buf(),
-        scope,
-        interface,
-    })
-}
-
-/// 提取 YAML frontmatter
-fn extract_frontmatter(content: &str, path: &Path) -> Result<SkillFrontmatter> {
-    // 檢查是否以 "---" 開頭
-    if !content.starts_with("---\n") {
-        return Err(SkillError::MissingFrontmatter {
-            path: path.to_path_buf(),
-        });
-    }
-
-    // 找到第二個 "---"
-    let rest = &content[4..]; // 跳過第一個 "---\n"
-    let end = rest.find("\n---\n").ok_or_else(|| SkillError::MissingFrontmatter {
-        path: path.to_path_buf(),
-    })?;
-
-    let yaml_str = &rest[..end];
-
-    serde_yaml::from_str(yaml_str).map_err(|e| SkillError::YamlParse {
-        path: path.to_path_buf(),
-        source: e,
-    })
-}
-
-/// 解析 SKILL.toml（如果存在）
-fn parse_skill_toml(skill_md_path: &Path) -> Result<Option<SkillInterface>> {
-    let dir = skill_md_path.parent().unwrap();
-    let toml_path = dir.join("SKILL.toml");
-
-    if !toml_path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&toml_path).map_err(|e| SkillError::FileRead {
-        path: toml_path.clone(),
-        source: e,
-    })?;
-
-    #[derive(serde::Deserialize)]
-    struct SkillToml {
-        interface: Option<SkillInterface>,
-    }
-
-    let toml: SkillToml = toml::from_str(&content).map_err(|e| SkillError::TomlParse {
-        path: toml_path,
-        source: e,
-    })?;
-
-    Ok(toml.interface)
-}
-
-/// 驗證技能名稱
-fn validate_skill_name(name: &str, path: &Path) -> Result<()> {
-    // 檢查是否為空
-    if name.is_empty() {
-        return Err(SkillError::InvalidName {
-            name: name.to_string(),
-            path: path.to_path_buf(),
-            reason: "Name cannot be empty".to_string(),
-        });
-    }
-
-    // 檢查是否包含非法字元（只允許 a-z, 0-9, -, _）
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(SkillError::InvalidName {
-            name: name.to_string(),
-            path: path.to_path_buf(),
-            reason: "Name can only contain a-z, 0-9, -, _".to_string(),
-        });
-    }
-
-    Ok(())
-}
-
-/// 向上查找專案根目錄標識
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let mut current = start;
-    loop {
-        // 檢查多種專案標識
-        if current.join(".git").exists() 
-            || current.join(".agent").exists() 
-            || current.join(".skills").exists() {
-            return Some(current.to_path_buf());
-        }
-        current = current.parent()?;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_skill_name() {
-        let path = Path::new("test.md");
-
-        assert!(validate_skill_name("my-skill", path).is_ok());
-        assert!(validate_skill_name("skill_123", path).is_ok());
-        assert!(validate_skill_name("", path).is_err());
-        assert!(validate_skill_name("my skill", path).is_err());
-        assert!(validate_skill_name("my@skill", path).is_err());
-    }
-
-    #[test]
-    fn test_extract_frontmatter() {
-        let content = r#"---
-name: test-skill
-description: A test skill
-metadata:
-  short-description: Test
----
-
-# Body content
-"#;
-
-        let path = Path::new("test.md");
-        let fm = extract_frontmatter(content, path).unwrap();
-
-        assert_eq!(fm.name, "test-skill");
-        assert_eq!(fm.description, "A test skill");
-        assert_eq!(fm.metadata.unwrap().short_description.unwrap(), "Test");
-    }
-}
-```
-
----
-
-### Phase 3: 管理器與快取
-
-#### 步驟 3.1-3.3：實現管理器 (`manager.rs`)
-
-```rust
-use crate::skills::{
-    loader::{load_skills_from_roots, skill_roots_for_cwd},
-    model::SkillLoadOutcome,
-};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
-
-/// 技能管理器，負責快取和協調技能載入
-pub struct SkillsManager {
-    /// 應用主目錄（例如 ~/.myapp/）
-    app_home: PathBuf,
-
-    /// 快取：工作目錄 -> 技能載入結果
-    cache: Arc<RwLock<HashMap<PathBuf, SkillLoadOutcome>>>,
-}
-
-impl SkillsManager {
-    /// 創建新的技能管理器
-    pub fn new(app_home: PathBuf) -> Self {
-        Self {
-            app_home,
-            cache: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// 獲取指定工作目錄的技能（使用快取）
-    pub fn skills_for_cwd(&self, cwd: &Path) -> SkillLoadOutcome {
-        self.skills_for_cwd_with_options(cwd, false)
-    }
-
-    /// 獲取指定工作目錄的技能（可選擇強制重載）
-    pub fn skills_for_cwd_with_options(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
-        let cwd = cwd.to_path_buf();
-
-        // 如果不強制重載，先檢查快取
-        if !force_reload {
-            if let Ok(cache) = self.cache.read() {
-                if let Some(outcome) = cache.get(&cwd) {
-                    return outcome.clone();
-                }
-            }
-        }
-
-        // 載入技能
-        let roots = skill_roots_for_cwd(&self.app_home, &cwd);
-        let outcome = load_skills_from_roots(&roots);
-
-        // 更新快取
-        if let Ok(mut cache) = self.cache.write() {
-            cache.insert(cwd, outcome.clone());
-        }
-
-        outcome
-    }
-
-    /// 清除快取
-    pub fn clear_cache(&self) {
-        if let Ok(mut cache) = self.cache.write() {
-            cache.clear();
-        }
-    }
-
-    /// 清除特定工作目錄的快取
-    pub fn clear_cache_for_cwd(&self, cwd: &Path) {
-        if let Ok(mut cache) = self.cache.write() {
-            cache.remove(cwd);
-        }
-    }
-
-    /// 獲取應用主目錄
-    pub fn app_home(&self) -> &Path {
-        &self.app_home
-    }
-}
-
-impl Clone for SkillLoadOutcome {
-    fn clone(&self) -> Self {
-        Self {
-            skills: self.skills.clone(),
-            errors: vec![], // 不複製錯誤（錯誤通常不實現 Clone）
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_cache() {
-        let temp = TempDir::new().unwrap();
-        let app_home = temp.path().join("app");
-        let cwd = temp.path().join("work");
-
-        fs::create_dir_all(&app_home).unwrap();
-        fs::create_dir_all(&cwd).unwrap();
-
-        let manager = SkillsManager::new(app_home);
-
-        // 第一次載入
-        let outcome1 = manager.skills_for_cwd(&cwd);
-
-        // 第二次應該使用快取
-        let outcome2 = manager.skills_for_cwd(&cwd);
-
-        assert_eq!(outcome1.skills.len(), outcome2.skills.len());
-
-        // 清除快取
-        manager.clear_cache();
-
-        // 第三次載入
-        let outcome3 = manager.skills_for_cwd(&cwd);
-        assert_eq!(outcome1.skills.len(), outcome3.skills.len());
-    }
-}
-```
-
----
-
-### Phase 4: 系統技能
-
-#### 步驟 4.1-4.3：實現系統技能安裝 (`system.rs`)
-
-```rust
-use crate::skills::error::{Result, SkillError};
+use std::env;
 use std::path::Path;
 
-/// 安裝內建系統技能到 ~/.myapp/skills/.system/
-pub fn install_system_skills(app_home: &Path) -> Result<()> {
-    let system_dir = app_home.join("skills").join(".system");
-
-    // 創建目錄
-    std::fs::create_dir_all(&system_dir)?;
-
-    // 檢查 fingerprint，避免重複安裝
-    let fingerprint_path = system_dir.join(".fingerprint");
-    let current_fingerprint = get_embedded_skills_fingerprint();
-
-    if fingerprint_path.exists() {
-        let existing = std::fs::read_to_string(&fingerprint_path)?;
-        if existing == current_fingerprint {
-            // 已經安裝且版本相同，跳過
-            return Ok(());
-        }
-    }
-
-    // 安裝所有嵌入式技能
-    install_embedded_skills(&system_dir)?;
-
-    // 寫入 fingerprint
-    std::fs::write(fingerprint_path, current_fingerprint)?;
-
-    Ok(())
+/// 資格檢查上下文
+pub struct EligibilityContext<'a> {
+    /// 應用配置（用於 config 路徑檢查）
+    pub config: Option<&'a toml::Value>,
 }
 
-/// 獲取嵌入式技能的指紋（用於版本檢查）
-fn get_embedded_skills_fingerprint() -> String {
-    // 可以使用編譯時間戳或內容 hash
-    // 這裡簡化為固定版本號
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
-/// 安裝嵌入式技能
-fn install_embedded_skills(target_dir: &Path) -> Result<()> {
-    // 示例：安裝一個 "skill-creator" 技能
-    let skill_creator_dir = target_dir.join("skill-creator");
-    std::fs::create_dir_all(&skill_creator_dir)?;
-
-    let skill_md = include_str!("../assets/system_skills/skill-creator/SKILL.md");
-    std::fs::write(skill_creator_dir.join("SKILL.md"), skill_md)?;
-
-    // 可以添加更多系統技能...
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_install_system_skills() {
-        let temp = TempDir::new().unwrap();
-        let app_home = temp.path();
-
-        // 第一次安裝
-        install_system_skills(app_home).unwrap();
-
-        let system_dir = app_home.join("skills").join(".system");
-        assert!(system_dir.exists());
-        assert!(system_dir.join(".fingerprint").exists());
-
-        // 第二次安裝應該跳過
-        install_system_skills(app_home).unwrap();
-    }
-}
-```
-
-在 `src/assets/system_skills/skill-creator/SKILL.md` 中創建範例：
-
-```markdown
----
-name: skill-creator
-description: Guide for creating new skills in your application
-metadata:
-  short-description: Create or update a skill
----
-
-# Skill Creator
-
-This skill helps you create new skills for your application.
-
-## Skill Structure
-
-Each skill requires:
-1. A directory with the skill name (e.g., `my-skill/`)
-2. A `SKILL.md` file with YAML frontmatter
-3. Optional `SKILL.toml` for enhanced metadata
-
-## Example SKILL.md
-
-\```markdown
----
-name: my-skill
-description: What this skill does
-metadata:
-  short-description: Short description
----
-
-# Skill Instructions
-
-Your skill instructions go here.
-\```
-
-## Where to Place Skills
-
-- **Project skills**: `.skills/` in repository root
-- **User skills**: `~/.myapp/skills/`
-- **System skills**: `~/.myapp/skills/.system/` (auto-installed)
-```
-
----
-
-### Phase 5: 注入與渲染
-
-#### 步驟 5.1-5.2：實現注入邏輯 (`injection.rs`)
-
-```rust
-use crate::skills::{error::Result, model::{SkillLoadOutcome, SkillMetadata}};
-use std::path::PathBuf;
-
-/// 使用者輸入類型
-#[derive(Debug, Clone)]
-pub enum UserInput {
-    Text { text: String },
-    /// 顯示激發（例如透過 Slash Command 或 UI 選擇）
-    Skill { name: String, path: PathBuf },
-}
-
-/// 技能注入結果
-#[derive(Debug)]
-pub struct SkillInjections {
-    pub injections: Vec<SkillInjection>,
-}
-
-#[derive(Debug)]
-pub struct SkillInjection {
-    pub name: String,
-    pub path: PathBuf,
-    pub content: String,
-}
-
-/// 構建技能注入（通常用於顯示激發，直接讀取全文）
-pub async fn build_skill_injections(
-    inputs: &[UserInput],
-) -> Result<SkillInjections> {
-    let mut injections = Vec::new();
-
-    for input in inputs {
-        if let UserInput::Skill { name, path } = input {
-            let content = tokio::fs::read_to_string(path).await.map_err(|e| SkillError::FileRead {
-                path: path.clone(),
-                source: e,
-            })?;
-
-            injections.push(SkillInjection {
-                name: name.clone(),
-                path: path.clone(),
-                content,
+/// 檢查技能是否符合資格
+pub fn check_eligibility(
+    skill: &SkillMetadata,
+    skill_config: Option<&SkillConfig>,
+    ctx: &EligibilityContext,
+) -> Result<()> {
+    // 1. 檢查是否明確禁用
+    if let Some(cfg) = skill_config {
+        if cfg.enabled == Some(false) {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: "Disabled in config".to_string(),
             });
         }
     }
 
-    Ok(SkillInjections { injections })
-}
+    let metadata = match &skill.openclaw_metadata {
+        Some(m) => m,
+        None => return Ok(()), // 沒有元資料，預設通過
+    };
 
-/// 專用的 get_skill_details 工具邏輯
-pub async fn get_skill_details(name: &str, outcome: &SkillLoadOutcome) -> Result<String> {
-    let skill = outcome.skills.iter()
-        .find(|s| s.name == name)
-        .ok_or_else(|| SkillError::InvalidName { 
-            name: name.to_string(), 
-            path: PathBuf::new(), 
-            reason: "Skill not found".to_string() 
-        })?;
+    // 2. 總是可用標誌
+    if metadata.always {
+        return Ok(());
+    }
 
-    let content = tokio::fs::read_to_string(&skill.path).await.map_err(|e| SkillError::FileRead {
-        path: skill.path.clone(),
-        source: e,
-    })?;
-    
-    // 移除 YAML frontmatter，只給 LLM 指令部分
-    Ok(strip_frontmatter(&content))
-}
-
-fn strip_frontmatter(content: &str) -> String {
-    if content.starts_with("---\n") {
-        if let Some(end) = content[4..].find("\n---\n") {
-            return content[4 + end + 5..].to_string();
+    // 3. 作業系統檢查
+    if !metadata.os.is_empty() {
+        let current_os = get_current_os();
+        if !metadata.os.iter().any(|os| os == current_os) {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: format!("OS '{}' not supported", current_os),
+            });
         }
     }
-    content.to_string()
+
+    // 4. 檢查所有必需的二進制檔案
+    for bin in &metadata.requires.bins {
+        if !has_binary(bin) {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: format!("Required binary '{}' not found", bin),
+            });
+        }
+    }
+
+    // 5. 檢查至少一個二進制檔案
+    if !metadata.requires.any_bins.is_empty() {
+        let has_any = metadata.requires.any_bins.iter().any(|bin| has_binary(bin));
+        if !has_any {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: format!(
+                    "None of required binaries found: {:?}",
+                    metadata.requires.any_bins
+                ),
+            });
+        }
+    }
+
+    // 6. 檢查必需的環境變數
+    for env_name in &metadata.requires.env {
+        // 先檢查環境變數，再檢查 skill config 中的 env
+        let has_env = env::var(env_name).is_ok()
+            || skill_config
+                .and_then(|c| c.env.as_ref())
+                .map(|e| e.contains_key(env_name))
+                .unwrap_or(false);
+
+        if !has_env {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: format!("Required env var '{}' not set", env_name),
+            });
+        }
+    }
+
+    // 7. 檢查必需的配置路徑
+    for config_path in &metadata.requires.config {
+        if !is_config_path_truthy(ctx.config, config_path) {
+            return Err(SkillError::NotEligible {
+                name: skill.name.clone(),
+                reason: format!("Required config '{}' not set", config_path),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// 過濾符合資格的技能
+pub fn filter_eligible_skills(
+    skills: Vec<SkillMetadata>,
+    skill_configs: &HashMap<String, SkillConfig>,
+    ctx: &EligibilityContext,
+) -> (Vec<SkillMetadata>, Vec<SkillError>) {
+    let mut eligible = Vec::new();
+    let mut errors = Vec::new();
+
+    for skill in skills {
+        let skill_config = skill_configs.get(&skill.name);
+        match check_eligibility(&skill, skill_config, ctx) {
+            Ok(()) => eligible.push(skill),
+            Err(e) => errors.push(e),
+        }
+    }
+
+    (eligible, errors)
+}
+
+/// 檢查二進制檔案是否存在於 PATH 中
+fn has_binary(bin: &str) -> bool {
+    which::which(bin).is_ok()
+}
+
+/// 獲取當前作業系統標識符
+fn get_current_os() -> &'static str {
+    #[cfg(target_os = "macos")]
+    { "darwin" }
+    #[cfg(target_os = "linux")]
+    { "linux" }
+    #[cfg(target_os = "windows")]
+    { "win32" }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    { "unknown" }
+}
+
+/// 檢查配置路徑是否為真值
+fn is_config_path_truthy(config: Option<&toml::Value>, path: &str) -> bool {
+    let config = match config {
+        Some(c) => c,
+        None => return false,
+    };
+
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut current = config;
+
+    for part in parts {
+        match current.get(part) {
+            Some(v) => current = v,
+            None => return false,
+        }
+    }
+
+    // 檢查是否為真值
+    match current {
+        toml::Value::Boolean(b) => *b,
+        toml::Value::String(s) => !s.is_empty(),
+        toml::Value::Integer(i) => *i != 0,
+        toml::Value::Array(a) => !a.is_empty(),
+        toml::Value::Table(t) => !t.is_empty(),
+        _ => true,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_build_skill_injections() {
-        use tempfile::NamedTempFile;
-        use std::io::Write;
-
-        let mut temp = NamedTempFile::new().unwrap();
-        write!(temp, "Skill content here").unwrap();
-
-        let inputs = vec![UserInput::Skill {
-            name: "test-skill".to_string(),
-            path: temp.path().to_path_buf(),
-        }];
-
-        let result = build_skill_injections(&inputs, None).await.unwrap();
-
-        assert_eq!(result.injections.len(), 1);
-        assert!(result.injections[0].content.contains("<skill>"));
-        assert!(result.injections[0].content.contains("test-skill"));
-    }
-}
-```
-
-#### 步驟 5.3：實現文檔渲染 (`render.rs`)
-
-```rust
-use crate::skills::model::SkillLoadOutcome;
-
-/// 渲染技能清單為 Markdown Brief (用於 System Prompt)
-pub fn render_skills_brief(outcome: &SkillLoadOutcome) -> String {
-    if outcome.skills.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    output.push_str("## Available Skills\n");
-    output.push_str("The following skills are available. To use a skill, you MUST call `get_skill_details` to read its full instructions first.\n\n");
-
-    for skill in &outcome.skills {
-        let desc = skill.short_description.as_ref().unwrap_or(&skill.description);
-        output.push_str(&format!("- **{}**: {} (path: `{}`)\n", 
-            skill.name, desc, skill.path.display()));
-    }
-    
-    output.push_str("\n**Skill Usage Rules**:\n");
-    output.push_str("1. If a skill description matches the user's task, use it.\n");
-    output.push_str("2. Always read the detailed instructions via `get_skill_details` before execution.\n");
-    output.push_str("3. Only load the specific reference files if requested by the skill instructions.\n");
-
-    output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::skills::model::{SkillMetadata, SkillScope};
-    use std::path::PathBuf;
 
     #[test]
-    fn test_render_skills_section() {
-        let mut outcome = SkillLoadOutcome::new();
-        outcome.add_skill(SkillMetadata {
-            name: "test-skill".to_string(),
-            description: "A test skill".to_string(),
-            short_description: Some("Test".to_string()),
-            path: PathBuf::from("/test/SKILL.md"),
-            scope: SkillScope::User,
-            interface: None,
-        });
+    fn test_has_binary() {
+        // 這些二進制檔案應該在大多數系統上存在
+        #[cfg(unix)]
+        assert!(has_binary("ls"));
+        #[cfg(windows)]
+        assert!(has_binary("cmd"));
 
-        let rendered = render_skills_section(&outcome);
+        // 這個應該不存在
+        assert!(!has_binary("definitely_not_a_real_binary_12345"));
+    }
 
-        assert!(rendered.contains("# Available Skills"));
-        assert!(rendered.contains("## test-skill"));
-        assert!(rendered.contains("**Test**"));
-        assert!(rendered.contains("A test skill"));
+    #[test]
+    fn test_get_current_os() {
+        let os = get_current_os();
+        assert!(["darwin", "linux", "win32", "unknown"].contains(&os));
     }
 }
 ```
 
 ---
 
-### Phase 6: 模組匯出
+### Phase 5: Per-skill 配置
+
+#### 步驟 5.1-5.3：實現配置解析 (`config.rs`)
+
+```rust
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// 技能系統配置（在 config.yaml 中的 skills 區段）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillsConfig {
+    /// 允許的內建技能（如果設置，只有這些內建技能會被使用）
+    #[serde(default, rename = "allowBundled")]
+    pub allow_bundled: Option<Vec<String>>,
+
+    /// 載入配置
+    #[serde(default)]
+    pub load: SkillsLoadConfig,
+
+    /// 個別技能配置
+    #[serde(default)]
+    pub entries: HashMap<String, SkillConfig>,
+}
+
+/// 技能載入配置
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillsLoadConfig {
+    /// 額外的技能目錄
+    #[serde(default, rename = "extraDirs")]
+    pub extra_dirs: Vec<String>,
+
+    /// 監聽變更
+    #[serde(default)]
+    pub watch: bool,
+
+    /// 監聽防抖間隔（毫秒）
+    #[serde(default = "default_debounce", rename = "watchDebounceMs")]
+    pub watch_debounce_ms: u64,
+}
+
+fn default_debounce() -> u64 { 500 }
+
+/// 個別技能配置
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillConfig {
+    /// 啟用/禁用此技能
+    pub enabled: Option<bool>,
+
+    /// API 金鑰（注入到 primaryEnv）
+    #[serde(rename = "apiKey")]
+    pub api_key: Option<String>,
+
+    /// 額外環境變數
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+
+    /// 技能特定配置
+    #[serde(default)]
+    pub config: Option<toml::Value>,
+}
+
+/// 解析技能配置查找鍵
+pub fn resolve_skill_key(skill: &SkillMetadata) -> &str {
+    skill
+        .openclaw_metadata
+        .as_ref()
+        .and_then(|m| m.skill_key.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+/// 解析個別技能配置
+pub fn resolve_skill_config<'a>(
+    skills_config: &'a SkillsConfig,
+    skill_key: &str,
+) -> Option<&'a SkillConfig> {
+    skills_config.entries.get(skill_key)
+}
+
+/// config.yaml 範例
+///
+/// ```yaml
+/// skills:
+///   allowBundled:
+///     - github
+///     - weather
+///   load:
+///     extraDirs:
+///       - ~/my-skills
+///     watch: true
+///   entries:
+///     github:
+///       enabled: true
+///       apiKey: ghp_xxxxx
+///     weather:
+///       enabled: true
+///       apiKey: weather-api-key
+///       env:
+///         WEATHER_CACHE: /tmp/weather
+///     spotify-player:
+///       enabled: false  # 禁用此技能
+/// ```
+```
+
+---
+
+### Phase 6: 環境變數注入
+
+#### 步驟 6.1-6.3：實現環境變數注入 (`env_override.rs`)
+
+```rust
+use crate::skills::{
+    config::{resolve_skill_config, resolve_skill_key, SkillConfig, SkillsConfig},
+    model::SkillMetadata,
+};
+use std::collections::HashMap;
+use std::env;
+
+/// 環境變數覆蓋記錄
+struct EnvUpdate {
+    key: String,
+    previous: Option<String>,
+}
+
+/// 環境變數恢復句柄
+pub struct EnvRestoreHandle {
+    updates: Vec<EnvUpdate>,
+}
+
+impl EnvRestoreHandle {
+    /// 恢復原始環境變數
+    pub fn restore(self) {
+        for update in self.updates {
+            match update.previous {
+                Some(prev) => env::set_var(&update.key, prev),
+                None => env::remove_var(&update.key),
+            }
+        }
+    }
+}
+
+/// 應用技能環境變數覆蓋
+pub fn apply_env_overrides(
+    skills: &[SkillMetadata],
+    skills_config: &SkillsConfig,
+) -> EnvRestoreHandle {
+    let mut updates = Vec::new();
+
+    for skill in skills {
+        let skill_key = resolve_skill_key(skill);
+        let skill_config = match resolve_skill_config(skills_config, skill_key) {
+            Some(cfg) => cfg,
+            None => continue,
+        };
+
+        // 注入自定義環境變數
+        if let Some(env_map) = &skill_config.env {
+            for (env_key, env_value) in env_map {
+                // 不覆蓋已存在的環境變數
+                if env::var(env_key).is_ok() {
+                    continue;
+                }
+
+                updates.push(EnvUpdate {
+                    key: env_key.clone(),
+                    previous: env::var(env_key).ok(),
+                });
+                env::set_var(env_key, env_value);
+            }
+        }
+
+        // 注入 API 金鑰到 primaryEnv
+        if let (Some(primary_env), Some(api_key)) = (
+            skill
+                .openclaw_metadata
+                .as_ref()
+                .and_then(|m| m.primary_env.as_ref()),
+            &skill_config.api_key,
+        ) {
+            // 不覆蓋已存在的環境變數
+            if env::var(primary_env).is_err() {
+                updates.push(EnvUpdate {
+                    key: primary_env.clone(),
+                    previous: env::var(primary_env).ok(),
+                });
+                env::set_var(primary_env, api_key);
+            }
+        }
+    }
+
+    EnvRestoreHandle { updates }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_apply_and_restore() {
+        // 設置測試環境
+        let test_key = "TEST_SKILL_ENV_12345";
+        env::remove_var(test_key);
+
+        let skills = vec![]; // 空技能列表
+        let skills_config = SkillsConfig::default();
+
+        let handle = apply_env_overrides(&skills, &skills_config);
+
+        // 恢復
+        handle.restore();
+
+        assert!(env::var(test_key).is_err());
+    }
+}
+```
+
+---
+
+### Phase 8: XML 渲染與系統提示
+
+#### 步驟 8.1-8.3：實現 XML 渲染 (`render.rs`)
+
+```rust
+use crate::skills::model::{SkillMetadata, SkillSnapshot, SkillSnapshotEntry};
+
+/// 渲染技能列表為 XML 格式
+pub fn render_skills_xml(skills: &[SkillMetadata]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    output.push_str("<available_skills>\n");
+
+    for skill in skills {
+        output.push_str("<skill>\n");
+        output.push_str(&format!("<name>{}</name>\n", escape_xml(&skill.name)));
+        output.push_str(&format!(
+            "<description>{}</description>\n",
+            escape_xml(&skill.description)
+        ));
+        output.push_str(&format!(
+            "<location>{}</location>\n",
+            skill.path.display()
+        ));
+        output.push_str("</skill>\n");
+    }
+
+    output.push_str("</available_skills>");
+    output
+}
+
+/// 構建技能系統提示區段
+pub fn build_skills_system_prompt(skills_xml: &str, read_tool_name: &str) -> String {
+    if skills_xml.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        r#"## Skills (mandatory)
+Before replying: scan <available_skills> <description> entries.
+- If exactly one skill clearly applies: read its SKILL.md at <location> with `{read_tool}`, then follow it.
+- If multiple could apply: choose the most specific one, then read/follow it.
+- If none clearly apply: do not read any SKILL.md.
+Constraints: never read more than one skill up front; only read after selecting.
+
+{xml}
+"#,
+        read_tool = read_tool_name,
+        xml = skills_xml
+    )
+}
+
+/// 構建技能快照
+pub fn build_skill_snapshot(
+    skills: &[SkillMetadata],
+    version: u64,
+    read_tool_name: &str,
+) -> SkillSnapshot {
+    // 過濾掉 disable_model_invocation 的技能
+    let visible_skills: Vec<_> = skills
+        .iter()
+        .filter(|s| !s.invocation.disable_model_invocation)
+        .collect();
+
+    let skills_xml = render_skills_xml(
+        &visible_skills.iter().map(|s| (*s).clone()).collect::<Vec<_>>(),
+    );
+
+    let prompt = build_skills_system_prompt(&skills_xml, read_tool_name);
+
+    let entries = skills
+        .iter()
+        .map(|s| SkillSnapshotEntry {
+            name: s.name.clone(),
+            path: s.path.clone(),
+            primary_env: s
+                .openclaw_metadata
+                .as_ref()
+                .and_then(|m| m.primary_env.clone()),
+        })
+        .collect();
+
+    SkillSnapshot {
+        prompt,
+        skills: entries,
+        version,
+    }
+}
+
+/// 轉義 XML 特殊字元
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::model::{SkillInvocation, SkillScope};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_render_skills_xml() {
+        let skills = vec![SkillMetadata {
+            name: "github".to_string(),
+            description: "Interact with GitHub using the `gh` CLI.".to_string(),
+            path: PathBuf::from("/path/to/github/SKILL.md"),
+            scope: SkillScope::User,
+            invocation: SkillInvocation::default(),
+            openclaw_metadata: None,
+            interface: None,
+        }];
+
+        let xml = render_skills_xml(&skills);
+
+        assert!(xml.contains("<available_skills>"));
+        assert!(xml.contains("<name>github</name>"));
+        assert!(xml.contains("Interact with GitHub"));
+        assert!(xml.contains("<location>/path/to/github/SKILL.md</location>"));
+    }
+
+    #[test]
+    fn test_build_skills_system_prompt() {
+        let xml = "<available_skills><skill><name>test</name></skill></available_skills>";
+        let prompt = build_skills_system_prompt(xml, "Read");
+
+        assert!(prompt.contains("## Skills (mandatory)"));
+        assert!(prompt.contains("with `Read`"));
+        assert!(prompt.contains(xml));
+    }
+}
+```
+
+---
+
+### Phase 9: 模組匯出
 
 #### `mod.rs`
 
 ```rust
+pub mod config;
+pub mod eligibility;
+pub mod env_override;
 pub mod error;
-pub mod injection;
 pub mod loader;
 pub mod manager;
 pub mod model;
 pub mod render;
 pub mod system;
 
+pub use config::{SkillConfig, SkillsConfig, SkillsLoadConfig};
+pub use eligibility::{check_eligibility, filter_eligible_skills, EligibilityContext};
+pub use env_override::{apply_env_overrides, EnvRestoreHandle};
 pub use error::{Result, SkillError};
-pub use injection::{build_skill_injections, SkillInjections, UserInput};
 pub use loader::{load_skills_from_roots, skill_roots_for_cwd};
 pub use manager::SkillsManager;
-pub use model::{SkillLoadOutcome, SkillMetadata, SkillScope};
-pub use render::render_skills_section;
+pub use model::{SkillLoadOutcome, SkillMetadata, SkillScope, SkillSnapshot};
+pub use render::{build_skill_snapshot, build_skills_system_prompt, render_skills_xml};
 pub use system::install_system_skills;
 ```
 
@@ -1096,6 +1126,7 @@ fn test_end_to_end_skill_loading() {
     let skill_content = r#"---
 name: test-skill
 description: A test skill
+metadata: '{"requires":{"bins":["git"]}}'
 ---
 
 # Test Skill Body
@@ -1103,82 +1134,13 @@ description: A test skill
     fs::write(skill_dir.join("SKILL.md"), skill_content).unwrap();
 
     // 3. 初始化管理器
-    let manager = myapp::skills::SkillsManager::new(app_home);
+    let manager = aaagent::skills::SkillsManager::new(app_home);
 
     // 4. 載入技能
-    let outcome = manager.skills_for_cwd(&repo);
+    let snapshot = manager.build_snapshot(&repo);
 
     // 5. 驗證結果
-    assert_eq!(outcome.skills.len(), 1);
-    assert_eq!(outcome.skills[0].name, "test-skill");
-}
-```
-
-### 效能測試
-
-```rust
-#[test]
-fn bench_load_many_skills() {
-    use std::time::Instant;
-
-    // 創建 100 個技能
-    // ...
-
-    let start = Instant::now();
-    let outcome = manager.skills_for_cwd(&cwd);
-    let duration = start.elapsed();
-
-    assert!(duration.as_millis() < 100, "Loading should be fast");
-}
-```
-
----
-
-## 範例代碼
-
-### 完整使用範例
-
-```rust
-use myapp::skills::{SkillsManager, install_system_skills};
-use std::path::PathBuf;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. 初始化
-    let app_home = dirs::home_dir()
-        .unwrap()
-        .join(".myapp");
-
-    // 2. 安裝系統技能
-    install_system_skills(&app_home)?;
-
-    // 3. 創建管理器
-    let manager = SkillsManager::new(app_home);
-
-    // 4. 獲取當前目錄的技能
-    let cwd = std::env::current_dir()?;
-    let outcome = manager.skills_for_cwd(&cwd);
-
-    // 5. 顯示技能
-    println!("Found {} skills:", outcome.skills.len());
-    for skill in &outcome.skills {
-        println!("  - {} ({})", skill.name, skill.description);
-    }
-
-    // 6. 模擬技能執行
-    if let Some(skill) = outcome.skills.first() {
-        let inputs = vec![myapp::skills::UserInput::Skill {
-            name: skill.name.clone(),
-            path: skill.path.clone(),
-        }];
-
-        let injections = myapp::skills::build_skill_injections(&inputs, Some(&outcome)).await?;
-
-        println!("\nSkill injection:");
-        println!("{}", injections.injections[0].content);
-    }
-
-    Ok(())
+    assert!(snapshot.prompt.contains("test-skill"));
 }
 ```
 
@@ -1192,11 +1154,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1.0"  # 用於解析 metadata 中的 JSON
 toml = "0.8"
 tokio = { version = "1.0", features = ["fs", "rt-multi-thread"] }
 walkdir = "2.4"
 thiserror = "1.0"
 dirs = "5.0"
+which = "6.0"  # 用於二進制檔案檢測
+log = "0.4"    # 用於錯誤日誌（專案已有此依賴）
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -1213,45 +1178,77 @@ pretty_assertions = "1.4"
 - [ ] 了解專案整體架構
 - [ ] 規劃技能目錄結構
 
-### Phase 1
+### Phase 1: 基礎設施
 
 - [ ] 創建模組結構
-- [ ] 實現 `model.rs`
+- [ ] 實現 `model.rs`（含 SkillRequirements, SkillInvocation）
 - [ ] 實現 `error.rs`
 - [ ] 編寫單元測試
 
-### Phase 2
+### Phase 2: 載入器
 
 - [ ] 實現目錄遍歷
 - [ ] 實現 YAML 解析
+- [ ] 實現 metadata JSON5 解析
 - [ ] 實現 TOML 解析
 - [ ] 實現優先級邏輯
 - [ ] 編寫整合測試
 
-### Phase 3
+### Phase 3: 資格過濾
+
+- [ ] 實現二進制檔案檢測
+- [ ] 實現環境變數檢查
+- [ ] 實現配置路徑檢查
+- [ ] 實現作業系統過濾
+- [ ] 編寫過濾測試
+
+### Phase 4: 管理器與快照
 
 - [ ] 實現 `SkillsManager`
-- [ ] 實現快取邏輯
-- [ ] 測試快取效能
+- [ ] 實現 `build_snapshot()`
+- [ ] 測試快照效能
 
-### Phase 4
+### Phase 5: Per-skill 配置
+
+- [ ] 定義 config.yaml 格式
+- [ ] 實現配置解析
+- [ ] 實現 enabled/disabled 過濾
+- [ ] 編寫配置測試
+
+### Phase 6: 環境變數注入
+
+- [ ] 實現 `apply_env_overrides()`
+- [ ] 實現 `restore_env()`
+- [ ] 實現 primaryEnv → apiKey 映射
+- [ ] 編寫注入測試
+
+### Phase 7: 系統技能
 
 - [ ] 設計系統技能格式
 - [ ] 實現安裝邏輯
+- [ ] 實現 fingerprinting
 - [ ] 創建範例技能
 
-### Phase 5
+### Phase 8: XML 渲染與系統提示
 
-- [ ] 實現非同步注入
-- [ ] 實現文檔渲染
-- [ ] 端到端測試
+- [ ] 實現 `render_skills_xml()`
+- [ ] 實現系統提示區段
+- [ ] 實現調用控制過濾
+- [ ] 編寫端到端測試
 
-### Phase 6
+### Phase 9: 整合與優化
 
-- [ ] 整合到主應用
+- [ ] 整合到 Agent
+- [ ] 提供 Web API（list skills / get skill details / reload）
+- [ ] 技能調用事件 streaming 到 UI
 - [ ] 效能優化
 - [ ] 撰寫文檔
 - [ ] 完整測試
+
+### 錯誤處理（貫穿所有 Phase）
+
+- [ ] 錯誤訊息簡短清楚，包含路徑和上下文
+- [ ] 錯誤同時輸出到 log 和 API response
 
 ---
 
@@ -1279,17 +1276,32 @@ pretty_assertions = "1.4"
    - 技能執行權限管理
    - 沙箱隔離
 
+6. **Plugin 支援**
+   - Plugin manifest 註冊
+   - Plugin 技能目錄
+
 ---
 
 ## 參考資源
 
+- [OpenClaw Skill Implementation](https://github.com/openclaw/openclaw) - TypeScript 參考實現
 - [Codex CLI Source Code](https://github.com/codex-cli/codex)
 - [Serde Documentation](https://serde.rs/)
 - [Tokio Documentation](https://tokio.rs/)
 - [WalkDir Crate](https://docs.rs/walkdir/)
+- [Which Crate](https://docs.rs/which/) - 二進制檔案檢測
 
 ---
 
-**版本**: 1.0
-**最後更新**: 2026-01-16
+## 變更紀錄
+
+| 日期 | 版本 | 變更內容 |
+|------|------|----------|
+| 2026-01-16 | 1.0 | 初始版本 |
+| 2026-01-31 | 2.0 | 整合 OpenClaw 改進：資格過濾、調用控制、Per-skill 配置、環境變數注入、使用 Read 工具 |
+
+---
+
+**版本**: 2.0
+**最後更新**: 2026-01-31
 **作者**: Claude Code Implementation Plan Generator
