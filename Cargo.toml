@@ -46,6 +46,10 @@ secrecy = "0.8"
 shellexpand = "3.1"
 dotenvy = "0.15"
 
+# Skills system
+dirs = "5.0"
+which = "7"
+
 # Web server (for chat UI)
 axum = "0.7"
 tower = "0.4"

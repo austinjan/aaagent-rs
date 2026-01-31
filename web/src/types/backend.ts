@@ -362,3 +362,33 @@ export interface ContextStringResponse {
   strategy: ContextStringStrategy;
   content: string;
 }
+
+// ============================================================================
+// Skills API Types
+// ============================================================================
+
+export interface Skill {
+  name: string;
+  description: string;
+  path: string;
+  scope: string;
+  user_invocable: boolean;
+  model_invocable: boolean;
+}
+
+export interface SkillError {
+  error: string;
+  category: string;
+}
+
+export interface SkillsResponse {
+  loaded: {
+    count: number;
+    skills: Skill[];
+  };
+  errors: {
+    count: number;
+    details: SkillError[];
+  };
+  summary: string;
+}

@@ -8,7 +8,7 @@ import {
   CopySessionIdButton,
   SessionToolbar,
 } from "../components/session";
-import { useChat } from "../hooks/useChat";
+import { useChat, useSkills } from "../hooks";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
 import {
   getConfig,
@@ -22,7 +22,7 @@ import {
   updateConfig,
 } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
-import type { MessageData } from "../types/backend";
+import type { MessageData, Skill } from "../types/backend";
 import { Role } from "../types/backend";
 import { CheckpointCreationModal } from "../components/checkpoint";
 
@@ -66,6 +66,13 @@ export function Chat() {
     loadTree,
     resetChat,
   } = useChat(DEFAULT_OPTIONS);
+
+  // Skills for skill picker
+  const {
+    skills,
+    errors: skillErrors,
+    loading: skillsLoading,
+  } = useSkills();
 
   // Get selection from Zustand store
   const selectedMessageId = useChatStore(selectSelectedNodeId);
@@ -228,9 +235,20 @@ export function Chat() {
   // Web search is now available for all providers via web_search tool
   const showWebSearch = true;
 
-  const handleSendMessage = async (content: string) => {
+  // Build message with skill context if a skill is selected
+  const buildMessageWithSkill = (content: string, skill?: Skill): string => {
+    if (!skill) return content;
+
+    return `Use the "${skill.name}" skill for this request.
+
+User input:
+${content}`;
+  };
+
+  const handleSendMessage = async (content: string, selectedSkill?: Skill) => {
     try {
-      await sendMessage(content);
+      const messageToSend = buildMessageWithSkill(content, selectedSkill);
+      await sendMessage(messageToSend);
     } catch (err) {
       console.error("Failed to send message:", err);
     }
@@ -521,6 +539,10 @@ export function Chat() {
                 enableWebSearch={enableWebSearch}
                 onWebSearchToggle={handleWebSearchToggle}
                 showWebSearch={showWebSearch}
+                skills={skills}
+                skillErrors={skillErrors}
+                skillsLoading={skillsLoading}
+                showSkills={true}
               />
             </>
           ) : (

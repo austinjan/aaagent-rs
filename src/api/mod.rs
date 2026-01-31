@@ -126,6 +126,7 @@ pub async fn create_router() -> Router {
 fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/skills", get(list_skills))
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route("/sessions/:session_id", get(sessions::get_session))
@@ -197,6 +198,65 @@ async fn health() -> Json<Value> {
         "status": "ok",
         "message": "aaagent-rs chat UI backend is running",
         "version": env!("CARGO_PKG_VERSION")
+    }))
+}
+
+// List all skills (loaded + errors)
+async fn list_skills() -> Json<Value> {
+    let app_home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".aaagent");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let manager = crate::skills::SkillsManager::new(&app_home, &cwd);
+
+    // Build loaded skills list
+    let loaded: Vec<Value> = manager
+        .skills()
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "description": s.description,
+                "path": s.path.display().to_string(),
+                "scope": format!("{:?}", s.scope),
+                "user_invocable": s.invocation.user_invocable,
+                "model_invocable": !s.invocation.disable_model_invocation,
+            })
+        })
+        .collect();
+
+    // Build errors list with categorization
+    let errors: Vec<Value> = manager
+        .errors()
+        .iter()
+        .map(|e| {
+            let category = if e.contains("not eligible") {
+                "eligibility"
+            } else if e.contains("Invalid YAML") || e.contains("Invalid metadata") {
+                "parse_error"
+            } else if e.contains("Cannot read") {
+                "file_error"
+            } else {
+                "unknown"
+            };
+            json!({
+                "error": e,
+                "category": category,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "loaded": {
+            "count": loaded.len(),
+            "skills": loaded,
+        },
+        "errors": {
+            "count": errors.len(),
+            "details": errors,
+        },
+        "summary": format!("{} skills loaded, {} errors", loaded.len(), errors.len()),
     }))
 }
 
@@ -1539,6 +1599,25 @@ async fn run_agent_chat(
         max_rounds: session_config.agent.max_rounds as usize,
         loop_detection: Some(LoopDetectorConfig::default()),
     });
+
+    // Load and inject skills
+    let app_home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".aaagent");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let skills_manager = crate::skills::SkillsManager::new(&app_home, &cwd);
+
+    let skill_count = skills_manager.skills().len();
+    if skill_count > 0 {
+        let snapshot = skills_manager.snapshot();
+        agent.set_skills_prompt(snapshot.prompt);
+        crate::logger::log(format!("🎯 Loaded {} skills", skill_count));
+    }
+
+    // Log skill errors if any
+    for err in skills_manager.errors() {
+        crate::logger::log(format!("⚠️ Skill error: {}", err));
+    }
 
     crate::logger::log(format!(
         "run_agent_chat: Agent initialized (model: {}, max_rounds: {})",

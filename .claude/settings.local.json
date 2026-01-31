@@ -15,7 +15,8 @@
       "Bash(npx tsc:*)",
       "Bash(./node_modules/.bin/tsc:*)",
       "Bash(git checkout:*)",
-      "Bash(fd:*)"
+      "Bash(fd:*)",
+      "Bash(cargo test:*)"
     ]
   }
 }
