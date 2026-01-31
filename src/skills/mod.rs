@@ -27,7 +27,10 @@ pub mod manager;
 pub mod model;
 
 pub use config::{SkillConfig, SkillsConfig};
-pub use eligibility::{check_eligibility, filter_eligible, filter_eligible_with_config};
+pub use eligibility::{
+    check_eligibility, check_eligibility_with_builtins, filter_eligible,
+    filter_eligible_with_config, filter_eligible_with_config_and_builtins,
+};
 pub use env_override::{apply_env_overrides, EnvRestoreGuard};
 pub use loader::{load_skills_from_roots, skill_roots_for_cwd};
 pub use manager::SkillsManager;

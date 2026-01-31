@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{Message, Role, ToolCall};
+use crate::llm::{Message, Role, TokenUsage, ToolCall};
 
 /// Node ID (ULID - time-ordered, sortable)
 pub type NodeId = String;
@@ -37,6 +37,10 @@ pub struct Node {
     // Kind-specific data (IMMUTABLE)
     pub tool_call_id: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+
+    // Token usage (IMMUTABLE) - typically set on Assistant messages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
 
     // Pruning metadata (set by pruning operations, not part of initial data)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,6 +134,7 @@ impl Node {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         }
@@ -219,6 +224,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };

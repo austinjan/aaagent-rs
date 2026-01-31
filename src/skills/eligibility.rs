@@ -3,11 +3,20 @@
 use crate::skills::config::SkillsConfig;
 use crate::skills::error::not_eligible_error;
 use crate::skills::model::{SkillMetadata, SkillOpenMetadata, SkillRequirements};
+use crate::tools::BuiltinBinaries;
 use anyhow::Result;
 use std::env;
 
 /// Check if a skill is eligible to run in the current environment
 pub fn check_eligibility(skill: &SkillMetadata) -> Result<()> {
+    check_eligibility_with_builtins(skill, &BuiltinBinaries::empty())
+}
+
+/// Check if a skill is eligible, considering built-in binaries
+pub fn check_eligibility_with_builtins(
+    skill: &SkillMetadata,
+    builtins: &BuiltinBinaries,
+) -> Result<()> {
     let meta = match &skill.metadata {
         Some(m) => m,
         None => return Ok(()), // No metadata = always eligible
@@ -22,7 +31,7 @@ pub fn check_eligibility(skill: &SkillMetadata) -> Result<()> {
     check_os(&skill.name, meta)?;
 
     // Check requirements
-    check_requirements(&skill.name, &meta.requires)?;
+    check_requirements(&skill.name, &meta.requires, builtins)?;
 
     Ok(())
 }
@@ -57,10 +66,16 @@ fn check_os(name: &str, meta: &SkillOpenMetadata) -> Result<()> {
 }
 
 /// Check requirements (bins, anyBins, env)
-fn check_requirements(name: &str, reqs: &SkillRequirements) -> Result<()> {
-    // All bins must exist
+fn check_requirements(
+    name: &str,
+    reqs: &SkillRequirements,
+    builtins: &BuiltinBinaries,
+) -> Result<()> {
+    use crate::tools::is_binary_available;
+
+    // All bins must exist (check built-ins first, then system PATH)
     for bin in &reqs.bins {
-        if which::which(bin).is_err() {
+        if !is_binary_available(bin, builtins) {
             return Err(not_eligible_error(
                 name,
                 &format!("required binary '{}' not found", bin),
@@ -70,7 +85,10 @@ fn check_requirements(name: &str, reqs: &SkillRequirements) -> Result<()> {
 
     // At least one of anyBins must exist
     if !reqs.any_bins.is_empty() {
-        let found = reqs.any_bins.iter().any(|bin| which::which(bin).is_ok());
+        let found = reqs
+            .any_bins
+            .iter()
+            .any(|bin| is_binary_available(bin, builtins));
         if !found {
             return Err(not_eligible_error(
                 name,
@@ -111,6 +129,21 @@ pub fn filter_eligible_with_config(
     skills: Vec<SkillMetadata>,
     config: &SkillsConfig,
 ) -> (Vec<SkillMetadata>, Vec<String>) {
+    filter_eligible_with_config_and_builtins(skills, config, &BuiltinBinaries::empty())
+}
+
+/// Filter skills by eligibility with config and built-in binaries support
+///
+/// Skills are filtered out if:
+/// 1. Config has `enabled: false` for the skill
+/// 2. Eligibility checks fail (OS, bins, env)
+///
+/// Built-in binaries are considered available in addition to system PATH binaries.
+pub fn filter_eligible_with_config_and_builtins(
+    skills: Vec<SkillMetadata>,
+    config: &SkillsConfig,
+    builtins: &BuiltinBinaries,
+) -> (Vec<SkillMetadata>, Vec<String>) {
     let mut eligible = Vec::new();
     let mut errors = Vec::new();
 
@@ -122,8 +155,8 @@ pub fn filter_eligible_with_config(
             continue;
         }
 
-        // Check environment/binary requirements
-        match check_eligibility(&skill) {
+        // Check environment/binary requirements (with built-in binaries)
+        match check_eligibility_with_builtins(&skill, builtins) {
             Ok(()) => eligible.push(skill),
             Err(e) => {
                 log::debug!("Skill '{}' not eligible: {}", skill.name, e);
@@ -215,5 +248,48 @@ mod tests {
         };
         let skill = make_skill("test", Some(meta));
         assert!(check_eligibility(&skill).is_err());
+    }
+
+    #[test]
+    fn test_builtin_binary_makes_skill_eligible() {
+        // Skill requires a non-existent system binary
+        let meta = SkillOpenMetadata {
+            requires: SkillRequirements {
+                bins: vec!["my-custom-tool".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let skill = make_skill("test", Some(meta));
+
+        // Without builtins, should fail
+        assert!(check_eligibility(&skill).is_err());
+
+        // With builtins registered, should pass
+        let builtins = BuiltinBinaries::with_names("/bin", vec!["my-custom-tool".to_string()]);
+        assert!(check_eligibility_with_builtins(&skill, &builtins).is_ok());
+    }
+
+    #[test]
+    fn test_any_bins_with_builtin() {
+        let meta = SkillOpenMetadata {
+            requires: SkillRequirements {
+                any_bins: vec![
+                    "nonexistent1".to_string(),
+                    "my-custom-tool".to_string(),
+                    "nonexistent2".to_string(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let skill = make_skill("test", Some(meta));
+
+        // Without builtins, none found - should fail
+        assert!(check_eligibility(&skill).is_err());
+
+        // With builtin for one of them - should pass
+        let builtins = BuiltinBinaries::with_names("/bin", vec!["my-custom-tool".to_string()]);
+        assert!(check_eligibility_with_builtins(&skill, &builtins).is_ok());
     }
 }

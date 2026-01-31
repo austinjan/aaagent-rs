@@ -25,4 +25,4 @@ pub use storage::{NodeFilter, TreeStore};
 pub use validator::MessageValidator;
 
 // Re-export for convenience
-pub use crate::llm::{Message, Role, ToolCall};
+pub use crate::llm::{Message, Role, TokenUsage, ToolCall};

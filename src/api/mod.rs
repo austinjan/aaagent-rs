@@ -918,7 +918,10 @@ mod sessions {
             "total_nodes": session.stats.total_nodes,
             "active_branches": session.stats.active_branches,
             "total_checkpoints": session.stats.total_checkpoints,
-            "total_tokens_processed": session.stats.total_tokens_processed,
+            "total_input_tokens": session.stats.total_input_tokens,
+            "total_output_tokens": session.stats.total_output_tokens,
+            "total_cached_tokens": session.stats.total_cached_tokens,
+            "total_tokens": session.stats.total_tokens(),
         })))
     }
 

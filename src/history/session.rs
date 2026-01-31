@@ -10,7 +10,7 @@ use super::node::{
 };
 use super::storage::TreeStore;
 use super::validator::MessageValidator;
-use crate::llm::{Message, Role};
+use crate::llm::{Message, Role, TokenUsage};
 
 pub type SessionId = String;
 
@@ -158,7 +158,35 @@ pub struct SessionStats {
     pub total_nodes: u32,
     pub active_branches: u32,
     pub total_checkpoints: u32,
-    pub total_tokens_processed: u64,
+    /// Total input tokens across all LLM calls
+    pub total_input_tokens: u64,
+    /// Total output tokens across all LLM calls
+    pub total_output_tokens: u64,
+    /// Total cached tokens (prompt caching)
+    pub total_cached_tokens: u64,
+}
+
+impl SessionStats {
+    /// Get total tokens processed (input + output)
+    pub fn total_tokens(&self) -> u64 {
+        self.total_input_tokens + self.total_output_tokens
+    }
+
+    /// Add token usage to cumulative stats
+    pub fn add_token_usage(&mut self, usage: &TokenUsage) {
+        self.total_input_tokens += usage.input_tokens as u64;
+        self.total_output_tokens += usage.output_tokens as u64;
+        self.total_cached_tokens += usage.cached_tokens as u64;
+    }
+
+    /// Get cumulative token usage as TokenUsage struct
+    pub fn cumulative_usage(&self) -> TokenUsage {
+        TokenUsage {
+            input_tokens: self.total_input_tokens.min(u32::MAX as u64) as u32,
+            output_tokens: self.total_output_tokens.min(u32::MAX as u64) as u32,
+            cached_tokens: self.total_cached_tokens.min(u32::MAX as u64) as u32,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +218,7 @@ impl Session {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -251,12 +280,32 @@ impl Session {
 
     /// Append a message node to the active leaf
     pub async fn append_message(&mut self, msg: Message) -> Result<NodeId> {
-        self.append_message_to(self.active_leaf_id.clone(), msg)
+        self.append_message_with_usage_to(self.active_leaf_id.clone(), msg, None)
+            .await
+    }
+
+    /// Append a message with token usage to the active leaf
+    pub async fn append_message_with_usage(
+        &mut self,
+        msg: Message,
+        token_usage: Option<TokenUsage>,
+    ) -> Result<NodeId> {
+        self.append_message_with_usage_to(self.active_leaf_id.clone(), msg, token_usage)
             .await
     }
 
     /// Append a message node to a specific parent node and switch active leaf
     pub async fn append_message_to(&mut self, parent_id: NodeId, msg: Message) -> Result<NodeId> {
+        self.append_message_with_usage_to(parent_id, msg, None).await
+    }
+
+    /// Append a message node with token usage to a specific parent node
+    pub async fn append_message_with_usage_to(
+        &mut self,
+        parent_id: NodeId,
+        msg: Message,
+        token_usage: Option<TokenUsage>,
+    ) -> Result<NodeId> {
         let store = self.store()?.clone();
 
         // Use session-scoped API to count children efficiently
@@ -264,6 +313,11 @@ impl Session {
             .count_children_in_session(self.session_id.clone(), parent_id.clone())
             .await?;
         let seq = children_count as u32 + 1;
+
+        // Update cumulative token stats if provided
+        if let Some(ref usage) = token_usage {
+            self.stats.add_token_usage(usage);
+        }
 
         // Create new node
         let node = Node {
@@ -279,6 +333,7 @@ impl Session {
             flags: NodeFlags::default(),
             tool_call_id: msg.tool_call_id.clone(),
             tool_calls: msg.tool_calls.clone(),
+            token_usage,
             pruned_at: None,
             metadata: None,
         };
@@ -849,6 +904,55 @@ impl Session {
         store.update_session(self).await?;
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Token Usage Methods
+    // =========================================================================
+
+    /// Get cumulative token usage for the session
+    pub fn token_usage(&self) -> TokenUsage {
+        self.stats.cumulative_usage()
+    }
+
+    /// Get total tokens processed (input + output)
+    pub fn total_tokens(&self) -> u64 {
+        self.stats.total_tokens()
+    }
+
+    /// Get token usage for a specific node
+    pub async fn get_node_token_usage(&self, node_id: &NodeId) -> Result<Option<TokenUsage>> {
+        let store = self.store()?;
+        let node = store
+            .get_node(node_id.clone())
+            .await?
+            .ok_or_else(|| anyhow!("Node {} not found", node_id))?;
+        Ok(node.token_usage)
+    }
+
+    /// Calculate token usage along the current active path
+    ///
+    /// Returns the sum of all token usage from root to active leaf.
+    pub async fn get_path_token_usage(&self) -> Result<TokenUsage> {
+        let store = self.store()?;
+        let path = store.get_path_to_root_internal(self.active_leaf_id.clone()).await?;
+
+        let mut total = TokenUsage::default();
+        for node in path {
+            if let Some(usage) = node.token_usage {
+                total.input_tokens += usage.input_tokens;
+                total.output_tokens += usage.output_tokens;
+                total.cached_tokens += usage.cached_tokens;
+            }
+        }
+        Ok(total)
+    }
+
+    /// Manually record token usage (e.g., for tool calls or external operations)
+    ///
+    /// This updates the cumulative session stats without creating a node.
+    pub fn record_token_usage(&mut self, usage: &TokenUsage) {
+        self.stats.add_token_usage(usage);
     }
 
     /// Get path range between two nodes
@@ -1503,5 +1607,215 @@ mod tests {
 
         // Config should still be there
         assert!(session.has_metadata("config"));
+    }
+
+    #[tokio::test]
+    async fn test_token_usage_tracking() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // Initially no tokens
+        assert_eq!(session.stats.total_input_tokens, 0);
+        assert_eq!(session.stats.total_output_tokens, 0);
+        assert_eq!(session.total_tokens(), 0);
+
+        // Append user message (no token usage)
+        session
+            .append_message(Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        // Append assistant message with token usage
+        let usage1 = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cached_tokens: 10,
+        };
+        session
+            .append_message_with_usage(
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi there!".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(usage1),
+            )
+            .await
+            .unwrap();
+
+        // Check cumulative stats
+        assert_eq!(session.stats.total_input_tokens, 100);
+        assert_eq!(session.stats.total_output_tokens, 50);
+        assert_eq!(session.stats.total_cached_tokens, 10);
+        assert_eq!(session.total_tokens(), 150);
+
+        // Add more token usage
+        let usage2 = TokenUsage {
+            input_tokens: 200,
+            output_tokens: 100,
+            cached_tokens: 50,
+        };
+        session
+            .append_message_with_usage(
+                Message {
+                    role: Role::User,
+                    content: "How are you?".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(usage2),
+            )
+            .await
+            .unwrap();
+
+        // Check cumulative is additive
+        assert_eq!(session.stats.total_input_tokens, 300);
+        assert_eq!(session.stats.total_output_tokens, 150);
+        assert_eq!(session.stats.total_cached_tokens, 60);
+        assert_eq!(session.total_tokens(), 450);
+    }
+
+    #[tokio::test]
+    async fn test_get_node_token_usage() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // Append message without token usage
+        let node1_id = session
+            .append_message(Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        // Append message with token usage
+        let usage = TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cached_tokens: 10,
+        };
+        let node2_id = session
+            .append_message_with_usage(
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi!".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(usage.clone()),
+            )
+            .await
+            .unwrap();
+
+        // Query token usage for each node
+        let usage1 = session.get_node_token_usage(&node1_id).await.unwrap();
+        assert!(usage1.is_none());
+
+        let usage2 = session.get_node_token_usage(&node2_id).await.unwrap();
+        assert!(usage2.is_some());
+        let u = usage2.unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cached_tokens, 10);
+    }
+
+    #[tokio::test]
+    async fn test_get_path_token_usage() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // Create path with multiple messages having token usage
+        session
+            .append_message_with_usage(
+                Message {
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(TokenUsage {
+                    input_tokens: 10,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                }),
+            )
+            .await
+            .unwrap();
+
+        session
+            .append_message_with_usage(
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi!".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(TokenUsage {
+                    input_tokens: 15,
+                    output_tokens: 20,
+                    cached_tokens: 5,
+                }),
+            )
+            .await
+            .unwrap();
+
+        session
+            .append_message_with_usage(
+                Message {
+                    role: Role::User,
+                    content: "How are you?".to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                },
+                Some(TokenUsage {
+                    input_tokens: 25,
+                    output_tokens: 0,
+                    cached_tokens: 10,
+                }),
+            )
+            .await
+            .unwrap();
+
+        // Get path token usage
+        let path_usage = session.get_path_token_usage().await.unwrap();
+        assert_eq!(path_usage.input_tokens, 50); // 10 + 15 + 25
+        assert_eq!(path_usage.output_tokens, 20); // 0 + 20 + 0
+        assert_eq!(path_usage.cached_tokens, 15); // 0 + 5 + 10
+    }
+
+    #[tokio::test]
+    async fn test_record_token_usage_manual() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // Manually record token usage
+        let usage = TokenUsage {
+            input_tokens: 500,
+            output_tokens: 200,
+            cached_tokens: 100,
+        };
+        session.record_token_usage(&usage);
+
+        assert_eq!(session.stats.total_input_tokens, 500);
+        assert_eq!(session.stats.total_output_tokens, 200);
+        assert_eq!(session.stats.total_cached_tokens, 100);
+
+        // Record more
+        session.record_token_usage(&usage);
+        assert_eq!(session.stats.total_input_tokens, 1000);
+        assert_eq!(session.stats.total_output_tokens, 400);
     }
 }

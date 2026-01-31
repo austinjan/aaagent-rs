@@ -1,9 +1,10 @@
 //! Skill Manager - Main entry point for skill system
 
 use crate::skills::config::SkillsConfig;
-use crate::skills::eligibility::filter_eligible_with_config;
+use crate::skills::eligibility::filter_eligible_with_config_and_builtins;
 use crate::skills::loader::{load_skills_from_roots, skill_roots_for_cwd};
 use crate::skills::model::{SkillMetadata, SkillSnapshot, SkillSnapshotEntry};
+use crate::tools::BuiltinBinaries;
 use std::path::{Path, PathBuf};
 
 /// Skill Manager handles discovery, loading, and eligibility filtering
@@ -15,6 +16,8 @@ pub struct SkillsManager {
     cwd: PathBuf,
     /// Per-skill configuration
     config: SkillsConfig,
+    /// Built-in binaries for eligibility checks
+    builtins: BuiltinBinaries,
     /// Eligible skills after filtering
     skills: Vec<SkillMetadata>,
     /// Errors encountered during loading
@@ -29,9 +32,23 @@ impl SkillsManager {
 
     /// Create a new SkillsManager with per-skill configuration
     pub fn with_config(app_home: &Path, cwd: &Path, config: SkillsConfig) -> Self {
+        Self::with_config_and_builtins(app_home, cwd, config, BuiltinBinaries::empty())
+    }
+
+    /// Create a new SkillsManager with config and built-in binaries
+    ///
+    /// Built-in binaries are considered available for skill eligibility checks,
+    /// in addition to system PATH binaries.
+    pub fn with_config_and_builtins(
+        app_home: &Path,
+        cwd: &Path,
+        config: SkillsConfig,
+        builtins: BuiltinBinaries,
+    ) -> Self {
         let roots = skill_roots_for_cwd(app_home, cwd);
         let outcome = load_skills_from_roots(&roots);
-        let (skills, eligibility_errors) = filter_eligible_with_config(outcome.skills, &config);
+        let (skills, eligibility_errors) =
+            filter_eligible_with_config_and_builtins(outcome.skills, &config, &builtins);
 
         let mut errors = outcome.errors;
         errors.extend(eligibility_errors);
@@ -40,9 +57,21 @@ impl SkillsManager {
             app_home: app_home.to_path_buf(),
             cwd: cwd.to_path_buf(),
             config,
+            builtins,
             skills,
             errors,
         }
+    }
+
+    /// Get the built-in binaries registry
+    pub fn builtins(&self) -> &BuiltinBinaries {
+        &self.builtins
+    }
+
+    /// Set the built-in binaries registry and reload
+    pub fn set_builtins(&mut self, builtins: BuiltinBinaries) {
+        self.builtins = builtins;
+        self.reload();
     }
 
     /// Get all eligible skills
@@ -111,7 +140,7 @@ impl SkillsManager {
         let roots = skill_roots_for_cwd(&self.app_home, &self.cwd);
         let outcome = load_skills_from_roots(&roots);
         let (skills, eligibility_errors) =
-            filter_eligible_with_config(outcome.skills, &self.config);
+            filter_eligible_with_config_and_builtins(outcome.skills, &self.config, &self.builtins);
 
         self.skills = skills;
         self.errors = outcome.errors;
