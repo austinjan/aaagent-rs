@@ -1,5 +1,6 @@
 //! Skill eligibility checking
 
+use crate::skills::config::SkillsConfig;
 use crate::skills::error::not_eligible_error;
 use crate::skills::model::{SkillMetadata, SkillOpenMetadata, SkillRequirements};
 use anyhow::Result;
@@ -96,10 +97,32 @@ fn check_requirements(name: &str, reqs: &SkillRequirements) -> Result<()> {
 
 /// Filter skills by eligibility, returning eligible skills and errors
 pub fn filter_eligible(skills: Vec<SkillMetadata>) -> (Vec<SkillMetadata>, Vec<String>) {
+    filter_eligible_with_config(skills, &SkillsConfig::default())
+}
+
+/// Filter skills by eligibility with config-based enabled/disabled support
+///
+/// Skills are filtered out if:
+/// 1. Config has `enabled: false` for the skill
+/// 2. Eligibility checks fail (OS, bins, env)
+///
+/// Skills configured with `enabled: true` still need to pass eligibility checks.
+pub fn filter_eligible_with_config(
+    skills: Vec<SkillMetadata>,
+    config: &SkillsConfig,
+) -> (Vec<SkillMetadata>, Vec<String>) {
     let mut eligible = Vec::new();
     let mut errors = Vec::new();
 
     for skill in skills {
+        // Check if explicitly disabled in config
+        if config.is_disabled(&skill.name) {
+            log::debug!("Skill '{}' disabled in config", skill.name);
+            errors.push(format!("Skill '{}' disabled in config", skill.name));
+            continue;
+        }
+
+        // Check environment/binary requirements
         match check_eligibility(&skill) {
             Ok(()) => eligible.push(skill),
             Err(e) => {
@@ -109,8 +132,7 @@ pub fn filter_eligible(skills: Vec<SkillMetadata>) -> (Vec<SkillMetadata>, Vec<S
         }
     }
 
-    eligible
-        .sort_by(|a, b| a.name.cmp(&b.name));
+    eligible.sort_by(|a, b| a.name.cmp(&b.name));
 
     (eligible, errors)
 }

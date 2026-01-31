@@ -1,6 +1,7 @@
 //! Skill Manager - Main entry point for skill system
 
-use crate::skills::eligibility::filter_eligible;
+use crate::skills::config::SkillsConfig;
+use crate::skills::eligibility::filter_eligible_with_config;
 use crate::skills::loader::{load_skills_from_roots, skill_roots_for_cwd};
 use crate::skills::model::{SkillMetadata, SkillSnapshot, SkillSnapshotEntry};
 use std::path::{Path, PathBuf};
@@ -12,6 +13,8 @@ pub struct SkillsManager {
     app_home: PathBuf,
     /// Current working directory
     cwd: PathBuf,
+    /// Per-skill configuration
+    config: SkillsConfig,
     /// Eligible skills after filtering
     skills: Vec<SkillMetadata>,
     /// Errors encountered during loading
@@ -19,11 +22,16 @@ pub struct SkillsManager {
 }
 
 impl SkillsManager {
-    /// Create a new SkillsManager and load skills
+    /// Create a new SkillsManager and load skills (without config)
     pub fn new(app_home: &Path, cwd: &Path) -> Self {
+        Self::with_config(app_home, cwd, SkillsConfig::default())
+    }
+
+    /// Create a new SkillsManager with per-skill configuration
+    pub fn with_config(app_home: &Path, cwd: &Path, config: SkillsConfig) -> Self {
         let roots = skill_roots_for_cwd(app_home, cwd);
         let outcome = load_skills_from_roots(&roots);
-        let (skills, eligibility_errors) = filter_eligible(outcome.skills);
+        let (skills, eligibility_errors) = filter_eligible_with_config(outcome.skills, &config);
 
         let mut errors = outcome.errors;
         errors.extend(eligibility_errors);
@@ -31,6 +39,7 @@ impl SkillsManager {
         Self {
             app_home: app_home.to_path_buf(),
             cwd: cwd.to_path_buf(),
+            config,
             skills,
             errors,
         }
@@ -86,11 +95,23 @@ impl SkillsManager {
         }
     }
 
+    /// Get the skills configuration
+    pub fn config(&self) -> &SkillsConfig {
+        &self.config
+    }
+
+    /// Update the skills configuration
+    pub fn set_config(&mut self, config: SkillsConfig) {
+        self.config = config;
+        self.reload();
+    }
+
     /// Reload skills (useful after config changes)
     pub fn reload(&mut self) {
         let roots = skill_roots_for_cwd(&self.app_home, &self.cwd);
         let outcome = load_skills_from_roots(&roots);
-        let (skills, eligibility_errors) = filter_eligible(outcome.skills);
+        let (skills, eligibility_errors) =
+            filter_eligible_with_config(outcome.skills, &self.config);
 
         self.skills = skills;
         self.errors = outcome.errors;
