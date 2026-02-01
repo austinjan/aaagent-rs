@@ -155,14 +155,20 @@ impl Default for SessionConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStats {
+    #[serde(default)]
     pub total_nodes: u32,
+    #[serde(default)]
     pub active_branches: u32,
+    #[serde(default)]
     pub total_checkpoints: u32,
     /// Total input tokens across all LLM calls
+    #[serde(default)]
     pub total_input_tokens: u64,
     /// Total output tokens across all LLM calls
+    #[serde(default)]
     pub total_output_tokens: u64,
     /// Total cached tokens (prompt caching)
+    #[serde(default)]
     pub total_cached_tokens: u64,
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
 import type { SessionConfig } from "../components/chat/SessionConfigPanel";
@@ -141,32 +141,49 @@ export function Chat() {
     window.history.replaceState({}, "", url.toString());
   };
 
+  // Ref to prevent duplicate session creation (React 18 StrictMode double-mounts)
+  const initializingRef = useRef(false);
+
   // Initialize session on mount (URL > localStorage > new session)
   useEffect(() => {
     let isActive = true;
 
     const initSession = async () => {
-      const params = new URLSearchParams(window.location.search);
-      const urlSessionId = params.get("session");
-      const storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
-      const preferredSessionId = urlSessionId || storedSessionId;
-
-      if (preferredSessionId) {
-        try {
-          await loadHistory(preferredSessionId);
-          if (isActive) {
-            persistSession(preferredSessionId);
-          }
-          return;
-        } catch (err) {
-          console.warn("Failed to load saved session, creating new:", err);
-        }
+      // Prevent duplicate initialization from StrictMode double-mount
+      // Check both the ref (for in-flight requests) and store (for completed sessions)
+      if (initializingRef.current || useChatStore.getState().session.sessionId) {
+        return;
       }
+      initializingRef.current = true;
 
       try {
+        const params = new URLSearchParams(window.location.search);
+        const urlSessionId = params.get("session");
+        const storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
+        const preferredSessionId = urlSessionId || storedSessionId;
+
+        if (preferredSessionId) {
+          try {
+            await loadHistory(preferredSessionId);
+            if (isActive) {
+              persistSession(preferredSessionId);
+            }
+            return;
+          } catch (err) {
+            console.warn("Failed to load saved session, creating new:", err);
+          }
+        }
+
+        // Double-check no session was created while we were waiting
+        if (useChatStore.getState().session.sessionId) {
+          return;
+        }
+
         const newSessionId = await initializeSession();
         if (newSessionId && isActive) {
           persistSession(newSessionId);
+          // Trigger session list refresh so the new session appears
+          setSessionListRefresh((prev) => prev + 1);
         }
       } catch (err) {
         console.error("Failed to initialize session:", err);
