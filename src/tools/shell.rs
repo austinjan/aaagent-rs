@@ -22,6 +22,8 @@ pub struct ShellTool {
     timeout_secs: u64,
     /// Working directory for command execution (default: current directory)
     working_dir: Option<std::path::PathBuf>,
+    /// Extra directory to prepend to PATH (for built-in binaries)
+    extra_path: Option<std::path::PathBuf>,
 }
 
 impl ShellTool {
@@ -30,6 +32,7 @@ impl ShellTool {
         Self {
             timeout_secs: 30,
             working_dir: None,
+            extra_path: None,
         }
     }
 
@@ -42,6 +45,25 @@ impl ShellTool {
     /// Set the working directory
     pub fn with_working_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.working_dir = Some(dir);
+        self
+    }
+
+    /// Set extra PATH directory (prepended to system PATH)
+    ///
+    /// This is typically used for built-in binaries provided by the agent.
+    pub fn with_extra_path(mut self, dir: std::path::PathBuf) -> Self {
+        self.extra_path = Some(dir);
+        self
+    }
+
+    /// Set extra PATH from BuiltinBinaries
+    pub fn with_builtin_binaries(mut self, builtins: &super::BuiltinBinaries) -> Self {
+        let bin_dir = builtins.bin_dir();
+        if bin_dir.as_os_str().is_empty() {
+            self.extra_path = None;
+        } else {
+            self.extra_path = Some(bin_dir.to_path_buf());
+        }
         self
     }
 
@@ -185,6 +207,18 @@ WHEN NOT TO USE:
         // Set working directory if specified
         if let Some(dir) = &self.working_dir {
             cmd.current_dir(dir);
+        }
+
+        // Inject extra PATH for built-in binaries
+        if let Some(extra_path) = &self.extra_path {
+            let path_separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+            let new_path = match std::env::var("PATH") {
+                Ok(existing) if !existing.is_empty() => {
+                    format!("{}{}{}", extra_path.display(), path_separator, existing)
+                }
+                _ => extra_path.display().to_string(),
+            };
+            cmd.env("PATH", new_path);
         }
 
         // Configure stdio

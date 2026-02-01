@@ -2,14 +2,21 @@ import { useState, useRef, useEffect, type KeyboardEvent } from "react";
 import { Send, Loader2, Globe } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+import { SkillPicker, SkillChip } from "./SkillPicker";
+import type { Skill, SkillError } from "../../types/backend";
 
 export interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, selectedSkill?: Skill) => void;
   disabled?: boolean;
   placeholder?: string;
   enableWebSearch?: boolean;
   onWebSearchToggle?: (enabled: boolean) => void;
   showWebSearch?: boolean; // Show web search toggle (only for Gemini models)
+  // Skill picker props
+  skills?: Skill[];
+  skillErrors?: SkillError[];
+  skillsLoading?: boolean;
+  showSkills?: boolean;
 }
 
 export function ChatInput({
@@ -19,9 +26,14 @@ export function ChatInput({
   enableWebSearch = false,
   onWebSearchToggle,
   showWebSearch = false,
+  skills = [],
+  skillErrors = [],
+  skillsLoading = false,
+  showSkills = false,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea based on content
@@ -41,8 +53,9 @@ export function ChatInput({
   const handleSend = () => {
     const trimmed = message.trim();
     if (trimmed && !disabled) {
-      onSend(trimmed);
+      onSend(trimmed, selectedSkill ?? undefined);
       setMessage("");
+      setSelectedSkill(null); // Clear skill after sending
       // Reset textarea height
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -64,10 +77,21 @@ export function ChatInput({
   return (
     <div className="sticky bottom-0 z-10 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="max-w-4xl mx-auto px-4 py-4">
-        {/* Web Search Toggle (available for all models) */}
-        {showWebSearch && (
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
+        {/* Selected skill chip */}
+        {selectedSkill && (
+          <div className="mb-3">
+            <SkillChip
+              skill={selectedSkill}
+              onRemove={() => setSelectedSkill(null)}
+              disabled={disabled}
+            />
+          </div>
+        )}
+
+        {/* Feature toggles row */}
+        {(showWebSearch || showSkills) && (
+          <div className="mb-3 flex items-center gap-2">
+            {showWebSearch && (
               <Button
                 variant={enableWebSearch ? "default" : "outline"}
                 size="sm"
@@ -81,12 +105,17 @@ export function ChatInput({
                 <Globe className="h-4 w-4" />
                 <span>Web Search</span>
               </Button>
-              <span className="text-xs text-muted-foreground">
-                {enableWebSearch
-                  ? "AI will search the web for real-time information"
-                  : "Enable to search the web for current events and facts"}
-              </span>
-            </div>
+            )}
+            {showSkills && (
+              <SkillPicker
+                skills={skills}
+                errors={skillErrors}
+                loading={skillsLoading}
+                selectedSkill={selectedSkill}
+                onSelectSkill={setSelectedSkill}
+                disabled={disabled}
+              />
+            )}
           </div>
         )}
 

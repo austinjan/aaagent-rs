@@ -17,6 +17,7 @@ import type {
   PreviewCheckpointResponse,
   ContextStringStrategy,
   ContextStringResponse,
+  SkillsResponse,
 } from "../types/backend";
 
 const API_BASE = "/api";
@@ -413,4 +414,13 @@ export async function getContextString(
   const url = `${API_BASE}/sessions/${sessionId}/context-string${queryString ? `?${queryString}` : ""}`;
   const response = await fetch(url);
   return handleResponse<ContextStringResponse>(response);
+}
+
+// ============================================================================
+// Skills API
+// ============================================================================
+
+export async function getSkills(): Promise<SkillsResponse> {
+  const response = await fetch(`${API_BASE}/skills`);
+  return handleResponse<SkillsResponse>(response);
 }

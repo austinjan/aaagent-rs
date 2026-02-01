@@ -1,6 +1,12 @@
 // Tree layout algorithm for conversation history visualization
 // Based on doc/plan/chat-ui-tree-panel-plan.md and tree-visualization-demo.html
 
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
 export interface TreeNode {
   id: string;
   parent_id: string | null;
@@ -14,6 +20,10 @@ export interface TreeNode {
   checkpointSummary?: string;
   status?: "loading" | "error" | "complete";
   timestamp?: Date;
+
+  // Tool-related fields
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 }
 
 export interface PositionedNode extends TreeNode {

@@ -126,6 +126,7 @@ pub async fn create_router() -> Router {
 fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/skills", get(list_skills))
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route("/sessions/:session_id", get(sessions::get_session))
@@ -197,6 +198,65 @@ async fn health() -> Json<Value> {
         "status": "ok",
         "message": "aaagent-rs chat UI backend is running",
         "version": env!("CARGO_PKG_VERSION")
+    }))
+}
+
+// List all skills (loaded + errors)
+async fn list_skills() -> Json<Value> {
+    let app_home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".aaagent");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let manager = crate::skills::SkillsManager::new(&app_home, &cwd);
+
+    // Build loaded skills list
+    let loaded: Vec<Value> = manager
+        .skills()
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "description": s.description,
+                "path": s.path.display().to_string(),
+                "scope": format!("{:?}", s.scope),
+                "user_invocable": s.invocation.user_invocable,
+                "model_invocable": !s.invocation.disable_model_invocation,
+            })
+        })
+        .collect();
+
+    // Build errors list with categorization
+    let errors: Vec<Value> = manager
+        .errors()
+        .iter()
+        .map(|e| {
+            let category = if e.contains("not eligible") {
+                "eligibility"
+            } else if e.contains("Invalid YAML") || e.contains("Invalid metadata") {
+                "parse_error"
+            } else if e.contains("Cannot read") {
+                "file_error"
+            } else {
+                "unknown"
+            };
+            json!({
+                "error": e,
+                "category": category,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "loaded": {
+            "count": loaded.len(),
+            "skills": loaded,
+        },
+        "errors": {
+            "count": errors.len(),
+            "details": errors,
+        },
+        "summary": format!("{} skills loaded, {} errors", loaded.len(), errors.len()),
     }))
 }
 
@@ -555,11 +615,6 @@ mod sessions {
             conversation_text.push_str(&format!("{:?}: {}\n", msg.role, msg.content));
         }
 
-        // Create a quick provider for naming
-        let quick_provider =
-            provider_factory::create_quick_provider(state.config_resolver.config_manager())
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-
         // Ask LLM to generate a short session name
         let prompt = format!(
             "Based on the following conversation, provide a very short (3-6 words maximum) descriptive name for this chat session. \
@@ -567,26 +622,12 @@ mod sessions {
             conversation_text.chars().take(1000).collect::<String>()
         );
 
-        use futures::StreamExt;
-        let mut stream = quick_provider
-            .chat(&prompt)
-            .await
-            .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
-
-        // Collect the full response from the stream
-        let mut name = String::new();
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    if let crate::llm::StreamChunk::Content(text) = chunk {
-                        name.push_str(&text);
-                    }
-                }
-                Err(e) => {
-                    return Err(ApiError::Internal(format!("Streaming error: {}", e)));
-                }
-            }
-        }
+        let name = provider_factory::quick_prompt(
+            state.config_resolver.config_manager(),
+            &prompt,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
 
         // Extract the generated name and clean it up
         let mut name = name.trim().to_string();
@@ -858,7 +899,10 @@ mod sessions {
             "total_nodes": session.stats.total_nodes,
             "active_branches": session.stats.active_branches,
             "total_checkpoints": session.stats.total_checkpoints,
-            "total_tokens_processed": session.stats.total_tokens_processed,
+            "total_input_tokens": session.stats.total_input_tokens,
+            "total_output_tokens": session.stats.total_output_tokens,
+            "total_cached_tokens": session.stats.total_cached_tokens,
+            "total_tokens": session.stats.total_tokens(),
         })))
     }
 
@@ -1539,6 +1583,25 @@ async fn run_agent_chat(
         max_rounds: session_config.agent.max_rounds as usize,
         loop_detection: Some(LoopDetectorConfig::default()),
     });
+
+    // Load and inject skills
+    let app_home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".aaagent");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let skills_manager = crate::skills::SkillsManager::new(&app_home, &cwd);
+
+    let skill_count = skills_manager.skills().len();
+    if skill_count > 0 {
+        let snapshot = skills_manager.snapshot();
+        agent.set_skills_prompt(snapshot.prompt);
+        crate::logger::log(format!("🎯 Loaded {} skills", skill_count));
+    }
+
+    // Log skill errors if any
+    for err in skills_manager.errors() {
+        crate::logger::log(format!("⚠️ Skill error: {}", err));
+    }
 
     crate::logger::log(format!(
         "run_agent_chat: Agent initialized (model: {}, max_rounds: {})",

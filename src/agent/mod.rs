@@ -174,6 +174,8 @@ pub struct Agent<P: LLMProvider> {
     quick_provider: Option<Box<dyn LLMProvider>>,
     tools: ToolRegistry,
     config: AgentConfig,
+    /// Skills XML to inject into system prompt
+    skills_prompt: Option<String>,
 }
 
 impl<P: LLMProvider> Agent<P> {
@@ -185,6 +187,7 @@ impl<P: LLMProvider> Agent<P> {
             quick_provider: None,
             tools,
             config: AgentConfig::default(),
+            skills_prompt: None,
         }
     }
 
@@ -201,6 +204,7 @@ impl<P: LLMProvider> Agent<P> {
             quick_provider: None,
             tools,
             config,
+            skills_prompt: None,
         }
     }
 
@@ -230,6 +234,49 @@ impl<P: LLMProvider> Agent<P> {
     /// Set quick provider after construction
     pub fn set_quick_provider(&mut self, provider: Box<dyn LLMProvider>) {
         self.quick_provider = Some(provider);
+    }
+
+    /// Set skills prompt (XML list of available skills)
+    ///
+    /// The skills prompt is injected into the context as a system message
+    /// after the main system prompt. Use `SkillsManager::snapshot().prompt`
+    /// to generate this.
+    pub fn with_skills(mut self, skills_prompt: String) -> Self {
+        if !skills_prompt.is_empty() {
+            self.skills_prompt = Some(skills_prompt);
+        }
+        self
+    }
+
+    /// Set skills prompt after construction
+    pub fn set_skills_prompt(&mut self, skills_prompt: String) {
+        if !skills_prompt.is_empty() {
+            self.skills_prompt = Some(skills_prompt);
+        } else {
+            self.skills_prompt = None;
+        }
+    }
+
+    /// Inject skills into context (appends to first system message or adds new one)
+    fn inject_skills(&self, mut context: Vec<Message>) -> Vec<Message> {
+        if let Some(ref skills) = self.skills_prompt {
+            // Find the first system message and append skills to it
+            if let Some(system_msg) = context.iter_mut().find(|m| m.role == Role::System) {
+                system_msg.content = format!("{}\n\n{}", system_msg.content, skills);
+            } else {
+                // No system message, insert skills as first message
+                context.insert(
+                    0,
+                    Message {
+                        role: Role::System,
+                        content: skills.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                );
+            }
+        }
+        context
     }
 
     /// Main chat interface - sends a user message and gets assistant response
@@ -281,8 +328,9 @@ impl<P: LLMProvider> Agent<P> {
             .await?;
         new_node_ids.push(user_node_id);
 
-        // 2. Extract linear context from tree
+        // 2. Extract linear context from tree and inject skills
         let context = self.session.get_context().await?;
+        let context = self.inject_skills(context);
 
         // 3. Call provider with linear history (provider is stateless)
         let mut tools = self.tools.get_tools_for_llm();
@@ -536,8 +584,9 @@ impl<P: LLMProvider> Agent<P> {
             .await?;
         new_node_ids.push(user_node_id);
 
-        // Extract context and call provider
+        // Extract context and call provider (inject skills)
         let context = self.session.get_context().await?;
+        let context = self.inject_skills(context);
         let mut tools = self.tools.get_tools_for_llm();
         // Add recall_tool_result as a special tool
         tools.push(Self::get_recall_tool_definition());

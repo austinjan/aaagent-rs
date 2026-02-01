@@ -2,12 +2,14 @@
 //!
 //! This module provides ready-to-use tools that can be used with any LLM provider.
 
+pub mod builtin_binaries;
 pub mod editor_edit;
 pub mod output_handler;
 pub mod read;
 pub mod shell;
 pub mod web_search;
 
+pub use builtin_binaries::{is_binary_available, BuiltinBinaries};
 pub use editor_edit::EditorEditTool;
 pub use output_handler::{handle_large_output, DEFAULT_OUTPUT_THRESHOLD};
 pub use read::ReadTool;

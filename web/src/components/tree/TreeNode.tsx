@@ -45,12 +45,17 @@ export function TreeNode({
     onDoubleClick?.(node.id);
   };
 
+  // Check if this assistant node has tool calls
+  const hasToolCalls = node.role === "assistant" && node.tool_calls && node.tool_calls.length > 0;
+
   // Center fill color based on status and context
   const getCenterFill = () => {
     if (node.status === "error") return "hsl(var(--destructive))";
     if (node.status === "loading") return strokeColor;
     // Checkpoint nodes are always filled with gold
     if (node.hasCheckpoint) return checkpointColor;
+    // Assistant nodes with tool calls get tool color (orange) inner fill
+    if (hasToolCalls) return NODE_COLORS.tool;
     // In-context nodes get a filled center
     if (node.inContext) return strokeColor;
     return "transparent";
@@ -74,7 +79,10 @@ export function TreeNode({
     }
 
     const preview = node.content.slice(0, 200);
-    return `${getRoleLabel()}\n\n${preview}${node.content.length > 200 ? "..." : ""}`;
+    const toolCallInfo = hasToolCalls
+      ? `\n\n🔧 Tool calls: ${node.tool_calls!.map(tc => tc.name).join(", ")}`
+      : "";
+    return `${getRoleLabel()}${toolCallInfo}\n\n${preview}${node.content.length > 200 ? "..." : ""}`;
   };
 
   const tooltipText = getTooltipContent();
@@ -177,7 +185,7 @@ export function TreeNode({
           opacity={opacity}
           style={{ userSelect: "none" }}
         >
-          {node.hasCheckpoint ? "📌 Checkpoint" : getRoleLabel()}
+          {node.hasCheckpoint ? "📌 Checkpoint" : hasToolCalls ? "🤖🔧 Assistant" : getRoleLabel()}
         </text>
 
         {/* Content preview */}

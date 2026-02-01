@@ -88,6 +88,8 @@ function backendNodesToTreeNodes(
       hasCheckpoint: node.has_checkpoint === true,
       inContext: node.in_context === true,
       checkpointSummary: node.checkpoint?.summary,
+      tool_calls: node.tool_calls,
+      tool_call_id: node.tool_call_id,
     };
   });
 }

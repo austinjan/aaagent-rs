@@ -704,4 +704,70 @@ mod tests {
         assert!(result.contains("ERROR")); // Pattern in results
         assert!(result.contains("Pattern: \"ERROR\""));
     }
+
+    /// Test that read_chunk preserves exact content including multiple blank lines
+    /// Bug report: Session 01KGBFGZV57E7C7VFESQNFW7SR showed blank line mismatch
+    /// between read output and actual file content
+    #[test]
+    fn test_read_chunk_preserves_blank_lines() {
+        // File with 4 consecutive blank lines
+        let content = "Section One\n\n\n\n\nSection Two\n";
+        let path = setup_test_file(content);
+
+        let tool = ReadTool::new();
+        let result = tool.read_chunk(&path, 3200).unwrap();
+
+        // The content section should contain exactly what was in the file
+        // Count blank lines by looking for the pattern
+        assert!(
+            result.contains("Section One\n\n\n\n\nSection Two"),
+            "read_chunk should preserve exact blank lines. Got:\n{}",
+            result
+        );
+    }
+
+    /// Test that read_head preserves blank lines correctly
+    /// BufReader::lines() strips newlines, we add them back - verify this works
+    #[test]
+    fn test_read_head_preserves_blank_lines() {
+        // File with multiple consecutive blank lines
+        let content = "Line 1\n\n\n\nLine 2\n";
+        let path = setup_test_file(content);
+
+        let tool = ReadTool::new();
+        let result = tool.read_head(&path, Some(100)).unwrap();
+
+        // Should have: "Line 1\n" + "\n" + "\n" + "\n" + "Line 2\n"
+        // That's Line 1, then 3 blank lines, then Line 2
+        assert!(
+            result.contains("Line 1\n\n\n\nLine 2"),
+            "read_head should preserve consecutive blank lines. Got:\n{}",
+            result
+        );
+    }
+
+    /// Test raw file vs read tool output comparison
+    /// This is the exact scenario from the bug report
+    #[test]
+    fn test_read_matches_raw_file_content() {
+        let original = "## Section\n\nBody text.\n\n\n\n## Next Section\n";
+        let path = setup_test_file(original);
+
+        // Read raw file
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(raw, original, "Raw file should match original");
+
+        // Read via tool
+        let tool = ReadTool::new();
+        let result = tool.read_chunk(&path, 3200).unwrap();
+
+        // Extract content from tool output (between header and navigation)
+        // The content should contain the original exactly
+        assert!(
+            result.contains(original.trim_end()),
+            "Tool output should contain original content.\nOriginal: {:?}\nGot:\n{}",
+            original,
+            result
+        );
+    }
 }

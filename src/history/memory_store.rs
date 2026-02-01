@@ -550,6 +550,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -581,6 +582,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -602,6 +604,7 @@ mod tests {
                 flags: NodeFlags::default(),
                 tool_call_id: None,
                 tool_calls: None,
+                token_usage: None,
                 pruned_at: None,
                 metadata: None,
             };
@@ -634,6 +637,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -653,6 +657,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -672,6 +677,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -691,6 +697,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -724,6 +731,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };
@@ -764,6 +772,7 @@ mod tests {
             flags: NodeFlags::default(),
             tool_call_id: None,
             tool_calls: None,
+            token_usage: None,
             pruned_at: None,
             metadata: None,
         };

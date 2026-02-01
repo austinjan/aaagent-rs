@@ -1,8 +1,9 @@
 # Chat UI Component Plan
 
 - Feature name: `chat-ui-component`
-- Status: Planning
+- Status: **Nearly Complete** (95%)
 - Created: 2026-01-12
+- Updated: 2026-02-01
 - Parent plan: [chat-ui-plan.md](./chat-ui-plan.md)
 
 ## 1) Overview
@@ -253,81 +254,81 @@ Based on tree-visualization-demo.html:
 ## 10) Acceptance Criteria
 
 ### Message Display
-- [ ] User messages styled with blue theme
-- [ ] Assistant messages styled with gray theme
-- [ ] Thinking blocks displayed in purple highlight
-- [ ] Tool calls shown with expandable JSON
-- [ ] Tool results show success/error status
-- [ ] Checkpoint cards display summary content
-- [ ] Streaming indicator shows during active stream
+- [x] User messages styled with blue theme
+- [x] Assistant messages styled with gray theme
+- [x] Thinking blocks displayed in purple highlight
+- [x] Tool calls shown with expandable JSON
+- [x] Tool results show success/error status
+- [x] Checkpoint cards display summary content
+- [x] Streaming indicator shows during active stream
 
 ### Tree Visualization
-- [ ] Tree layout matches conversation structure
-- [ ] Active path highlighted with bold edges
-- [ ] Inactive branches shown in dimmed style
-- [ ] Nodes show role-specific colors
-- [ ] Hover shows message preview tooltip
-- [ ] Click node scrolls to message
-- [ ] Checkpoint nodes show marker icon
+- [x] Tree layout matches conversation structure
+- [x] Active path highlighted with bold edges
+- [x] Inactive branches shown in dimmed style
+- [x] Nodes show role-specific colors
+- [x] Hover shows message preview tooltip
+- [x] Click node scrolls to message
+- [x] Checkpoint nodes show marker icon
 
 ### Input & Interaction
-- [ ] Textarea auto-resizes up to 10 lines
-- [ ] Enter sends message, Shift+Enter adds newline
-- [ ] Preset selector changes session config
-- [ ] Config overrides panel is collapsible
-- [ ] Input disabled during streaming
-- [ ] Error messages displayed inline
+- [x] Textarea auto-resizes up to 10 lines
+- [x] Enter sends message, Shift+Enter adds newline
+- [x] Preset selector changes session config
+- [x] Config overrides panel is collapsible
+- [x] Input disabled during streaming
+- [x] Error messages displayed inline
 
 ### Synchronization
-- [ ] Message list and tree stay in sync
-- [ ] Scrolling messages highlights current node
-- [ ] Clicking node scrolls to message smoothly
-- [ ] New messages appear in both views
-- [ ] Checkpoint insertion updates both views
+- [x] Message list and tree stay in sync
+- [x] Scrolling messages highlights current node
+- [x] Clicking node scrolls to message smoothly
+- [x] New messages appear in both views
+- [x] Checkpoint insertion updates both views
 
 ### Real-time Streaming
-- [ ] SSE connection established on send
-- [ ] Content events append to message
-- [ ] Thinking events update thinking block
-- [ ] Tool events create tool cards
-- [ ] Done event enables input
-- [ ] Error handling with retry option
+- [x] SSE connection established on send
+- [x] Content events append to message
+- [x] Thinking events update thinking block
+- [x] Tool events create tool cards
+- [x] Done event enables input
+- [x] Error handling with retry option
 
 ## 11) Implementation Tasks
 
 ### Phase 1: Message Components
-- [ ] Create MessageCard component
-- [ ] Create CheckpointCard component
-- [ ] Create ToolResultCard component
-- [ ] Add role-based styling
-- [ ] Add streaming state indicator
+- [x] Create MessageCard component
+- [x] Create CheckpointCard component
+- [x] Create ToolResultCard component
+- [x] Add role-based styling
+- [x] Add streaming state indicator
 
 ### Phase 2: Tree Visualization
-- [ ] Implement D3.js tree layout
-- [ ] Create TreeNode SVG component
-- [ ] Create TreeEdge SVG component
-- [ ] Add hover tooltips
-- [ ] Add click navigation
-- [ ] Implement branch collapse
+- [x] Implement D3.js tree layout
+- [x] Create TreeNode SVG component
+- [x] Create TreeEdge SVG component
+- [x] Add hover tooltips
+- [x] Add click navigation
+- [x] Implement branch collapse
 
 ### Phase 3: Input Controls
-- [ ] Create ChatInput component
-- [ ] Add auto-resize textarea
-- [ ] Create PresetSelector dropdown
-- [ ] Create ConfigOverrides panel
-- [ ] Add validation and error display
+- [x] Create ChatInput component
+- [x] Add auto-resize textarea
+- [x] Create PresetSelector dropdown
+- [x] Create ConfigOverrides panel
+- [x] Add validation and error display
 
 ### Phase 4: Integration
-- [ ] Create ChatPage container
-- [ ] Implement SSE streaming hook
-- [ ] Connect message list to API
-- [ ] Sync tree with message scroll
-- [ ] Handle session loading/creation
+- [x] Create ChatPage container
+- [x] Implement SSE streaming hook
+- [x] Connect message list to API
+- [x] Sync tree with message scroll
+- [x] Handle session loading/creation
 
 ### Phase 5: Polish
-- [ ] Add responsive layout
-- [ ] Add loading states
-- [ ] Add error boundaries
+- [x] Add responsive layout
+- [x] Add loading states
+- [x] Add error boundaries
 - [ ] Add keyboard shortcuts
 - [ ] Performance optimization
 
@@ -339,9 +340,9 @@ Based on tree-visualization-demo.html:
 - [x] Config resolution API (implemented)
 
 **Libraries:**
-- [ ] Install D3.js: `npm install d3 @types/d3`
-- [ ] Install date-fns: `npm install date-fns`
-- [ ] Install clsx: `npm install clsx`
+- [x] Install D3.js: `npm install d3 @types/d3`
+- [x] Install date-fns: `npm install date-fns`
+- [x] Install clsx: `npm install clsx`
 
 ## 13) Testing Strategy
 
@@ -377,6 +378,6 @@ Based on tree-visualization-demo.html:
 
 ---
 
-**Status:** Planning  
-**Start date:** TBD  
-**Target completion:** TBD
+**Status:** Nearly Complete (95%)
+**Start date:** 2026-01-12
+**Remaining:** Keyboard shortcuts, performance optimization
