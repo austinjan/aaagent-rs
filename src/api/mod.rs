@@ -615,11 +615,6 @@ mod sessions {
             conversation_text.push_str(&format!("{:?}: {}\n", msg.role, msg.content));
         }
 
-        // Create a quick provider for naming
-        let quick_provider =
-            provider_factory::create_quick_provider(state.config_resolver.config_manager())
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
-
         // Ask LLM to generate a short session name
         let prompt = format!(
             "Based on the following conversation, provide a very short (3-6 words maximum) descriptive name for this chat session. \
@@ -627,26 +622,12 @@ mod sessions {
             conversation_text.chars().take(1000).collect::<String>()
         );
 
-        use futures::StreamExt;
-        let mut stream = quick_provider
-            .chat(&prompt)
-            .await
-            .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
-
-        // Collect the full response from the stream
-        let mut name = String::new();
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    if let crate::llm::StreamChunk::Content(text) = chunk {
-                        name.push_str(&text);
-                    }
-                }
-                Err(e) => {
-                    return Err(ApiError::Internal(format!("Streaming error: {}", e)));
-                }
-            }
-        }
+        let name = provider_factory::quick_prompt(
+            state.config_resolver.config_manager(),
+            &prompt,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
 
         // Extract the generated name and clean it up
         let mut name = name.trim().to_string();

@@ -17,7 +17,11 @@
       "Bash(git checkout:*)",
       "Bash(fd:*)",
       "Bash(cargo test:*)",
-      "Bash(npm run typecheck:*)"
+      "Bash(npm run typecheck:*)",
+      "Bash(grep:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: add built-in binaries support and session token usage tracking\n\nBuilt-in Binaries:\n- Add BuiltinBinaries struct to manage custom binaries in bin/ directory\n- ShellTool now supports PATH injection via with_builtin_binaries\\(\\)\n- Skill eligibility checks consider built-in binaries alongside system PATH\n- Add is_binary_available\\(\\) helper function\n- Add documentation at docs/builtin-binaries.md\n\nToken Usage Tracking:\n- Add token_usage field to Node for per-message tracking\n- Extend SessionStats with total_input_tokens, total_output_tokens, total_cached_tokens\n- Add Session methods: append_message_with_usage\\(\\), token_usage\\(\\),\n  get_node_token_usage\\(\\), get_path_token_usage\\(\\), record_token_usage\\(\\)\n- Update API /sessions/:id/stats to return detailed token breakdown\n- Re-export TokenUsage from history module\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
     ]
   }
 }

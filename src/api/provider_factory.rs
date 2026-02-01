@@ -4,6 +4,7 @@
 use crate::config::{ConfigManager, SessionConfig};
 use crate::llm::{ActiveProvider, LLMProvider};
 use anyhow::{bail, Result};
+use futures::StreamExt;
 use secrecy::ExposeSecret;
 
 #[cfg(feature = "openai")]
@@ -110,4 +111,31 @@ pub fn create_quick_provider(
     }
 
     bail!("Unknown quick model: {}. Cannot determine provider.", model)
+}
+
+/// Run a one-off quick prompt and return the full response as a String.
+/// Intended for lightweight tasks where streaming isn't needed.
+pub async fn quick_prompt(
+    config_manager: &ConfigManager,
+    prompt: &str,
+) -> Result<String> {
+    let quick_provider = create_quick_provider(config_manager)?;
+
+    let mut stream = quick_provider.chat(prompt).await?;
+    let mut output = String::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                if let crate::llm::StreamChunk::Content(text) = chunk {
+                    output.push_str(&text);
+                }
+            }
+            Err(e) => {
+                bail!("Streaming error: {}", e);
+            }
+        }
+    }
+
+    Ok(output)
 }
