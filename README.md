@@ -2,93 +2,6 @@
 
 Unified LLM provider abstraction with streaming, tool calling, and agent support for Rust.
 
-## Features
-
-- **Multi-provider support**: OpenAI, Anthropic (Claude), Gemini
-- **Streaming**: Real-time token streaming with SSE parsing
-- **Tool calling**: Parallel tool execution with automatic result handling
-- **Tree-based history**: Branching conversations with checkpoints and replay
-- **Context optimization**: Automatic compression of tool results and checkpointing
-- **Loop detection**: Prevent repetitive tool calling patterns
-- **Agent orchestration**: High-level Agent API combining Session + Provider + Tools
-
-## Tree-Based History Design
-
-Unlike traditional chat applications that store conversations as linear message arrays, aaagent uses a **tree structure** for conversation history. This design provides several key advantages:
-
-### Why Tree-Based History?
-
-**1. Branching & Exploration**
-- Explore alternative conversation paths from any point
-- Try different approaches without losing previous work
-- Example: Test multiple prompt variations from the same starting point
-
-**2. Efficient Context Management**
-- Checkpoint system: Summarize old conversations to reduce token usage
-- Compression: Archive large tool results, retrieve on-demand
-- Active path extraction: Only load relevant nodes for current conversation
-
-**3. Non-Destructive Editing**
-- Edit any message and continue from that point
-- Original conversation path remains intact
-- Multiple branches from the same parent message
-
-**4. Replay & Debugging**
-- Walk back through conversation history
-- Inspect tool calls and results at any node
-- Understand agent decision-making process
-
-### Architecture
-
-```
-Agent (orchestrator)
-├── Session (tree-based history)
-│   ├── Root Node
-│   ├── Active Leaf (current position)
-│   ├── Checkpoints (context summaries)
-│   ├── ContextOptimizationConfig
-│   │   ├── CompressionConfig (tool result compression)
-│   │   └── CheckpointConfig (auto-summarization)
-│   └── TreeStore (JSONL persistence)
-├── Provider (stateless LLM calls)
-└── ToolRegistry (tool execution)
-```
-
-**Tree Structure Example:**
-```
-Root
- ├─ User: "Hello"
- │   ├─ Assistant: "Hi there!"
- │   │   └─ User: "How are you?"
- │   │       └─ Assistant: "I'm doing well!" (Branch A)
- │   │
- │   └─ Assistant: "Hello! How can I help?" (Branch B)
- │       └─ User: "Tell me about trees"
- │           └─ Assistant: "Trees are..." (Branch B active)
-```
-
-**Storage Format (JSONL):**
-- `data/sessions/{session_id}.meta.json` - Session metadata
-- `data/sessions/{session_id}.nodes.jsonl` - Append-only node log
-- Each node contains: parent_id, role, content, tool_calls, timestamps
-- Last entry wins for updates (flags, pruned_at)
-
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-aaagent = "0.1"
-```
-
-Or with specific providers:
-
-```toml
-[dependencies]
-aaagent = { version = "0.1", default-features = false, features = ["openai", "gemini"] }
-```
-
 ## Quick Start
 
 ### Development Mode (Recommended)
@@ -152,27 +65,187 @@ cargo build --release
 
 ## Configuration
 
-### API Keys
+### LLM API Keys
 
-Create `secrets.yaml` in the project root:
+API keys can be provided in three ways (in order of precedence):
+
+#### 1. Environment Variables (Recommended)
+
+Create a `.env` file in the project root:
+
+```bash
+# OpenAI API Key
+# Get yours at: https://platform.openai.com/api-keys
+OPENAI_API_KEY=sk-...
+
+# Anthropic API Key (for Claude models)
+# Get yours at: https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Google AI API Key (for Gemini models)
+# Get yours at: https://aistudio.google.com/app/apikey
+GOOGLE_API_KEY=...
+```
+
+The `.env` file is gitignored and loaded automatically at startup.
+
+#### 2. secrets.yaml (Local Development Only)
+
+For local development, you can use `secrets.yaml`:
 
 ```yaml
 api_keys:
   openai: "sk-..."
   anthropic: "sk-ant-..."
-  gemini: "..."
+  google: "..."
 ```
 
-### Session Configuration
+> ⚠️ **Warning**: `secrets.yaml` shows a security warning in development mode and is blocked in production builds. Use environment variables for production.
 
-Sessions can be configured with:
-- System prompts
-- Model selection (per provider)
-- Temperature, max_tokens, top_p
-- Context optimization settings
-- Auto-checkpoint thresholds
+#### 3. Direct Reference in config.yaml (Not Recommended)
 
-See `config.yaml` for default configuration.
+```yaml
+api_keys:
+  openai:
+    key: "sk-..."  # UNSAFE - only for testing
+```
+
+---
+
+### config.yaml
+
+The main configuration file. It's auto-generated with defaults on first run.
+
+#### API Key References
+
+Configure how API keys are loaded:
+
+```yaml
+api_keys:
+  openai:
+    env: OPENAI_API_KEY      # Load from environment variable
+  anthropic:
+    env: ANTHROPIC_API_KEY
+  google:
+    env: GEMINI_API_KEY
+
+# Or use secrets.yaml (local dev only):
+# api_keys:
+#   openai:
+#     file: secrets.yaml
+```
+
+#### Temperature Profiles
+
+Map creativity intent (0.0-1.0) to model-specific temperatures:
+
+```yaml
+temperature_profiles:
+  profiles:
+    # Fixed temperature (reasoning models)
+    gpt-5:
+      fixed: 1.0
+      ignore_creativity: true
+
+    # Linear mapping with control points
+    gpt-5.2:
+      creativity_map:
+        - [0.0, 0.0]   # creativity 0 → temperature 0
+        - [0.5, 0.35]  # creativity 0.5 → temperature 0.35
+        - [1.0, 0.7]   # creativity 1 → temperature 0.7
+
+    # Default fallback for unknown models
+    default:
+      creativity_map:
+        - [0.0, 0.0]
+        - [1.0, 1.0]
+```
+
+#### System LLM Profiles
+
+Profiles for internal system tasks (auto-compact, summarization):
+
+```yaml
+system_llm_profiles:
+  default:
+    model: gpt-5-mini
+    temperature: 1.0
+    max_tokens: 16384
+
+  quick:
+    model: gpt-5-nano
+    temperature: 1.0
+    max_tokens: 4096
+```
+
+#### Maintenance Configuration
+
+Automatic cleanup tasks:
+
+```yaml
+maintenance:
+  enabled: true
+  interval_hours: 6
+
+  tasks:
+    temp_files:
+      enabled: true
+      retention_hours: 6
+```
+
+#### Skills Configuration
+
+Enable/disable skills and provide skill-specific API keys:
+
+```yaml
+skills:
+  entries:
+    # Enable a skill with API key
+    github:
+      enabled: true
+      apiKey: ghp_xxxxx
+
+    # Enable with environment variables
+    weather:
+      enabled: true
+      env:
+        WEATHER_API_KEY: my-key
+        WEATHER_CACHE: /tmp/weather
+
+    # Disable a skill
+    spotify:
+      enabled: false
+```
+
+Skills are automatically filtered based on:
+1. `enabled: false` in config → skill disabled
+2. OS requirements (e.g., macOS-only skills)
+3. Required binaries (e.g., `git`, `docker`)
+4. Required environment variables
+
+---
+
+### .env File
+
+Optional environment file for local configuration:
+
+```bash
+# API Keys (RECOMMENDED METHOD)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+
+# Server Configuration (optional)
+# PORT=3000
+# HOST=0.0.0.0
+```
+
+Copy from `.env.example` to get started:
+
+```bash
+cp .env.example .env
+# Edit .env with your API keys
+```
 
 ## License
 
