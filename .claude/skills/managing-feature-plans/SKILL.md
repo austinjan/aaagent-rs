@@ -1,65 +1,92 @@
 ---
 name: managing-feature-plans
-description: Comprehensive feature plan document, creation, editing, and archiving. When LLM needs to work with feature plan documents for (1) Starting a new feature, (2) Reviewing progress of a feature, (3) Reviewing an existing feature plan's requirements, references, and TODOs, or (4) Marking a plan as achieved.
+description: Create, review, update, and archive feature plan documents. Use when starting a new feature, assessing progress, refining requirements, or marking a plan complete.
+owner: eng-product-process
+version: 1.1
+last_updated: 2026-02-01
 ---
 
 ## When to use this skill
 
-- User asks to **implement a new feature**, plan a feature, or refine a feature scope.
-- User asks to **review progress of a feature**.
-- User asks to **review an existing feature plan's requirements, references, and TODOs**.
-- User says a plan is done and should be **archived as achieved**.
+- Start, scope, or refine a new feature plan.
+- Review progress, unblock development, or update an existing plan.
+- Audit a plan for missing requirements, unclear TODOs, or missing references.
+- Mark a plan as complete and archive it.
 
-This skill is idea for:
-- Creating/Review feature plans as part of development process.
-- Establish trackable, meaningful feature progress and documentation.
-- Automating the **feature development process**.
+Do not use this skill for
 
-## Key Features
-1. Feature Plan Creation
-- Creates properly formatted feature plan documents in `doc/plan/{feature-name}-plan.md` see template file `plan-template.md`
-- Writes Plan content to file path: `doc/plan/{feature-name}-plan.md`
-- Enforces naming conventions, Plan file name format: `{feature-name}-plan.md` example `storage-interface-plan.md`
+- Project-level roadmaps or long-lived strategy documents (use the roadmap-skill).
+- Ad-hoc notes or meeting minutes that won't be maintained as a plan.
 
-2. Review Feature Plan
-- Confirms incomplete items, missing references, and TODOs.
-- Modifies requirements and implementation tasks, TODOs.
-- Updates existing feature plan documents with new information.
+Why use this skill
 
-3. Feature Plan Archiving
-- Verifies feature plan completeness.
-- Archives completed feature plans, move the plan to `doc/plan/archived` folder example: `doc/plan/archived/{feature-name}-plan.md`.
+- Standardizes feature plans in doc/plan/ so they are discoverable and actionable.
+- Keeps TODOs, milestones, and acceptance criteria explicit and trackable.
+- Automates safe archival of completed plans.
 
+Key features
 
+1) Create a feature plan
+- Create doc/plan/{feature-name}-plan.md from doc/plan/plan-template.md (or fallback template).
+- Enforce kebab-case names: {feature-name}-plan.md (e.g. storage-interface-plan.md).
 
+2) Review and update
+- Detect missing or ambiguous requirements, TODOs, acceptance criteria, and references.
+- Edit plan sections: Goals, Non-goals, Requirements, Design, Milestones, Tasks, Risks, Dependencies.
+- Maintain TODO/DONE lists and a changelog for completed items (with timestamps where applicable).
 
+3) Archive
+- Verify completion (no open TODOs, acceptance criteria satisfied) and move the plan to doc/plan/archived/{feature-name}-plan.md.
+- Add a completion stamp (date + short summary) to the archived file.
+- Helper: python archive_plan.py {feature-name}
 
-## How it Works
+How it works (runtime behavior)
 
-1. **Resolve feature name**
-   - If user provided a name: normalize to kebab-case.
-   - If name is ambiguous (e.g., "UI", "storage", "fix bug"): suggest better names and choose one.
+1) Resolve feature name
+- Normalize user input to kebab-case and validate uniqueness.
+- If ambiguous, propose clearer names and ask for confirmation.
 
-2. **Locate plan**
-   - Check whether `doc/plan/{feature-name}-plan.md` exists.
-   - If not exists: create it from `plan-template.md` (or inline template if template file not available).
-   - If exists: update it (append new info, re-scope, move items between TODO/DONE, keep changelog).
+2) Locate or create plan
+- If doc/plan/{feature-name}-plan.md exists: open it for review and updates.
+- If missing: create it from doc/plan/plan-template.md or a minimal inline template and populate the header.
 
-3. **Review Content**
-   - Fill/refresh: Goals, Non-goals, Requirements, Design, Milestones, Tasks.
-   - Capture dependencies, risks, and acceptance criteria.
-   - Maintain TODO/DONE lists with checkboxes.
+3) Review and edit
+- Ensure sections are present and actionable (Goals, Non-goals, Requirements, Acceptance Criteria).
+- Convert vague items into concrete TODOs with owners, estimates, and explicit acceptance criteria where possible.
+- Move completed checklist items to the changelog with timestamps and author.
 
-4. **Achieve**
-   - If TODO is empty and acceptance criteria are met:
-     - Move plan file to `doc/plan/achieved/` wiht python script `archive_plan.py`
-     ```
-     python archive_plan.py {feature-name}
-     ```
-     - Add a completion stamp in the plan (date + summary)
+4) Archive when complete
+- Preconditions: no open TODOs blocking release, all acceptance criteria marked PASS (or linked to verification evidence), and changelog updated.
+- Run: python archive_plan.py {feature-name}
+  - This moves the file to doc/plan/archived/{feature-name}-plan.md, appends a completion stamp, and records the archiver.
 
-## Requirements
-- Python 3.7+ for archive_plan.py script.
-- Write access to skill creation plan, and archived folder.
-- Write access to create and update feature plan documents.
-- Read access to feature plan documents.
+Acceptance checklist (before archiving)
+
+- [ ] No open TODOs assigned to the feature team.
+- [ ] All acceptance criteria marked PASS or have linked verification evidence (tests, design reviews).
+- [ ] Milestones and release notes updated.
+- [ ] Changelog contains all completed items with timestamps.
+
+Template locations
+
+- Active plans: doc/plan/
+- Templates: doc/plan/plan-template.md
+- Archived plans: doc/plan/archived/
+
+Usage examples (explicit)
+
+- Create a plan from a prompt: "Create a plan for \"Improved upload UX\""
+  - Resulting filename: doc/plan/improved-upload-ux-plan.md
+- Review an existing plan: "Review the plan for storage-interface and list missing requirements"
+- Archive when done: "Archive the feature plan upload-progress once tests are green" or run locally: python archive_plan.py upload-progress
+
+Requirements
+
+- Python 3.7+ for archive_plan.py
+- Read/write access to doc/plan/ and doc/plan/archived/
+
+Notes
+
+- Keep SKILL.md concise: frontmatter name/description are used to match user intents.
+- Prefer concrete suggestions for naming and TODOs to reduce back-and-forth.
+- Update the frontmatter owner/version/last_updated when making future changes.
