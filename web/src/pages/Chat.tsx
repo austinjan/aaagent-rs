@@ -20,6 +20,7 @@ import {
   getSession,
   updateSessionTags,
   updateConfig,
+  listSessions,
 } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData, Skill } from "../types/backend";
@@ -349,8 +350,24 @@ ${content}`;
     if (!sessionId) return;
     try {
       await archiveSession(sessionId);
-      // Trigger session list refresh, the sidebar will handle switching to another session
+
+      // Trigger session list refresh
       setSessionListRefresh((prev) => prev + 1);
+
+      // Switch to another session or create new one
+      const sessions = await listSessions();
+      const availableSessions = sessions.sessions.filter(
+        (s) => !s.archived && s.session_id !== sessionId
+      );
+
+      if (availableSessions.length > 0) {
+        // Switch to the most recently updated non-archived session
+        const sorted = availableSessions.sort((a, b) => b.updated_at - a.updated_at);
+        await handleSessionSelect(sorted[0].session_id);
+      } else {
+        // No other sessions available, create a new one
+        await handleNewSession();
+      }
     } catch (err) {
       console.error("Failed to archive session:", err);
       alert("Failed to archive session. Please try again.");
@@ -384,38 +401,65 @@ ${content}`;
     [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
-  const handleCreateBranch = useCallback(
+  // Branch After: Continue conversation from selected node (sets active_leaf to node)
+  const handleBranchAfter = useCallback(
     async (fromNodeId: string) => {
       if (!sessionId) return;
       try {
-        console.log("Creating branch from node:", fromNodeId);
-        const response = await createBranch(sessionId, fromNodeId);
+        console.log("Branching after node (continue from here):", fromNodeId);
+        // Use switchBranch API to set active_leaf = fromNodeId
+        const response = await switchBranch(sessionId, fromNodeId);
         if (response.success) {
-          console.log("Branch created, new leaf:", response.new_leaf_id);
-          setActiveLeaf(response.new_leaf_id);
-          // Reload to show the new branch point
+          console.log("Active leaf switched to:", response.active_leaf_id);
+          setActiveLeaf(response.active_leaf_id);
           await loadHistory(sessionId);
-          // Also explicitly reload tree to ensure minimap is updated
           await loadTree(sessionId);
         }
       } catch (err) {
-        console.error("Failed to create branch:", err);
+        console.error("Failed to branch after:", err);
       }
     },
     [sessionId, setActiveLeaf, loadHistory, loadTree],
   );
 
-  // Keyboard shortcut: Ctrl+B to create branch from selected message
+  // Branch Alternative: Create alternative message as sibling (sets active_leaf to parent)
+  const handleBranchAlternative = useCallback(
+    async (fromNodeId: string) => {
+      if (!sessionId) return;
+      try {
+        console.log("Creating alternative branch (sibling of):", fromNodeId);
+        // Use createBranch API to set active_leaf = parent of fromNodeId
+        const response = await createBranch(sessionId, fromNodeId);
+        if (response.success) {
+          console.log("Branch created, new leaf:", response.new_leaf_id);
+          setActiveLeaf(response.new_leaf_id);
+          await loadHistory(sessionId);
+          await loadTree(sessionId);
+        }
+      } catch (err) {
+        console.error("Failed to create alternative branch:", err);
+      }
+    },
+    [sessionId, setActiveLeaf, loadHistory, loadTree],
+  );
+
+  // Keyboard shortcuts: Ctrl+B (branch after), Ctrl+Shift+B (branch alternative)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "b" && selectedMessageId) {
+      if (!selectedMessageId) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "b") {
         e.preventDefault();
-        handleCreateBranch(selectedMessageId);
+        if (e.shiftKey) {
+          handleBranchAlternative(selectedMessageId); // Ctrl+Shift+B
+        } else {
+          handleBranchAfter(selectedMessageId); // Ctrl+B
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedMessageId, handleCreateBranch]);
+  }, [selectedMessageId, handleBranchAfter, handleBranchAlternative]);
 
   // Checkpoint creation handlers
   const handleOpenCheckpointModal = useCallback((nodeId: string) => {
@@ -460,7 +504,8 @@ ${content}`;
   // Convert messages to MessageCardProps with branch and checkpoint callbacks
   const messageCards = messages.map((msg) => ({
     ...toMessageCardProps(msg),
-    onCreateBranch: handleCreateBranch,
+    onBranchAfter: handleBranchAfter,
+    onBranchAlternative: handleBranchAlternative,
     canCreateCheckpoint: !isLoading,
     onCreateCheckpoint: handleOpenCheckpointModal,
     // Pass through checkpoint message fields if present
@@ -525,7 +570,7 @@ ${content}`;
                 onConfigChanged={setSessionConfig}
                 onCreateBranch={
                   selectedMessageId
-                    ? () => handleCreateBranch(selectedMessageId)
+                    ? () => handleBranchAfter(selectedMessageId)
                     : undefined
                 }
                 onCreateCheckpoint={
