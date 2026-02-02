@@ -5,14 +5,14 @@ import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallCard } from "./ToolCallCard";
 import { GroundingSources, type GroundingMetadata } from "./GroundingSources";
+import { MessageToolbar } from "./MessageToolbar";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
-import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 export interface ToolCall {
@@ -39,8 +39,9 @@ export interface MessageCardProps {
   isSelected?: boolean;
   onSelect?: (id: string) => void;
 
-  // Branch creation
-  onCreateBranch?: (id: string) => void;
+  // Branch creation (two modes)
+  onBranchAfter?: (id: string) => void;
+  onBranchAlternative?: (id: string) => void;
 
   // Checkpoint creation (only for creating new checkpoints)
   canCreateCheckpoint?: boolean;
@@ -67,7 +68,8 @@ export function MessageCard({
   isStreaming = false,
   isSelected = false,
   onSelect,
-  onCreateBranch,
+  onBranchAfter,
+  onBranchAlternative,
   canCreateCheckpoint = false,
   onCreateCheckpoint,
   groundingMetadata,
@@ -176,43 +178,15 @@ export function MessageCard({
               {formatTime(timestamp)}
             </span>
           )}
-          {/* Checkpoint button - only for assistant messages, not during streaming */}
-          {canCreateCheckpoint &&
-            onCreateCheckpoint &&
-            role === "assistant" &&
-            !isStreaming && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateCheckpoint(id);
-                }}
-                title="Create checkpoint"
-              >
-                <Bookmark className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          {/* Branch button - only for user/assistant messages, hidden during streaming */}
-          {onCreateBranch &&
-            role !== "tool" &&
-            role !== "system" &&
-            !isStreaming && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  console.log("Branch button clicked, id:", id);
-                  onCreateBranch(id);
-                }}
-                title="Create branch (Ctrl+B)"
-              >
-                <GitBranch className="h-3.5 w-3.5" />
-              </Button>
-            )}
+          <MessageToolbar
+            nodeId={id}
+            role={role}
+            isStreaming={isStreaming}
+            canCreateCheckpoint={canCreateCheckpoint}
+            onCreateCheckpoint={onCreateCheckpoint}
+            onBranchAfter={onBranchAfter}
+            onBranchAlternative={onBranchAlternative}
+          />
         </div>
       </div>
 

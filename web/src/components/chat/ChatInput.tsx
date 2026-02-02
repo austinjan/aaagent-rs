@@ -17,6 +17,7 @@ export interface ChatInputProps {
   skillErrors?: SkillError[];
   skillsLoading?: boolean;
   showSkills?: boolean;
+  onRefreshSkills?: () => void;
 }
 
 export function ChatInput({
@@ -30,6 +31,7 @@ export function ChatInput({
   skillErrors = [],
   skillsLoading = false,
   showSkills = false,
+  onRefreshSkills,
 }: ChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -113,6 +115,7 @@ export function ChatInput({
                 loading={skillsLoading}
                 selectedSkill={selectedSkill}
                 onSelectSkill={setSelectedSkill}
+                onRefresh={onRefreshSkills}
                 disabled={disabled}
               />
             )}

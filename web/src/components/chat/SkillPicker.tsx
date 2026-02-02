@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Sparkles, Search, AlertCircle, X, ChevronDown } from "lucide-react";
+import { Sparkles, Search, AlertCircle, X, ChevronDown, RefreshCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ export interface SkillPickerProps {
   loading: boolean;
   selectedSkill: Skill | null;
   onSelectSkill: (skill: Skill | null) => void;
+  onRefresh?: () => void;
   disabled?: boolean;
 }
 
@@ -20,6 +21,7 @@ export function SkillPicker({
   loading,
   selectedSkill,
   onSelectSkill,
+  onRefresh,
   disabled = false,
 }: SkillPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -42,9 +44,10 @@ export function SkillPicker({
     setSearchQuery("");
   };
 
-  const handleClearSkill = () => {
-    onSelectSkill(null);
-  };
+  // Unused for now - kept for future "clear skill" functionality
+  // const handleClearSkill = () => {
+  //   onSelectSkill(null);
+  // };
 
   const errorCount = errors.length;
 
@@ -97,17 +100,31 @@ export function SkillPicker({
             {/* Header */}
             <div className="flex items-center justify-between border-b border-border px-3 py-2">
               <span className="text-sm font-medium">Available Skills</span>
-              {errorCount > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowErrors(!showErrors)}
-                  className="h-6 gap-1 px-2 text-xs text-destructive hover:text-destructive"
-                >
-                  <AlertCircle className="h-3 w-3" />
-                  {errorCount} {errorCount === 1 ? "Error" : "Errors"}
-                </Button>
-              )}
+              <div className="flex items-center gap-1">
+                {onRefresh && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onRefresh()}
+                    disabled={loading}
+                    className="h-6 w-6 p-0"
+                    title="Refresh skills"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
+                  </Button>
+                )}
+                {errorCount > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowErrors(!showErrors)}
+                    className="h-6 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+                  >
+                    <AlertCircle className="h-3 w-3" />
+                    {errorCount} {errorCount === 1 ? "Error" : "Errors"}
+                  </Button>
+                )}
+              </div>
             </div>
 
             {showErrors ? (

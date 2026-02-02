@@ -29,3 +29,16 @@ temperature_profiles:
           - 0.0
         - - 1.0
           - 1.0
+
+system_llm_profiles:
+  # For quality - more expensive/slower
+  default:
+    model: "gemini-3-flash-preview"
+    temperature: 1.0
+    max_tokens: 16384
+
+  # For speed/cost - lighter tasks
+  quick:
+    model: "gpt-5-nano" # Or claude-3-5-haiku, gemini-3-flash
+    temperature: 1.0
+    max_tokens: 4096

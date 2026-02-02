@@ -622,12 +622,9 @@ mod sessions {
             conversation_text.chars().take(1000).collect::<String>()
         );
 
-        let name = provider_factory::quick_prompt(
-            state.config_resolver.config_manager(),
-            &prompt,
-        )
-        .await
-        .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
+        let name = provider_factory::quick_prompt(state.config_resolver.config_manager(), &prompt)
+            .await
+            .map_err(|e| ApiError::Internal(format!("AI naming failed: {}", e)))?;
 
         // Extract the generated name and clean it up
         let mut name = name.trim().to_string();
@@ -667,6 +664,7 @@ mod sessions {
         })))
     }
 
+    // Handler of /chat endpoint
     pub async fn chat(
         Path(session_id): Path<String>,
         State(state): State<AppState>,

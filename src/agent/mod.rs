@@ -318,7 +318,8 @@ impl<P: LLMProvider> Agent<P> {
         let mut new_node_ids: Vec<String> = Vec::new();
 
         // 1. Add user message to tree
-        let user_node_id = self.session
+        let user_node_id = self
+            .session
             .append_message(Message {
                 role: Role::User,
                 content: user_message.to_string(),
@@ -458,7 +459,8 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    let assistant_node_id = self.session
+                    let assistant_node_id = self
+                        .session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -470,7 +472,8 @@ impl<P: LLMProvider> Agent<P> {
 
                     // Add tool results
                     for result in &results {
-                        let tool_node_id = self.session
+                        let tool_node_id = self
+                            .session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -503,7 +506,8 @@ impl<P: LLMProvider> Agent<P> {
 
         // 5. Add assistant response to tree
         if !response_content.is_empty() {
-            let final_node_id = self.session
+            let final_node_id = self
+                .session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -571,7 +575,8 @@ impl<P: LLMProvider> Agent<P> {
         self.session.branch_from(from_node_id.clone()).await?;
 
         // Append new message to the branch point
-        let user_node_id = self.session
+        let user_node_id = self
+            .session
             .append_message_to(
                 from_node_id,
                 Message {
@@ -712,7 +717,8 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Add assistant message with tool calls
-                    let assistant_node_id = self.session
+                    let assistant_node_id = self
+                        .session
                         .append_message(Message {
                             role: Role::Assistant,
                             content: content.clone(),
@@ -724,7 +730,8 @@ impl<P: LLMProvider> Agent<P> {
 
                     // Add tool results
                     for result in &results {
-                        let tool_node_id = self.session
+                        let tool_node_id = self
+                            .session
                             .append_message(Message {
                                 role: Role::Tool,
                                 content: result.content.clone(),
@@ -757,7 +764,8 @@ impl<P: LLMProvider> Agent<P> {
 
         // Add assistant response to tree
         if !response_content.is_empty() {
-            let final_node_id = self.session
+            let final_node_id = self
+                .session
                 .append_message(Message {
                     role: Role::Assistant,
                     content: response_content.clone(),
@@ -823,7 +831,10 @@ impl<P: LLMProvider> Agent<P> {
 
         // Calculate stats from the context string
         let original_tokens = Self::estimate_tokens_for_text(&context_string);
-        let nodes_covered = self.session.count_nodes_in_path(target_node_id.clone(), context_strategy).await?;
+        let nodes_covered = self
+            .session
+            .count_nodes_in_path(target_node_id.clone(), context_strategy)
+            .await?;
         let time_range = Self::get_time_range_now();
 
         // Generate summary with strategy
@@ -889,7 +900,10 @@ impl<P: LLMProvider> Agent<P> {
 
         // Calculate stats from the context string
         let original_tokens = Self::estimate_tokens_for_text(&context_string);
-        let nodes_covered = self.session.count_nodes_in_path(target_node_id.clone(), context_strategy).await?;
+        let nodes_covered = self
+            .session
+            .count_nodes_in_path(target_node_id.clone(), context_strategy)
+            .await?;
         let time_range = Self::get_time_range_now();
 
         // Generate summary preview
@@ -948,7 +962,9 @@ impl<P: LLMProvider> Agent<P> {
         context_string: &str,
         options: &CheckpointOptions,
     ) -> Result<String> {
-        let strategy_prompt = options.strategy.get_prompt(options.custom_prompt.as_deref());
+        let strategy_prompt = options
+            .strategy
+            .get_prompt(options.custom_prompt.as_deref());
 
         let summary_prompt = format!(
             "{}\n\n---\n\nConversation to summarize:\n\n{}",

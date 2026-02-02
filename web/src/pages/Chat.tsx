@@ -73,6 +73,7 @@ export function Chat() {
     skills,
     errors: skillErrors,
     loading: skillsLoading,
+    refresh: refreshSkills,
   } = useSkills();
 
   // Get selection from Zustand store
@@ -604,6 +605,7 @@ ${content}`;
                 skills={skills}
                 skillErrors={skillErrors}
                 skillsLoading={skillsLoading}
+                onRefreshSkills={refreshSkills}
                 showSkills={true}
               />
             </>
@@ -615,6 +617,10 @@ ${content}`;
               selectedNodeId={selectedMessageId}
               onNodeSelect={handleSelectMessage}
               onBranchSwitch={handleBranchSwitch}
+              canCreateCheckpoint={true}
+              onCreateCheckpoint={handleOpenCheckpointModal}
+              onBranchAfter={handleBranchAfter}
+              onBranchAlternative={handleBranchAlternative}
             />
           )}
         </div>

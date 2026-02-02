@@ -18,7 +18,7 @@ use tokio::process::Command;
 /// - Unix/Linux/macOS: sh (POSIX-compliant)
 #[derive(Clone)]
 pub struct ShellTool {
-    /// Maximum execution time in seconds (default: 30)
+    /// Maximum execution time in seconds (default: 120)
     timeout_secs: u64,
     /// Working directory for command execution (default: current directory)
     working_dir: Option<std::path::PathBuf>,
@@ -30,7 +30,7 @@ impl ShellTool {
     /// Create a new ShellTool with default settings
     pub fn new() -> Self {
         Self {
-            timeout_secs: 30,
+            timeout_secs: 120,
             working_dir: None,
             extra_path: None,
         }
@@ -211,7 +211,11 @@ WHEN NOT TO USE:
 
         // Inject extra PATH for built-in binaries
         if let Some(extra_path) = &self.extra_path {
-            let path_separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+            let path_separator = if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            };
             let new_path = match std::env::var("PATH") {
                 Ok(existing) if !existing.is_empty() => {
                     format!("{}{}{}", extra_path.display(), path_separator, existing)

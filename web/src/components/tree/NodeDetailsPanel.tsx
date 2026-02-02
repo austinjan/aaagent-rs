@@ -3,14 +3,28 @@
 import { useState } from "react";
 import { Clock, User, Bot, Wrench, AlertCircle, CheckCircle2, Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
+import { MessageToolbar } from "../chat/MessageToolbar";
 import type { TreeNode, ToolCall } from "./treeLayout";
 
 export interface NodeDetailsPanelProps {
   node: TreeNode | null;
   onClose?: () => void;
+
+  // Checkpoint and branch operations
+  canCreateCheckpoint?: boolean;
+  onCreateCheckpoint?: (nodeId: string) => void;
+  onBranchAfter?: (nodeId: string) => void;
+  onBranchAlternative?: (nodeId: string) => void;
 }
 
-export function NodeDetailsPanel({ node, onClose }: NodeDetailsPanelProps) {
+export function NodeDetailsPanel({
+  node,
+  onClose,
+  canCreateCheckpoint = false,
+  onCreateCheckpoint,
+  onBranchAfter,
+  onBranchAlternative,
+}: NodeDetailsPanelProps) {
   const [copied, setCopied] = useState(false);
 
   if (!node) {
@@ -90,11 +104,21 @@ export function NodeDetailsPanel({ node, onClose }: NodeDetailsPanelProps) {
           <div className={getRoleColor()}>{getRoleIcon()}</div>
           <h3 className="font-semibold">Node Details</h3>
         </div>
-        {onClose && (
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            ✕
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <MessageToolbar
+            nodeId={node.id}
+            role={node.role as "user" | "assistant" | "system" | "tool"}
+            canCreateCheckpoint={canCreateCheckpoint}
+            onCreateCheckpoint={onCreateCheckpoint}
+            onBranchAfter={onBranchAfter}
+            onBranchAlternative={onBranchAlternative}
+          />
+          {onClose && (
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              ✕
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Content */}

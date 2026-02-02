@@ -253,7 +253,8 @@ This includes exponential backoff for reconnection. Want me to add message handl
                 timestamp={msg.timestamp}
                 isSelected={selectedId === msg.id}
                 onSelect={setSelectedId}
-                onCreateBranch={handleCreateBranch}
+                onBranchAfter={handleCreateBranch}
+                onBranchAlternative={handleCreateBranch}
               />
             ))}
           </div>
