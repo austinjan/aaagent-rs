@@ -118,7 +118,7 @@ pub struct CheckpointResult {
 }
 
 /// Events emitted during agent chat for real-time monitoring
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AgentEvent {
     /// Streaming content from the LLM
     Content(String),

@@ -20,9 +20,11 @@ use crate::config::{ConfigResolver, SessionConfig};
 use crate::history::{SessionConfig as HistorySessionConfig, TreeStore};
 use crate::llm::LLMProvider;
 
+mod event_bus;
 mod provider_factory;
 mod stream_manager;
 
+pub use event_bus::{AgentEventEnvelope, GlobalEventBus};
 use stream_manager::StreamManager;
 
 // Shared application state
@@ -31,6 +33,7 @@ pub struct AppState {
     pub config_resolver: Arc<ConfigResolver>,
     pub store: Arc<crate::history::JSONLStore>,
     pub stream_manager: Arc<StreamManager>,
+    pub event_bus: Arc<GlobalEventBus>,
 }
 
 impl AppState {
@@ -82,6 +85,7 @@ impl AppState {
             config_resolver,
             store,
             stream_manager: Arc::new(StreamManager::new()),
+            event_bus: Arc::new(GlobalEventBus::new()),
         })
     }
 }
@@ -148,6 +152,7 @@ fn api_routes() -> Router<AppState> {
         )
         .route("/sessions/:session_id/chat", post(sessions::chat))
         .route("/sessions/:session_id/stream/:stream_id", get(sse::stream))
+        .route("/sessions/:session_id/events", get(sse::stream_events))
         .route("/sessions/:session_id/path", get(sessions::get_path))
         .route(
             "/sessions/:session_id/path/metadata",
@@ -716,26 +721,26 @@ mod sessions {
             .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
             .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
-        // Create stream
-        let (stream_id, tx) = state.stream_manager.create_stream().await;
+        // Generate run ID for this agent execution
+        let run_id = ulid::Ulid::new().to_string();
+
         crate::logger::log(format!(
-            "Created stream: {} for session: {}",
-            stream_id, session_id
+            "Starting agent chat run: {} for session: {}",
+            run_id, session_id
         ));
 
         // Clone values for the background task
         let message = req.message.clone();
         let config_manager = state.config_resolver.clone();
-        let stream_id_clone = stream_id.clone();
         let session_config_for_task = session_config.clone();
         let store_for_task = state.store.clone();
+        let event_bus = state.event_bus.clone();
+        let session_id_for_task = session_id.clone();
+        let run_id_for_task = run_id.clone();
 
         // Spawn background task to run Agent
         tokio::spawn(async move {
-            crate::logger::log(format!(
-                "Starting agent chat for stream: {}",
-                stream_id_clone
-            ));
+            crate::logger::log(format!("Starting agent chat for run: {}", run_id_for_task));
 
             let result = run_agent_chat(
                 stored_session,
@@ -743,16 +748,18 @@ mod sessions {
                 session_config_for_task,
                 config_manager,
                 store_for_task.clone(),
-                tx.clone(),
+                event_bus,
+                session_id_for_task,
+                run_id_for_task.clone(),
             )
             .await;
 
-            // If agent failed, send error to frontend
+            // If agent failed, log error
             match result {
                 Ok(updated_session) => {
                     crate::logger::log(format!(
-                        "Agent chat completed successfully for stream: {}",
-                        stream_id_clone
+                        "Agent chat completed successfully for run: {}",
+                        run_id_for_task
                     ));
 
                     // Save updated session back to storage
@@ -772,51 +779,16 @@ mod sessions {
                 }
                 Err(e) => {
                     crate::logger::log(format!(
-                        "ERROR: Agent chat failed for stream {}: {}",
-                        stream_id_clone, e
+                        "ERROR: Agent chat failed for run {}: {}",
+                        run_id_for_task, e
                     ));
                     crate::logger::log(format!("ERROR: Error details: {:?}", e));
-
-                    // Send error message to frontend
-                    let error_msg = format!("❌ Agent Error: {}\n\nDetails: {}", e, e);
-                    crate::logger::log(format!("Sending error message to stream: {}", error_msg));
-
-                    match tx
-                        .send(crate::agent::AgentEvent::Content(error_msg.clone()))
-                        .await
-                    {
-                        Ok(_) => crate::logger::log("Error message sent successfully".to_string()),
-                        Err(send_err) => crate::logger::log(format!(
-                            "ERROR: Failed to send error message: {}",
-                            send_err
-                        )),
-                    }
-
-                    // Send done event
-                    let _ = tx
-                        .send(crate::agent::AgentEvent::Done {
-                            total_usage: crate::llm::TokenUsage {
-                                input_tokens: 0,
-                                output_tokens: 0,
-                                cached_tokens: 0,
-                            },
-                            all_tool_calls: vec![],
-                            rounds: 0,
-                            new_node_ids: vec![],
-                        })
-                        .await;
-
-                    // Drop sender to close channel cleanly
-                    drop(tx);
-                    crate::logger::log("Sender dropped, channel closed cleanly".to_string());
-
-                    // Wait for SSE to read messages
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 }
             }
         });
 
-        Ok(Json(ChatResponse { stream_id }))
+        // Return run_id as stream_id for backward compatibility with frontend
+        Ok(Json(ChatResponse { stream_id: run_id }))
     }
 
     pub async fn get_path(
@@ -1529,7 +1501,9 @@ async fn run_agent_chat(
     session_config: SessionConfig,
     config_manager: Arc<ConfigResolver>,
     store: Arc<crate::history::JSONLStore>,
-    tx: tokio::sync::mpsc::Sender<crate::agent::AgentEvent>,
+    event_bus: Arc<GlobalEventBus>,
+    session_id: String,
+    run_id: String,
 ) -> anyhow::Result<crate::history::Session> {
     use crate::agent::{Agent, AgentConfig};
     use crate::llm::{LoopDetectorConfig, ToolRegistry};
@@ -1610,15 +1584,20 @@ async fn run_agent_chat(
         "run_agent_chat: Starting chat with message: {}",
         message
     ));
+
+    // Track run-specific sequence number
+    let run_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
     // Run chat with callback to stream events
     let result = agent
         .chat_with_callback(&message, |event| {
-            let tx = tx.clone();
+            let event_bus = event_bus.clone();
+            let session_id = session_id.clone();
+            let run_id = run_id.clone();
+            let run_seq = run_seq.clone();
             async move {
-                // Debug logging disabled for performance
-                // crate::logger::log(format!("DEBUG: Sending event: {:?}", event));
-                // Send event through channel (ignore if channel is closed)
-                let _ = tx.send(event).await;
+                let seq = run_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                event_bus.emit(session_id, run_id, seq, event);
             }
         })
         .await;
@@ -1645,7 +1624,7 @@ mod sse {
     };
     use futures::stream::Stream;
     use std::{convert::Infallible, time::Duration};
-    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::wrappers::BroadcastStream;
     use tokio_stream::StreamExt;
 
     // Intermediate type for SSE events (after async processing)
@@ -1655,28 +1634,45 @@ mod sse {
     }
 
     pub async fn stream(
-        Path((_session_id, stream_id)): Path<(String, String)>,
+        Path((session_id, _stream_id)): Path<(String, String)>,
         State(state): State<AppState>,
     ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-        crate::logger::log(format!("SSE stream requested: {}", stream_id));
+        crate::logger::log(format!("SSE stream requested for session: {}", session_id));
 
-        // Take the stream from the manager
-        let receiver = state
-            .stream_manager
-            .take_stream(&stream_id)
-            .await
-            .ok_or_else(|| {
-                crate::logger::log(format!("ERROR: Stream {} not found", stream_id));
-                ApiError::NotFound(format!("Stream {} not found", stream_id))
-            })?;
+        // Subscribe to global event bus
+        let receiver = state.event_bus.subscribe();
 
-        crate::logger::log(format!("SSE stream connection established: {}", stream_id));
+        crate::logger::log(format!(
+            "SSE stream connection established for session: {} (active subscribers: {})",
+            session_id,
+            state.event_bus.receiver_count()
+        ));
 
-        // Clone store for use in async closure
+        // Clone store and session_id for use in async closure
         let store = state.store.clone();
+        let session_filter = session_id.clone();
 
-        // Convert mpsc::Receiver to Stream, using `then` for async processing
-        let event_stream = ReceiverStream::new(receiver)
+        // Convert broadcast::Receiver to Stream, filter by session_id, then process events
+        let event_stream = BroadcastStream::new(receiver)
+            .filter_map(move |result| {
+                match result {
+                    Ok(envelope) => {
+                        // Filter events by session_id
+                        if envelope.session_id == session_filter {
+                            Some(envelope.event)
+                        } else {
+                            None
+                        }
+                    }
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(skipped)) => {
+                        crate::logger::log(format!(
+                            "SSE client lagged, skipped {} events",
+                            skipped
+                        ));
+                        None
+                    }
+                }
+            })
             .then(move |agent_event| {
                 let store = store.clone();
                 async move {
@@ -1716,6 +1712,149 @@ mod sse {
                             event_type: "checkpoint",
                             data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
                         },
+                        crate::agent::AgentEvent::Done {
+                            total_usage,
+                            all_tool_calls,
+                            rounds,
+                            new_node_ids,
+                        } => {
+                            // Fetch full node data for each new node ID
+                            let mut new_nodes = Vec::new();
+                            for node_id in &new_node_ids {
+                                if let Ok(Some(node)) = store.get_node(node_id.clone()).await {
+                                    new_nodes.push(serde_json::json!({
+                                        "node_id": node.node_id,
+                                        "parent_id": node.parent_id,
+                                        "session_id": node.session_id,
+                                        "kind": format!("{:?}", node.kind),
+                                        "role": node.role.as_ref().map(|r| format!("{:?}", r)),
+                                        "content": &node.content,
+                                        "tool_calls": &node.tool_calls,
+                                        "tool_call_id": &node.tool_call_id,
+                                        "created_at": node.created_at,
+                                    }));
+                                }
+                            }
+
+                            SseEventData {
+                                event_type: "done",
+                                data: serde_json::json!({
+                                    "total_usage": total_usage,
+                                    "all_tool_calls": all_tool_calls,
+                                    "rounds": rounds,
+                                    "new_node_ids": new_node_ids,
+                                    "new_nodes": new_nodes
+                                }),
+                            }
+                        }
+                    }
+                }
+            })
+            .map(|sse_data| {
+                // Create SSE event
+                Ok(Event::default()
+                    .event(sse_data.event_type)
+                    .data(sse_data.data.to_string()))
+            });
+
+        // Create SSE response with keepalive
+        Ok(Sse::new(event_stream).keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keepalive"),
+        ))
+    }
+
+    /// Stream events for a session (without requiring specific stream_id)
+    /// This allows multiple clients to subscribe to a session's events
+    pub async fn stream_events(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+        crate::logger::log(format!(
+            "SSE events stream requested for session: {}",
+            session_id
+        ));
+
+        // Subscribe to global event bus
+        let receiver = state.event_bus.subscribe();
+
+        crate::logger::log(format!(
+            "SSE events connection established for session: {} (active subscribers: {})",
+            session_id,
+            state.event_bus.receiver_count()
+        ));
+
+        // Clone store and session_id for use in async closure
+        let store = state.store.clone();
+        let session_filter = session_id.clone();
+
+        // Convert broadcast::Receiver to Stream, filter by session_id, then process events
+        let event_stream = BroadcastStream::new(receiver)
+            .filter_map(move |result| {
+                match result {
+                    Ok(envelope) => {
+                        // Filter events by session_id
+                        if envelope.session_id == session_filter {
+                            Some(envelope.event)
+                        } else {
+                            None
+                        }
+                    }
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(
+                        skipped,
+                    )) => {
+                        crate::logger::log(format!(
+                            "SSE client lagged, skipped {} events",
+                            skipped
+                        ));
+                        None
+                    }
+                }
+            })
+            .then(move |agent_event| {
+                let store = store.clone();
+                async move {
+                    // Convert AgentEvent to SSE Event
+                    match agent_event {
+                        crate::agent::AgentEvent::Content(content) => SseEventData {
+                            event_type: "content",
+                            data: serde_json::json!({ "content": content }),
+                        },
+                        crate::agent::AgentEvent::Thinking(text) => SseEventData {
+                            event_type: "thinking",
+                            data: serde_json::json!({ "text": text }),
+                        },
+                        crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => {
+                            SseEventData {
+                                event_type: "tool_calls",
+                                data: serde_json::json!({ "tool_calls": tool_calls }),
+                            }
+                        }
+                        crate::agent::AgentEvent::ToolResult {
+                            tool_call_id,
+                            tool_name,
+                            result,
+                            is_error,
+                        } => SseEventData {
+                            event_type: "tool_result",
+                            data: serde_json::json!({
+                                "tool_call_id": tool_call_id,
+                                "tool_name": tool_name,
+                                "result": result,
+                                "is_error": is_error
+                            }),
+                        },
+                        crate::agent::AgentEvent::LoopDetected { detection } => SseEventData {
+                            event_type: "loop_detected",
+                            data: serde_json::json!({ "detection": format!("{:?}", detection) }),
+                        },
+                        crate::agent::AgentEvent::CheckpointCreated { node_id, strategy } => {
+                            SseEventData {
+                                event_type: "checkpoint",
+                                data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
+                            }
+                        }
                         crate::agent::AgentEvent::Done {
                             total_usage,
                             all_tool_calls,

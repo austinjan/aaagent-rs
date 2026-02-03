@@ -374,6 +374,13 @@ export function getStreamUrl(sessionId: string, streamId: string): string {
   return `${baseUrl}/api/sessions/${sessionId}/stream/${streamId}`;
 }
 
+export function getSessionEventsUrl(sessionId: string): string {
+  // EventSource requires absolute URLs in development mode (Vite proxy doesn't work with EventSource)
+  const isDev = import.meta.env.DEV;
+  const baseUrl = isDev ? "http://localhost:3000" : "";
+  return `${baseUrl}/api/sessions/${sessionId}/events`;
+}
+
 // ============================================================================
 // Checkpoint Operations
 // ============================================================================

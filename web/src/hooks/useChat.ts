@@ -7,6 +7,7 @@ import {
   sendChatMessage,
   getSessionPath,
   getStreamUrl,
+  getSessionEventsUrl,
   getSessionTree,
   type TreeNodeData,
 } from "../services/api";
@@ -534,6 +535,9 @@ export function useChat(options: UseChatOptions = {}) {
       );
       store.setMessages(loadedMessages);
       store.setLoading(false);
+
+      // Establish SSE connection to receive real-time events for this session
+      setStreamUrl(getSessionEventsUrl(loadSessionId));
 
       // Load full tree for minimap
       try {
