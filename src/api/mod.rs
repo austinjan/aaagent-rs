@@ -185,6 +185,10 @@ fn api_routes() -> Router<AppState> {
         )
         // Tree visualization
         .route("/sessions/:session_id/tree", get(sessions::get_tree))
+        .route(
+            "/sessions/:session_id/tree-stats",
+            get(sessions::get_tree_stats),
+        )
         // Context as markdown string
         .route(
             "/sessions/:session_id/context-string",
@@ -1519,6 +1523,114 @@ mod sessions {
             "context_node_ids": context_node_ids,
             "nodes": nodes_json,
             "total_nodes": all_nodes.len(),
+        })))
+    }
+
+    /// Get tree statistics for the session
+    pub async fn get_tree_stats(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Get tree stats request for session: {}", session_id));
+
+        // Load session
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        // Get all nodes in session
+        let filter = crate::history::storage::NodeFilter::default();
+        let all_nodes = state
+            .store
+            .find_nodes(session_id.clone(), filter)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Build node map for traversal
+        let node_map: std::collections::HashMap<String, &crate::history::Node> =
+            all_nodes.iter().map(|n| (n.node_id.clone(), n)).collect();
+
+        // === 1. Calculate active path nodes (from last checkpoint/root to active leaf) ===
+        let mut active_path_nodes: Vec<&crate::history::Node> = Vec::new();
+        let mut last_checkpoint_id: Option<String> = None;
+        let mut current_id = Some(session.active_leaf_id.clone());
+
+        while let Some(id) = current_id {
+            if let Some(node) = node_map.get(&id) {
+                active_path_nodes.push(node);
+
+                // Check if this node has a checkpoint (boundary)
+                if session.checkpoints.contains_key(&id) {
+                    last_checkpoint_id = Some(id.clone());
+                    break;
+                }
+
+                // Move to parent
+                current_id = node.parent_id.clone();
+            } else {
+                break;
+            }
+        }
+
+        // Reverse to get root-to-leaf order
+        active_path_nodes.reverse();
+
+        // === 2. Calculate token usage (rough estimate: ~4 chars per token) ===
+        let active_path_chars: usize = active_path_nodes
+            .iter()
+            .map(|n| n.content.len())
+            .sum();
+        let active_path_tokens = (active_path_chars as f64 / 4.0).ceil() as usize;
+
+        // Estimate tokens if we create a checkpoint now
+        // Assume checkpoint summary would be ~15% of original (typical compression ratio ~6.7)
+        let estimated_summary_tokens = (active_path_tokens as f64 * 0.15).ceil() as usize;
+        let potential_savings = active_path_tokens.saturating_sub(estimated_summary_tokens);
+        let compression_ratio = if estimated_summary_tokens > 0 {
+            active_path_tokens as f64 / estimated_summary_tokens as f64
+        } else {
+            1.0
+        };
+
+        // === 3. Count nodes by type ===
+        let mut user_count = 0;
+        let mut assistant_count = 0;
+        let mut tool_count = 0;
+        let mut system_count = 0;
+        let checkpoint_count = session.checkpoints.len();
+
+        for node in &all_nodes {
+            match node.role {
+                Some(crate::history::Role::User) => user_count += 1,
+                Some(crate::history::Role::Assistant) => assistant_count += 1,
+                Some(crate::history::Role::Tool) => tool_count += 1,
+                Some(crate::history::Role::System) => system_count += 1,
+                None => {}
+            }
+        }
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "token_usage": {
+                "active_path_tokens": active_path_tokens,
+                "active_path_chars": active_path_chars,
+                "last_checkpoint_id": last_checkpoint_id,
+                "estimated_after_checkpoint": estimated_summary_tokens,
+                "potential_token_savings": potential_savings,
+                "estimated_compression_ratio": compression_ratio,
+            },
+            "node_counts": {
+                "total": all_nodes.len(),
+                "user": user_count,
+                "assistant": assistant_count,
+                "tool": tool_count,
+                "system": system_count,
+                "checkpoint": checkpoint_count,
+                "active_path": active_path_nodes.len(),
+            },
         })))
     }
 }
