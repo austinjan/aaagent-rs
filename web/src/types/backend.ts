@@ -392,3 +392,28 @@ export interface SkillsResponse {
   };
   summary: string;
 }
+
+// ============================================================================
+// Tree Statistics Types
+// ============================================================================
+
+export interface TreeStatsResponse {
+  session_id: string;
+  token_usage: {
+    active_path_tokens: number;
+    active_path_chars: number;
+    last_checkpoint_id: string | null;
+    estimated_after_checkpoint: number;
+    potential_token_savings: number;
+    estimated_compression_ratio: number;
+  };
+  node_counts: {
+    total: number;
+    user: number;
+    assistant: number;
+    tool: number;
+    system: number;
+    checkpoint: number;
+    active_path: number;
+  };
+}

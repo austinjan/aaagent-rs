@@ -345,6 +345,13 @@ export async function getSessionTree(
   return handleResponse<SessionTreeResponse>(response);
 }
 
+export async function getTreeStats(
+  sessionId: string,
+): Promise<import("../types/backend").TreeStatsResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree-stats`);
+  return handleResponse<import("../types/backend").TreeStatsResponse>(response);
+}
+
 // ============================================================================
 // SSE Stream URL Builder
 // ============================================================================

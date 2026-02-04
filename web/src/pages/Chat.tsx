@@ -568,6 +568,7 @@ ${content}`;
               nodes={treeNodes}
               activeLeafId={activeLeafId || ""}
               selectedNodeId={selectedMessageId}
+              sessionId={sessionId}
               onNodeSelect={handleSelectMessage}
               onBranchSwitch={handleBranchSwitch}
             />
