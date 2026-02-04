@@ -55,14 +55,16 @@ async function exportTreeAsMarkdown(sessionId: string, stats: TreeStatsResponse)
     const checkpointMarker = node.has_checkpoint ? " 📍" : "";
     const roleIcon = node.role === "User" ? "👤" : node.role === "Assistant" ? "🤖" : node.role === "Tool" ? "🔧" : "⚙️";
 
-    // Content preview (first 50 chars)
+    // Full content (preserve newlines for better readability)
     const content = node.content || "";
-    const contentPreview = content.length > 50
-      ? content.substring(0, 50) + "..."
-      : content;
-    const escapedContent = contentPreview.replace(/\n/g, " ");
+    // Indent multi-line content properly
+    const contentIndent = indent + (isLast ? "  " : "│ ");
+    const indentedContent = content.split('\n').map((line, i) =>
+      i === 0 ? line : contentIndent + "  " + line
+    ).join('\n');
 
-    let line = `${prefix} ${roleIcon} [${node.role}] "${escapedContent}"${checkpointMarker}${marker}\n`;
+    let line = `${prefix} ${roleIcon} [${node.role}]${checkpointMarker}${marker}\n`;
+    line += `${contentIndent}  ${indentedContent}\n`;
 
     // Show tool calls if any
     if (node.tool_calls && node.tool_calls.length > 0) {
