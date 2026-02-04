@@ -118,6 +118,13 @@ export type AgentEvent =
     }
   | { type: "loop_detected"; detection: string }
   | { type: "checkpoint"; node_id: string; strategy: string }
+  | { type: "queued_messages"; count: number }
+  | {
+      type: "followup_processed";
+      message_index: number;
+      total_queued: number;
+      source: string;
+    }
   | {
       type: "done";
       total_usage: TokenUsage;
