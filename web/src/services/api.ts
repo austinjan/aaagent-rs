@@ -19,6 +19,9 @@ import type {
   ContextStringResponse,
   SkillsResponse,
 } from "../types/backend";
+import type { SessionMetrics as SessionMetricsType } from "../types/backend";
+
+export type { SessionMetricsType as SessionMetrics };
 
 const API_BASE = "/api";
 
@@ -361,6 +364,13 @@ export async function getSessionTree(
 ): Promise<SessionTreeResponse> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree`);
   return handleResponse<SessionTreeResponse>(response);
+}
+
+export async function getSessionMetrics(
+  sessionId: string,
+): Promise<SessionMetricsType> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/metrics`);
+  return handleResponse<SessionMetricsType>(response);
 }
 
 // ============================================================================

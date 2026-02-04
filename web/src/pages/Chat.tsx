@@ -8,6 +8,7 @@ import {
   CopySessionIdButton,
   SessionToolbar,
 } from "../components/session";
+import { SessionMetricsIndicator } from "../components/SessionMetrics";
 import { useChat, useSkills } from "../hooks";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
 import {
@@ -153,7 +154,10 @@ export function Chat() {
     const initSession = async () => {
       // Prevent duplicate initialization from StrictMode double-mount
       // Check both the ref (for in-flight requests) and store (for completed sessions)
-      if (initializingRef.current || useChatStore.getState().session.sessionId) {
+      if (
+        initializingRef.current ||
+        useChatStore.getState().session.sessionId
+      ) {
         return;
       }
       initializingRef.current = true;
@@ -358,12 +362,14 @@ ${content}`;
       // Switch to another session or create new one
       const sessions = await listSessions();
       const availableSessions = sessions.sessions.filter(
-        (s) => !s.archived && s.session_id !== sessionId
+        (s) => !s.archived && s.session_id !== sessionId,
       );
 
       if (availableSessions.length > 0) {
         // Switch to the most recently updated non-archived session
-        const sorted = availableSessions.sort((a, b) => b.updated_at - a.updated_at);
+        const sorted = availableSessions.sort(
+          (a, b) => b.updated_at - a.updated_at,
+        );
         await handleSessionSelect(sorted[0].session_id);
       } else {
         // No other sessions available, create a new one
@@ -532,6 +538,7 @@ ${content}`;
               </p>
             </div>
             <div className="flex items-center gap-3">
+              <SessionMetricsIndicator sessionId={sessionId} />
               {sessionId && (
                 <CopySessionIdButton sessionId={sessionId} variant="outline" />
               )}

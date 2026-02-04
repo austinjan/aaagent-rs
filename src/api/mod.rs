@@ -16,11 +16,12 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 #[cfg(feature = "dev-server")]
 use tower_http::cors::CorsLayer;
 
+use crate::agent::{AgentFactory, AgentRuntime, SessionManager, SubAgentRegistry};
 use crate::config::{ConfigResolver, SessionConfig};
 use crate::history::{SessionConfig as HistorySessionConfig, TreeStore};
 use crate::llm::LLMProvider;
 
-mod event_bus;
+pub mod event_bus;
 mod provider_factory;
 mod stream_manager;
 
@@ -34,6 +35,10 @@ pub struct AppState {
     pub store: Arc<crate::history::JSONLStore>,
     pub stream_manager: Arc<StreamManager>,
     pub event_bus: Arc<GlobalEventBus>,
+    pub session_manager: Arc<SessionManager>,
+    pub agent_factory: Arc<AgentFactory>,
+    pub runtime: Arc<AgentRuntime>,
+    pub registry: Arc<SubAgentRegistry>,
 }
 
 impl AppState {
@@ -81,11 +86,47 @@ impl AppState {
             }
         });
 
+        // Initialize sub-agent infrastructure
+        std::fs::create_dir_all("data/sessions")?;
+        std::fs::create_dir_all("data/subagents")?;
+
+        let runtime = Arc::new(AgentRuntime::new());
+        let event_bus = Arc::new(GlobalEventBus::new());
+        let registry = Arc::new(SubAgentRegistry::new("data/subagents/registry.json".into()));
+
+        // Create SessionManager with persistence
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::clone(&store) as Arc<dyn TreeStore>,
+            HistorySessionConfig::default(),
+            Some("data/sessions".into()),
+        ));
+
+        // Create AgentFactory with provider factory
+        let provider_factory = Arc::new(|| provider_factory::create_default_provider());
+
+        let base_tools = crate::llm::ToolRegistry::new().register_all_builtin();
+
+        let agent_factory = Arc::new(AgentFactory::new(
+            provider_factory,
+            base_tools,
+            Arc::clone(&runtime),
+            Arc::clone(&registry),
+            Arc::clone(&event_bus),
+            Arc::clone(&store) as Arc<dyn TreeStore>,
+            8, // max_concurrent sub-agents
+        ));
+
+        crate::logger::log("[Startup] Sub-agent system initialized".to_string());
+
         Ok(Self {
             config_resolver,
             store,
             stream_manager: Arc::new(StreamManager::new()),
-            event_bus: Arc::new(GlobalEventBus::new()),
+            event_bus: Arc::clone(&event_bus),
+            session_manager,
+            agent_factory,
+            runtime,
+            registry,
         })
     }
 }
@@ -102,6 +143,14 @@ pub async fn create_router() -> Router {
         .maintenance_config()
         .clone();
     crate::maintenance::start_maintenance_worker(maintenance_config);
+
+    // Start inject listener for sub-agent completions
+    let _inject_listener_handle = crate::agent::start_inject_listener(
+        Arc::clone(&state.event_bus),
+        Arc::clone(&state.session_manager),
+        Arc::clone(&state.agent_factory),
+    );
+    crate::logger::log("[Startup] Inject listener started".to_string());
 
     // Define sensitive headers that should never be logged
     let sensitive_headers = vec![
@@ -194,6 +243,13 @@ fn api_routes() -> Router<AppState> {
         .route(
             "/sessions/:session_id/context-string",
             get(sessions::get_context_string),
+        )
+        // Session metrics (active subscribers, event counts)
+        .route("/sessions/:session_id/metrics", get(sessions::get_metrics))
+        // Session export (Markdown, JSON)
+        .route(
+            "/sessions/:session_id/export",
+            get(sessions::export_session),
         )
 }
 
@@ -1491,6 +1547,115 @@ mod sessions {
             "total_nodes": all_nodes.len(),
         })))
     }
+
+    /// Get session metrics (active subscribers, event counts, etc.)
+    pub async fn get_metrics(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log(format!("Get metrics request for session: {}", session_id));
+
+        // Get active subscriber count from event bus
+        let active_subscribers = state.event_bus.receiver_count();
+
+        // Get total events emitted globally
+        let total_events = state.event_bus.current_seq();
+
+        Ok(Json(json!({
+            "session_id": session_id,
+            "active_subscribers": active_subscribers,
+            "total_events_emitted": total_events,
+            "timestamp": chrono::Utc::now().timestamp(),
+        })))
+    }
+
+    /// Export session as Markdown or JSON
+    pub async fn export_session(
+        Path(session_id): Path<String>,
+        Query(params): Query<std::collections::HashMap<String, String>>,
+        State(state): State<AppState>,
+    ) -> Result<Response, ApiError> {
+        use axum::http::header;
+
+        crate::logger::log(format!("Export request for session: {}", session_id));
+
+        // Get export format (default: markdown)
+        let format = params
+            .get("format")
+            .map(|s| s.as_str())
+            .unwrap_or("markdown");
+
+        // Load session path
+        let path_response = get_path(Path(session_id.clone()), State(state.clone())).await?;
+        let path_data: Value =
+            serde_json::from_str(&serde_json::to_string(&path_response.0).unwrap()).unwrap();
+
+        let nodes = path_data["nodes"]
+            .as_array()
+            .ok_or_else(|| ApiError::Internal("Failed to parse nodes".to_string()))?;
+
+        match format {
+            "json" => {
+                // Return raw JSON
+                let content = serde_json::to_string_pretty(&path_data)
+                    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+                Ok(Response::builder()
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"session_{}.json\"", session_id),
+                    )
+                    .body(content.into())
+                    .unwrap())
+            }
+            "markdown" | _ => {
+                // Convert to Markdown
+                let mut markdown = String::new();
+                markdown.push_str(&format!("# Session: {}\n\n", session_id));
+                markdown.push_str(&format!(
+                    "Exported: {}\n\n",
+                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                ));
+                markdown.push_str("---\n\n");
+
+                for node in nodes {
+                    let role = node["role"].as_str().unwrap_or("Unknown");
+                    let content = node["content"].as_str().unwrap_or("");
+
+                    match role {
+                        "User" => {
+                            markdown.push_str("## 🧑 User\n\n");
+                            markdown.push_str(content);
+                            markdown.push_str("\n\n");
+                        }
+                        "Assistant" => {
+                            markdown.push_str("## 🤖 Assistant\n\n");
+                            markdown.push_str(content);
+                            markdown.push_str("\n\n");
+                        }
+                        "Tool" => {
+                            let tool_name = node["tool_call_id"].as_str().unwrap_or("tool");
+                            markdown.push_str(&format!("### 🔧 Tool Result ({})\n\n", tool_name));
+                            markdown.push_str("```\n");
+                            markdown.push_str(content);
+                            markdown.push_str("\n```\n\n");
+                        }
+                        _ => {}
+                    }
+                }
+
+                Ok(Response::builder()
+                    .header(header::CONTENT_TYPE, "text/markdown; charset=utf-8")
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"session_{}.md\"", session_id),
+                    )
+                    .body(markdown.into())
+                    .unwrap())
+            }
+        }
+    }
 }
 
 /// Run agent chat in background task
@@ -1712,6 +1877,18 @@ mod sse {
                             event_type: "checkpoint",
                             data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
                         },
+                        crate::agent::AgentEvent::QueuedMessagesReceived { count } => SseEventData {
+                            event_type: "queued_messages",
+                            data: serde_json::json!({ "count": count }),
+                        },
+                        crate::agent::AgentEvent::FollowupProcessed { message_index, total_queued, source } => SseEventData {
+                            event_type: "followup_processed",
+                            data: serde_json::json!({
+                                "message_index": message_index,
+                                "total_queued": total_queued,
+                                "source": source
+                            }),
+                        },
                         crate::agent::AgentEvent::Done {
                             total_usage,
                             all_tool_calls,
@@ -1855,6 +2032,18 @@ mod sse {
                                 data: serde_json::json!({ "node_id": node_id, "strategy": strategy }),
                             }
                         }
+                        crate::agent::AgentEvent::QueuedMessagesReceived { count } => SseEventData {
+                            event_type: "queued_messages",
+                            data: serde_json::json!({ "count": count }),
+                        },
+                        crate::agent::AgentEvent::FollowupProcessed { message_index, total_queued, source } => SseEventData {
+                            event_type: "followup_processed",
+                            data: serde_json::json!({
+                                "message_index": message_index,
+                                "total_queued": total_queued,
+                                "source": source
+                            }),
+                        },
                         crate::agent::AgentEvent::Done {
                             total_usage,
                             all_tool_calls,

@@ -66,9 +66,7 @@ pub fn create_provider(
 
 /// Create a quick provider for lightweight tasks (summaries, compaction)
 /// Uses the "quick" system profile which defaults to a smaller/faster model
-pub fn create_quick_provider(
-    config_manager: &ConfigManager,
-) -> Result<Box<dyn LLMProvider>> {
+pub fn create_quick_provider(config_manager: &ConfigManager) -> Result<Box<dyn LLMProvider>> {
     let quick_profile = config_manager.get_system_profile("quick");
     let model = &quick_profile.model;
 
@@ -113,12 +111,53 @@ pub fn create_quick_provider(
     bail!("Unknown quick model: {}. Cannot determine provider.", model)
 }
 
+/// Create a default provider using environment variables
+/// Falls back to a default model if no config is available
+pub fn create_default_provider() -> ActiveProvider {
+    // Try to load from environment or use default
+    #[cfg(feature = "openai")]
+    {
+        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+            if let Ok(provider) = OpenAIProvider::create("gpt-4o".to_string(), api_key) {
+                return ActiveProvider::OpenAI(provider);
+            }
+        }
+    }
+
+    #[cfg(feature = "anthropic")]
+    {
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            if let Ok(provider) =
+                AnthropicProvider::create("claude-3-5-sonnet-20241022".to_string(), api_key)
+            {
+                return ActiveProvider::Anthropic(provider);
+            }
+        }
+    }
+
+    #[cfg(feature = "gemini")]
+    {
+        if let Ok(api_key) = std::env::var("GOOGLE_API_KEY") {
+            if let Ok(provider) =
+                GeminiProvider::create("gemini-2.0-flash-exp".to_string(), api_key)
+            {
+                return ActiveProvider::Gemini(provider);
+            }
+        }
+    }
+
+    // If no API keys found, panic with helpful message
+    panic!(
+        "No LLM provider API key found in environment. Please set one of:\n\
+         - OPENAI_API_KEY\n\
+         - ANTHROPIC_API_KEY\n\
+         - GOOGLE_API_KEY"
+    );
+}
+
 /// Run a one-off quick prompt and return the full response as a String.
 /// Intended for lightweight tasks where streaming isn't needed.
-pub async fn quick_prompt(
-    config_manager: &ConfigManager,
-    prompt: &str,
-) -> Result<String> {
+pub async fn quick_prompt(config_manager: &ConfigManager, prompt: &str) -> Result<String> {
     let quick_provider = create_quick_provider(config_manager)?;
 
     let mut stream = quick_provider.chat(prompt).await?;

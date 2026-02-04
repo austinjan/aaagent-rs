@@ -7,6 +7,27 @@ use crate::llm::{
     ToolCall, ToolRegistry,
 };
 
+pub mod agent_factory;
+pub mod announce;
+pub mod inject_listener;
+pub mod runtime;
+pub mod session_manager;
+pub mod spawn_helper;
+pub mod spawn_tool;
+pub mod subagent_registry;
+
+pub use agent_factory::AgentFactory;
+pub use announce::run_announce_flow;
+pub use inject_listener::start_inject_listener;
+pub use runtime::{
+    AgentRuntime, MessageSource as RuntimeMessageSource, QueueMode, QueuedMessage, RunGuard,
+    RunInfo,
+};
+pub use session_manager::SessionManager;
+pub use spawn_helper::{create_agent_with_spawn_tool_async, register_spawn_tool};
+pub use spawn_tool::SpawnSubAgentTool;
+pub use subagent_registry::{CleanupStrategy, SubAgentOutcome, SubAgentRegistry, SubAgentRun};
+
 /// Compression strategy for checkpoint creation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -137,6 +158,14 @@ pub enum AgentEvent {
     LoopDetected { detection: LoopDetection },
     /// Checkpoint was created
     CheckpointCreated { node_id: String, strategy: String },
+    /// Queued messages are being processed
+    QueuedMessagesReceived { count: usize },
+    /// A queued message was processed (followup mode)
+    FollowupProcessed {
+        message_index: usize,
+        total_queued: usize,
+        source: String,
+    },
     /// Chat completed with final stats
     Done {
         total_usage: TokenUsage,
@@ -176,7 +205,13 @@ pub struct Agent<P: LLMProvider> {
     config: AgentConfig,
     /// Skills XML to inject into system prompt
     skills_prompt: Option<String>,
+    /// Runtime for tracking active runs and message queuing
+    runtime: Option<Arc<AgentRuntime>>,
+    /// Unique session key for this agent instance
+    session_key: Option<String>,
 }
+
+use std::sync::Arc;
 
 impl<P: LLMProvider> Agent<P> {
     /// Create a new agent with a session, provider, and tool registry
@@ -187,6 +222,8 @@ impl<P: LLMProvider> Agent<P> {
             quick_provider: None,
             tools,
             config: AgentConfig::default(),
+            runtime: None,
+            session_key: None,
             skills_prompt: None,
         }
     }
@@ -205,6 +242,8 @@ impl<P: LLMProvider> Agent<P> {
             tools,
             config,
             skills_prompt: None,
+            runtime: None,
+            session_key: None,
         }
     }
 
@@ -255,6 +294,63 @@ impl<P: LLMProvider> Agent<P> {
         } else {
             self.skills_prompt = None;
         }
+    }
+
+    /// Set the runtime for this agent (enables run tracking and message queuing)
+    pub fn set_runtime(&mut self, runtime: Arc<AgentRuntime>) {
+        self.runtime = Some(runtime);
+    }
+
+    /// Set the session key for this agent instance
+    pub fn set_session_key(&mut self, session_key: String) {
+        self.session_key = Some(session_key);
+    }
+
+    /// Format a collection of queued messages into a single merged message
+    ///
+    /// Used for Collect mode queue processing to batch multiple messages.
+    fn format_collected_messages(messages: &[crate::agent::runtime::QueuedMessage]) -> String {
+        use crate::agent::runtime::MessageSource;
+
+        if messages.is_empty() {
+            return String::new();
+        }
+
+        if messages.len() == 1 {
+            // Single message - return as-is
+            return messages[0].content.clone();
+        }
+
+        // Multiple messages - merge with separators
+        let mut merged = String::new();
+        merged.push_str(&format!(
+            "# Batched Updates ({} messages)\n\n",
+            messages.len()
+        ));
+
+        for (idx, msg) in messages.iter().enumerate() {
+            let source_label = match &msg.source {
+                MessageSource::SubAgent { run_id } => format!("Sub-Agent: {}", run_id),
+                MessageSource::User => "User".to_string(),
+                MessageSource::System => "System".to_string(),
+            };
+
+            merged.push_str(&format!("## Update {} - {}\n", idx + 1, source_label));
+
+            // Add timestamp if available
+            let timestamp = chrono::DateTime::from_timestamp_millis(msg.queued_at);
+            if let Some(dt) = timestamp {
+                merged.push_str(&format!(
+                    "*Queued at: {}*\n\n",
+                    dt.format("%Y-%m-%d %H:%M:%S UTC")
+                ));
+            }
+
+            merged.push_str(&msg.content);
+            merged.push_str("\n\n---\n\n");
+        }
+
+        merged
     }
 
     /// Inject skills into context (appends to first system message or adds new one)
@@ -313,6 +409,14 @@ impl<P: LLMProvider> Agent<P> {
     {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
+
+        // Register run with runtime (if configured)
+        let _run_guard =
+            if let (Some(runtime), Some(session_key)) = (&self.runtime, &self.session_key) {
+                Some(runtime.register_run(session_key.clone(), true)?)
+            } else {
+                None
+            };
 
         // Track new nodes created during this chat turn
         let mut new_node_ids: Vec<String> = Vec::new();
@@ -532,6 +636,111 @@ impl<P: LLMProvider> Agent<P> {
             new_node_ids,
         })
         .await;
+
+        // 8. Process queued messages (if runtime configured)
+        // Note: _run_guard drops here, unregistering the run before we drain queue
+        drop(_run_guard);
+
+        if let (Some(runtime), Some(session_key)) = (&self.runtime, &self.session_key) {
+            // Check if there are any queued messages
+            let queue_depth = runtime.get_queue_depth(session_key);
+            if queue_depth == 0 {
+                return Ok(response_content);
+            }
+
+            // Determine processing mode based on first message (all should have same mode)
+            let queued_messages = runtime.drain_queue(session_key);
+            if queued_messages.is_empty() {
+                return Ok(response_content);
+            }
+
+            let processing_mode = queued_messages[0].mode.clone();
+            let total_queued = queued_messages.len();
+
+            log::info!(
+                "Processing {} queued messages in {:?} mode for session {}",
+                total_queued,
+                processing_mode,
+                session_key
+            );
+
+            // Emit event to notify about queued messages being processed
+            on_event(AgentEvent::QueuedMessagesReceived {
+                count: total_queued,
+            })
+            .await;
+
+            match processing_mode {
+                QueueMode::Followup => {
+                    use crate::agent::runtime::MessageSource;
+
+                    // Process each message sequentially (max 10 to prevent infinite loops)
+                    let max_queue_processing = 10;
+                    for (idx, queued_msg) in queued_messages
+                        .into_iter()
+                        .take(max_queue_processing)
+                        .enumerate()
+                    {
+                        let source_str = match &queued_msg.source {
+                            MessageSource::SubAgent { run_id } => {
+                                format!("SubAgent({})", run_id)
+                            }
+                            MessageSource::User => "User".to_string(),
+                            MessageSource::System => "System".to_string(),
+                        };
+
+                        log::info!(
+                            "Processing followup message {}/{} from {}",
+                            idx + 1,
+                            total_queued,
+                            source_str
+                        );
+
+                        // Emit event for this specific followup
+                        on_event(AgentEvent::FollowupProcessed {
+                            message_index: idx + 1,
+                            total_queued,
+                            source: source_str,
+                        })
+                        .await;
+
+                        // Use chat() instead of chat_with_callback to avoid recursion depth issues
+                        // This will still trigger events but breaks the callback recursion chain
+                        let _ = Box::pin(self.chat(&queued_msg.content)).await;
+                    }
+
+                    if total_queued > max_queue_processing {
+                        log::warn!(
+                            "Stopped processing after {} messages (limit reached, {} remaining)",
+                            max_queue_processing,
+                            total_queued - max_queue_processing
+                        );
+                    }
+                }
+                QueueMode::Collect => {
+                    // Batch all messages into one merged message
+                    // Note: format_collected_messages() does NOT drain the queue
+                    let merged_content = Self::format_collected_messages(&queued_messages);
+
+                    log::info!(
+                        "Processing collected batch of {} messages for session {}",
+                        total_queued,
+                        session_key
+                    );
+
+                    // Process the merged message as a single turn
+                    let _ = Box::pin(self.chat(&merged_content)).await;
+                }
+                QueueMode::Steer | QueueMode::Interrupt => {
+                    // Future modes - not implemented yet
+                    log::warn!(
+                        "Queue mode {:?} not yet implemented, skipping {} messages",
+                        processing_mode,
+                        total_queued
+                    );
+                }
+            }
+        }
 
         Ok(response_content)
     }

@@ -392,3 +392,10 @@ export interface SkillsResponse {
   };
   summary: string;
 }
+
+export interface SessionMetrics {
+  session_id: string;
+  active_subscribers: number;
+  total_events_emitted: number;
+  timestamp: number;
+}

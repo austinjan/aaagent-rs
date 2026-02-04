@@ -31,7 +31,8 @@
       "Bash(bat:*)",
       "Bash(netstat:*)",
       "Bash(npm run dev)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git worktree:*)"
     ]
   }
 }

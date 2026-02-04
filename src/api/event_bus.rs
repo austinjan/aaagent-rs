@@ -6,11 +6,41 @@
 use crate::agent::AgentEvent;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use tokio::sync::broadcast;
+
+/// Message injection event (sub-agent → main agent)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectMessageEvent {
+    /// Target session key
+    pub session_key: String,
+
+    /// Message content to inject
+    pub message: String,
+
+    /// Source of the message
+    pub source: MessageSource,
+
+    /// Timestamp when event was created
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Source of an injected message
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MessageSource {
+    /// Message from a completed sub-agent
+    SubAgent { run_id: String },
+
+    /// Message from user (multi-client scenario)
+    User,
+
+    /// Message from system (e.g., timeout notification)
+    System,
+}
 
 /// Event envelope wrapping AgentEvent with metadata for routing and ordering
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,11 +67,17 @@ pub struct AgentEventEnvelope {
 /// Global event broadcaster supporting multiple subscribers
 #[derive(Clone)]
 pub struct GlobalEventBus {
-    /// Broadcast channel sender (capacity: 1000 events)
+    /// Broadcast channel sender for agent events (capacity: 1000 events)
     tx: broadcast::Sender<AgentEventEnvelope>,
 
     /// Global sequence counter (atomic)
     global_seq: Arc<AtomicU64>,
+
+    /// Recent event buffer for late-joining clients (last 50 events)
+    recent_events: Arc<Mutex<VecDeque<AgentEventEnvelope>>>,
+
+    /// Broadcast channel for message injection events
+    inject_tx: broadcast::Sender<InjectMessageEvent>,
 }
 
 impl GlobalEventBus {
@@ -53,10 +89,13 @@ impl GlobalEventBus {
     /// Create a new GlobalEventBus with specified capacity
     pub fn with_capacity(capacity: usize) -> Self {
         let (tx, _rx) = broadcast::channel(capacity);
+        let (inject_tx, _inject_rx) = broadcast::channel(100); // Smaller buffer for inject events
 
         Self {
             tx,
             global_seq: Arc::new(AtomicU64::new(0)),
+            recent_events: Arc::new(Mutex::new(VecDeque::with_capacity(50))),
+            inject_tx,
         }
     }
 
@@ -86,6 +125,15 @@ impl GlobalEventBus {
             event,
         };
 
+        // Store in recent events buffer (keep last 50)
+        {
+            let mut buffer = self.recent_events.lock().unwrap();
+            buffer.push_back(envelope.clone());
+            if buffer.len() > 50 {
+                buffer.pop_front();
+            }
+        }
+
         // Send returns number of receivers that received the message
         // If all receivers are lagging/dropped, returns 0
         self.tx.send(envelope).unwrap_or(0)
@@ -107,6 +155,55 @@ impl GlobalEventBus {
     /// Get the current global sequence number (total events emitted)
     pub fn current_seq(&self) -> u64 {
         self.global_seq.load(Ordering::SeqCst)
+    }
+
+    /// Get recent events for a specific session (up to last 50)
+    ///
+    /// # Arguments
+    /// * `session_id` - Filter events by this session
+    ///
+    /// # Returns
+    /// Vector of recent events for the session, oldest first
+    pub fn get_recent_events(&self, session_id: &str) -> Vec<AgentEventEnvelope> {
+        let buffer = self.recent_events.lock().unwrap();
+        buffer
+            .iter()
+            .filter(|e| e.session_id == session_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Emit a message injection event
+    ///
+    /// # Arguments
+    /// * `session_key` - Target session for message injection
+    /// * `message` - Message content to inject
+    /// * `source` - Source of the message
+    ///
+    /// # Returns
+    /// Number of listeners that received the event
+    pub fn emit_inject(
+        &self,
+        session_key: String,
+        message: String,
+        source: MessageSource,
+    ) -> usize {
+        let event = InjectMessageEvent {
+            session_key,
+            message,
+            source,
+            timestamp: Utc::now(),
+        };
+
+        self.inject_tx.send(event).unwrap_or(0)
+    }
+
+    /// Subscribe to message injection events
+    ///
+    /// # Returns
+    /// A broadcast receiver for consuming injection events
+    pub fn subscribe_inject(&self) -> broadcast::Receiver<InjectMessageEvent> {
+        self.inject_tx.subscribe()
     }
 }
 

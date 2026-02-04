@@ -33,7 +33,10 @@ impl BuiltinBinaries {
     }
 
     /// Create with explicit binary names (useful for testing or embedded binaries)
-    pub fn with_names(bin_dir: impl Into<PathBuf>, names: impl IntoIterator<Item = String>) -> Self {
+    pub fn with_names(
+        bin_dir: impl Into<PathBuf>,
+        names: impl IntoIterator<Item = String>,
+    ) -> Self {
         Self {
             bin_dir: bin_dir.into(),
             known: names.into_iter().collect(),
@@ -183,6 +186,7 @@ pub fn is_binary_available(name: &str, builtins: &BuiltinBinaries) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     #[test]
@@ -194,10 +198,8 @@ mod tests {
 
     #[test]
     fn test_with_names() {
-        let builtins = BuiltinBinaries::with_names(
-            "/fake/bin",
-            vec!["foo".to_string(), "bar".to_string()],
-        );
+        let builtins =
+            BuiltinBinaries::with_names("/fake/bin", vec!["foo".to_string(), "bar".to_string()]);
 
         assert_eq!(builtins.len(), 2);
         assert!(builtins.has("foo"));
@@ -252,7 +254,10 @@ mod tests {
         let builtins = BuiltinBinaries::from_dir(bin_dir);
 
         assert!(builtins.has("my-exec"), "Should find executable file");
-        assert!(!builtins.has("not-exec"), "Should not find non-executable file");
+        assert!(
+            !builtins.has("not-exec"),
+            "Should not find non-executable file"
+        );
     }
 
     #[test]
