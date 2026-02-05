@@ -9,7 +9,7 @@ import {
   SessionToolbar,
 } from "../components/session";
 import { SessionMetricsIndicator } from "../components/SessionMetrics";
-import { useChat, useSkills } from "../hooks";
+import { useChat, useSkills, useSubAgentSSE } from "../hooks";
 import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
 import {
   getConfig,
@@ -27,6 +27,8 @@ import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData, Skill } from "../types/backend";
 import { Role } from "../types/backend";
 import { CheckpointCreationModal } from "../components/checkpoint";
+import { SubAgentIndicator } from "../components/layout/SubAgentIndicator";
+import { SubAgentDetailPanel } from "../components/agent/SubAgentDetailPanel";
 
 // Convert MessageData to MessageCardProps
 function toMessageCardProps(msg: MessageData): MessageCardProps {
@@ -76,6 +78,9 @@ export function Chat() {
     loading: skillsLoading,
     refresh: refreshSkills,
   } = useSkills();
+
+  // Connect to sub-agent SSE stream
+  useSubAgentSSE(sessionId);
 
   // Get selection from Zustand store
   const selectedMessageId = useChatStore(selectSelectedNodeId);
@@ -268,9 +273,27 @@ User input:
 ${content}`;
   };
 
-  const handleSendMessage = async (content: string, selectedSkill?: Skill) => {
+  // Build message with sub-agent prefix
+  const buildMessageWithSubAgent = (content: string): string => {
+    return `Use spawn_subagent tool to run the following task in background. Set timeout to 600 seconds.
+
+Task:
+${content}`;
+  };
+
+  const handleSendMessage = async (
+    content: string,
+    selectedSkill?: Skill,
+    useSubAgent?: boolean,
+  ) => {
     try {
-      const messageToSend = buildMessageWithSkill(content, selectedSkill);
+      let messageToSend = buildMessageWithSkill(content, selectedSkill);
+
+      // If sub-agent is enabled, wrap the message
+      if (useSubAgent) {
+        messageToSend = buildMessageWithSubAgent(messageToSend);
+      }
+
       await sendMessage(messageToSend);
     } catch (err) {
       console.error("Failed to send message:", err);
@@ -538,6 +561,7 @@ ${content}`;
               </p>
             </div>
             <div className="flex items-center gap-3">
+              <SubAgentIndicator />
               <SessionMetricsIndicator sessionId={sessionId} />
               {sessionId && (
                 <CopySessionIdButton sessionId={sessionId} variant="outline" />
@@ -646,6 +670,9 @@ ${content}`;
           onCheckpointCreated={handleCheckpointCreated}
         />
       )}
+
+      {/* Sub-Agent Detail Panel */}
+      <SubAgentDetailPanel />
     </div>
   );
 }

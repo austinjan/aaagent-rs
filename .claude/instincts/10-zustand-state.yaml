@@ -1,0 +1,68 @@
+---
+id: aaagent-zustand-state
+trigger: when adding React state management
+confidence: 0.9
+domain: frontend
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use Zustand for React State Management
+
+## Action
+
+Use Zustand for centralized state management:
+
+```typescript
+// web/src/store/useChatStore.ts
+import { create } from 'zustand';
+
+interface ChatState {
+  messages: Message[];
+  addMessage: (msg: Message) => void;
+  clearMessages: () => void;
+}
+
+export const useChatStore = create<ChatState>((set) => ({
+  messages: [],
+
+  addMessage: (msg) => set((state) => ({
+    messages: [...state.messages, msg]
+  })),
+
+  clearMessages: () => set({ messages: [] }),
+}));
+
+// In components
+import { useChatStore } from '@/store/useChatStore';
+
+function ChatComponent() {
+  const { messages, addMessage } = useChatStore();
+  // Use state
+}
+```
+
+## Evidence
+
+- Commit: "Add Zustand chat store for centralized state management in UI"
+- Commit: "Add dev-mode state validation and sync tests for chat store"
+- File: `web/src/store/useChatStore.ts` (4 changes)
+
+## When to Apply
+
+- Adding global state
+- Sharing state across components
+- Complex state logic that doesn't fit in useState
+
+## Benefits
+
+- Simpler than Redux
+- TypeScript support
+- Dev tools integration
+- Easy testing ("Add dev-mode state validation and sync tests")
+
+## Related Patterns
+
+- Store in `web/src/store/`
+- Name pattern: `use{Feature}Store.ts`
+- Add validation tests for dev mode

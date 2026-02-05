@@ -1,0 +1,54 @@
+---
+id: aaagent-data-directory
+trigger: when creating files for persistent data or temporary files
+confidence: 1.0
+domain: filesystem
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Store All Persistent Data in data/ Directory
+
+## Action
+
+**CRITICAL**: All persistent data MUST go in `data/` directory:
+
+```
+project_root/
+├── config.yaml        # User config (working directory)
+├── secrets.yaml       # API keys (working directory, gitignored)
+└── data/              # All persistent data (gitignored)
+    ├── sessions/      # Session JSON files
+    ├── nodes/         # Tree node storage
+    ├── archived/      # Archived sessions
+    └── audit/         # Logs (future)
+```
+
+**Rules**:
+- ✅ `data/` for ALL persistent files (sessions, nodes, logs, backups)
+- ✅ `testing/` for test files, sample data
+- ✅ `temp-doc/` for temporary docs, notes, scratch files
+- ❌ NEVER write data to project root
+- ❌ NEVER write logs to project root
+
+## Evidence
+
+- Documented in CLAUDE.md "Project Conventions"
+- `data/archived/` contains 20+ archived session files
+- Both `testing/` and `temp-doc/` exist and are gitignored
+- Pattern enforced across codebase
+
+## When to Apply
+
+- Creating session storage
+- Writing logs or audit trails
+- Saving backups or archives
+- Creating test data
+- Writing temporary files during development
+
+## Related Patterns
+
+- Use `ensure_data_directories()` on startup
+- Session storage: `data/sessions/{session_id}.json`
+- Node storage: `data/nodes/{node_id}.json`
+- Audit logs: `data/audit/{date}.log`

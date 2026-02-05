@@ -218,6 +218,24 @@ export function useSSEStream(
         });
       });
 
+      eventSource.addEventListener("queued_messages", (e) => {
+        const data = JSON.parse(e.data);
+        onEventRef.current?.({
+          type: "queued_messages",
+          count: data.count,
+        });
+      });
+
+      eventSource.addEventListener("followup_processed", (e) => {
+        const data = JSON.parse(e.data);
+        onEventRef.current?.({
+          type: "followup_processed",
+          message_index: data.message_index,
+          total_queued: data.total_queued,
+          source: data.source,
+        });
+      });
+
       eventSource.addEventListener("done", (e) => {
         const data = JSON.parse(e.data);
         onEventRef.current?.({

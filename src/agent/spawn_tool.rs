@@ -10,11 +10,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::agent::{
-    run_announce_flow, Agent, AgentRuntime, CleanupStrategy, SubAgentRegistry, SubAgentRun,
+    run_announce_flow, AgentFactory, AgentRuntime, CleanupStrategy, SubAgentRegistry, SubAgentRun,
 };
 use crate::api::event_bus::GlobalEventBus;
 use crate::history::Session;
-use crate::llm::{ActiveProvider, ToolCall};
+use crate::llm::ToolCall;
 use crate::tools::ToolProvider;
 
 /// Maximum concurrent sub-agents (default)
@@ -34,12 +34,8 @@ pub struct SpawnSubAgentTool {
     /// Semaphore for concurrency control (lane system)
     lanes: Arc<Semaphore>,
 
-    /// Factory function to create sub-agent providers
-    /// This allows creating new provider instances for each sub-agent
-    provider_factory: Arc<dyn Fn() -> ActiveProvider + Send + Sync>,
-
-    /// Storage backend for creating sub-agent sessions
-    storage: Arc<dyn crate::history::TreeStore>,
+    /// Agent factory for creating sub-agents with inherited configuration
+    agent_factory: Arc<AgentFactory>,
 
     /// Parent session key (the agent using this tool)
     parent_session_key: String,
@@ -54,8 +50,7 @@ impl SpawnSubAgentTool {
         registry: Arc<SubAgentRegistry>,
         runtime: Arc<AgentRuntime>,
         max_concurrent: usize,
-        provider_factory: Arc<dyn Fn() -> ActiveProvider + Send + Sync>,
-        storage: Arc<dyn crate::history::TreeStore>,
+        agent_factory: Arc<AgentFactory>,
         parent_session_key: String,
         event_bus: Arc<GlobalEventBus>,
     ) -> Self {
@@ -63,8 +58,7 @@ impl SpawnSubAgentTool {
             registry,
             runtime,
             lanes: Arc::new(Semaphore::new(max_concurrent)),
-            provider_factory,
-            storage,
+            agent_factory,
             parent_session_key,
             event_bus,
         }
@@ -87,8 +81,7 @@ impl SpawnSubAgentTool {
         registry: Arc<SubAgentRegistry>,
         runtime: Arc<AgentRuntime>,
         lanes: Arc<Semaphore>,
-        provider_factory: Arc<dyn Fn() -> ActiveProvider + Send + Sync>,
-        storage: Arc<dyn crate::history::TreeStore>,
+        agent_factory: Arc<AgentFactory>,
         event_bus: Arc<GlobalEventBus>,
     ) -> Result<String> {
         // Generate unique IDs
@@ -112,9 +105,11 @@ impl SpawnSubAgentTool {
         // Spawn background task
         let registry_clone = registry.clone();
         let runtime_clone = runtime.clone();
-        let storage_clone = storage.clone();
+        let agent_factory_clone = agent_factory.clone();
         let run_id_clone = run_id.clone();
         let task_label_clone = task_label.clone();
+        let parent_session_key_clone = parent_session_key.clone();
+        let event_bus_clone = event_bus.clone();
 
         tokio::spawn(async move {
             // Acquire lane permit (blocks if all lanes busy)
@@ -131,26 +126,56 @@ impl SpawnSubAgentTool {
             run.mark_started();
             let _ = registry_clone.update_run(run.clone());
 
-            // Clone storage before it's moved
-            let storage_for_announce = storage_clone.clone();
+            // Emit sub-agent spawned event to SSE
+            event_bus_clone.emit(
+                parent_session_key_clone.clone(),
+                run_id_clone.clone(),
+                0, // run_seq
+                crate::agent::AgentEvent::SubAgentSpawned {
+                    run_id: run_id_clone.clone(),
+                    task_label: task_label_clone.clone(),
+                },
+            );
+
+            // Clone storage before agent_factory is moved
+            let storage_for_announce = agent_factory_clone.storage.clone();
 
             // Execute sub-agent
             let outcome = Self::execute_subagent(
                 task,
                 child_session_key.clone(),
                 timeout_secs,
-                provider_factory,
-                storage_clone,
+                agent_factory_clone,
                 runtime_clone.clone(),
             )
             .await;
 
             // Mark as completed
             let mut run = registry_clone.get_run(&run_id_clone).unwrap();
-            run.mark_completed(outcome);
+            run.mark_completed(outcome.clone());
             let _ = registry_clone.update_run(run.clone());
 
             log::info!("Sub-agent {} completed", run_id_clone);
+
+            // Emit sub-agent completed event to SSE
+            let (success, error) = match &outcome {
+                crate::agent::SubAgentOutcome::Success { .. } => (true, None),
+                crate::agent::SubAgentOutcome::Error { error } => (false, Some(error.clone())),
+                crate::agent::SubAgentOutcome::Timeout { .. } => {
+                    (false, Some("Timeout".to_string()))
+                }
+            };
+
+            event_bus_clone.emit(
+                parent_session_key_clone.clone(),
+                run_id_clone.clone(),
+                1, // run_seq
+                crate::agent::AgentEvent::SubAgentCompleted {
+                    run_id: run_id_clone.clone(),
+                    success,
+                    error,
+                },
+            );
 
             // Trigger announce flow
             if let Some(run) = registry_clone.get_run(&run_id_clone) {
@@ -182,18 +207,16 @@ impl SpawnSubAgentTool {
         task: String,
         session_key: String,
         timeout_secs: u64,
-        provider_factory: Arc<dyn Fn() -> ActiveProvider + Send + Sync>,
-        storage: Arc<dyn crate::history::TreeStore>,
-        runtime: Arc<AgentRuntime>,
+        agent_factory: Arc<AgentFactory>,
+        _runtime: Arc<AgentRuntime>,
     ) -> crate::agent::SubAgentOutcome {
         use crate::agent::SubAgentOutcome;
-        use crate::llm::ToolRegistry;
 
         let start_time = std::time::Instant::now();
 
-        // Create new session for sub-agent
+        // Create new session for sub-agent (use separate sub-agent storage)
         let config = crate::history::SessionConfig::default();
-        let session = match Session::new(storage, config).await {
+        let session = match Session::new(agent_factory.subagent_storage.clone(), config).await {
             Ok(s) => s,
             Err(e) => {
                 return SubAgentOutcome::Error {
@@ -202,16 +225,15 @@ impl SpawnSubAgentTool {
             }
         };
 
-        // Create provider
-        let provider = provider_factory();
-
-        // Create empty tool registry (sub-agents don't have tools by default)
-        let tools = ToolRegistry::new();
-
-        // Create agent
-        let mut agent = Agent::new(session, provider, tools);
-        agent.set_runtime(runtime);
-        agent.set_session_key(session_key);
+        // Create sub-agent using factory (inherits all tools and config from main agent)
+        let mut agent = match agent_factory.create_subagent(session, session_key.clone()) {
+            Ok(a) => a,
+            Err(e) => {
+                return SubAgentOutcome::Error {
+                    error: format!("Failed to create sub-agent: {}", e),
+                };
+            }
+        };
 
         // Execute with timeout
         let result = tokio::time::timeout(
@@ -334,8 +356,7 @@ impl SpawnSubAgentTool {
             self.registry.clone(),
             self.runtime.clone(),
             self.lanes.clone(),
-            self.provider_factory.clone(),
-            self.storage.clone(),
+            self.agent_factory.clone(),
             self.event_bus.clone(),
         )
         .await?;

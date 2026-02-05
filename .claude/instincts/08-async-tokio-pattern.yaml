@@ -1,0 +1,70 @@
+---
+id: aaagent-async-tokio
+trigger: when writing Rust functions that do I/O or call LLM APIs
+confidence: 1.0
+domain: rust
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use Async/Await with Tokio Runtime
+
+## Action
+
+All I/O operations and LLM calls MUST be async:
+
+```rust
+use tokio;
+use anyhow::Result;
+
+// Main entry point
+#[tokio::main]
+async fn main() -> Result<()> {
+    let session = Session::new(store, config).await?;
+    Ok(())
+}
+
+// LLM provider trait
+#[async_trait]
+trait LLMProvider {
+    async fn chat(&self, messages: Vec<Message>) -> Result<Response>;
+}
+
+// Session operations
+impl Session {
+    pub async fn add_user_message(&mut self, content: String) -> Result<NodeId>;
+    pub async fn get_context(&self) -> Result<Vec<Message>>;
+}
+
+// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_feature() {
+        let result = async_operation().await;
+        assert!(result.is_ok());
+    }
+}
+```
+
+## Evidence
+
+- Tokio runtime used throughout codebase
+- All LLM calls are async
+- All Session operations are async
+- Tests use `#[tokio::test]`
+
+## When to Apply
+
+- Implementing LLM provider methods
+- Writing Session operations
+- Any file I/O or network calls
+- Writing async tests
+
+## Related Patterns
+
+- Use `anyhow::Result` for error handling
+- Use `async_trait` for trait methods
+- Use `#[tokio::test]` for async tests

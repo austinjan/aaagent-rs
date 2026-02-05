@@ -8,3 +8,5 @@ export type { SSEStreamOptions, SSEStreamState } from "./useSSEStream";
 
 export { useSkills } from "./useSkills";
 export type { UseSkillsReturn } from "./useSkills";
+
+export { useSubAgentSSE } from "./useSubAgentSSE";

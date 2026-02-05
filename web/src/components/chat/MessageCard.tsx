@@ -54,6 +54,10 @@ export interface MessageCardProps {
 
   // For web search grounding (Gemini only)
   groundingMetadata?: GroundingMetadata;
+
+  // For sub-agent identification
+  subAgentRunId?: string;
+  subAgentLabel?: string;
 }
 
 export function MessageCard({
@@ -73,6 +77,8 @@ export function MessageCard({
   canCreateCheckpoint = false,
   onCreateCheckpoint,
   groundingMetadata,
+  subAgentRunId,
+  subAgentLabel,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -160,6 +166,28 @@ export function MessageCard({
           >
             {roleLabels[role]}
           </span>
+          {subAgentRunId && (
+            <span
+              className="badge badge-sm bg-[#E8C236] text-black border-none gap-1"
+              title={`Sub-agent: ${subAgentLabel || subAgentRunId}`}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2z"
+                />
+              </svg>
+              {subAgentLabel || "Sub-Agent"}
+            </span>
+          )}
           {tool_call_id && (
             <span className="text-xs text-muted-foreground font-mono">
               {tool_call_id}

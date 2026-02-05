@@ -1,0 +1,75 @@
+---
+id: aaagent-inline-tests
+trigger: when writing tests for Rust modules
+confidence: 0.95
+domain: testing
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use Inline Test Modules
+
+## Action
+
+Write tests inline with `#[cfg(test)]` modules:
+
+```rust
+// src/module.rs
+
+pub struct MyStruct {
+    // implementation
+}
+
+impl MyStruct {
+    pub fn method(&self) -> Result<T> {
+        // implementation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_method() {
+        // Use MemoryStore for in-memory testing
+        let store = MemoryStore::new();
+        let session = Session::new(store, config).await.unwrap();
+
+        let result = session.method().await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sync_operation() {
+        let result = sync_operation();
+        assert_eq!(result, expected);
+    }
+}
+```
+
+## Evidence
+
+- 41 Rust test modules found with `#[cfg(test)]`
+- No separate test directory structure
+- Consistent pattern across all modules
+
+## When to Apply
+
+- Writing new Rust modules
+- Adding tests to existing code
+- Refactoring with test coverage
+
+## Testing Patterns
+
+- Use `MemoryStore` for in-memory history testing
+- Mock providers for testing Agent without real API calls
+- Async tests with `#[tokio::test]`
+- Sync tests with `#[test]`
+
+## Benefits
+
+- Tests close to implementation
+- Easy to find related tests
+- No duplicate imports
+- `cargo test` finds all tests automatically

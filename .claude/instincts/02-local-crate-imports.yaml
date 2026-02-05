@@ -1,0 +1,46 @@
+---
+id: aaagent-local-imports
+trigger: when writing Rust import statements
+confidence: 0.95
+domain: rust
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use Local Crate Imports
+
+## Action
+
+Always use `crate::` for local imports, NEVER use the crate name:
+
+**CORRECT**:
+```rust
+use crate::agent::{Agent, AgentRuntime};
+use crate::history::{Session, TreeStore};
+use crate::llm::{LLMProvider, ToolRegistry};
+use crate::api::event_bus::GlobalEventBus;
+```
+
+**INCORRECT**:
+```rust
+use aaagent::agent::Agent;  // Don't use crate name
+use aaagent::history::Session;
+```
+
+## Evidence
+
+- Observed in all recent commits
+- Explicit fix committed: "Use local crate imports in API module instead of aaagent paths"
+- Consistent pattern across all modules
+
+## When to Apply
+
+- Writing new Rust files
+- Refactoring existing imports
+- Adding new module dependencies
+
+## Benefits
+
+- Works in both library and binary contexts
+- Avoids circular dependency issues
+- Clearer that it's an internal import

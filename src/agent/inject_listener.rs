@@ -4,12 +4,12 @@
 //! sub-agents complete and inject their results into the main conversation.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::agent::{AgentFactory, SessionManager};
-use crate::api::event_bus::{GlobalEventBus, InjectMessageEvent, MessageSource};
+use crate::api::event_bus::{GlobalEventBus, InjectMessageEvent};
 
 /// Start the inject listener
 ///

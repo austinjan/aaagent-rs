@@ -322,6 +322,22 @@ export function useChat(options: UseChatOptions = {}) {
           break;
         }
 
+        case "queued_messages": {
+          // Show toast notification for queued messages
+          console.log(`[Queue] Processing ${event.count} queued message(s)`);
+          // TODO: Show toast notification UI
+          break;
+        }
+
+        case "followup_processed": {
+          // Show progress for followup message processing
+          console.log(
+            `[Queue] Processing followup ${event.message_index}/${event.total_queued} from ${event.source}`,
+          );
+          // TODO: Show progress indicator UI
+          break;
+        }
+
         default:
           console.warn("Unknown SSE event type:", event.type);
       }

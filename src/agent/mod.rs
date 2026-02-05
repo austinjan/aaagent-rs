@@ -12,7 +12,6 @@ pub mod announce;
 pub mod inject_listener;
 pub mod runtime;
 pub mod session_manager;
-pub mod spawn_helper;
 pub mod spawn_tool;
 pub mod subagent_registry;
 
@@ -24,7 +23,6 @@ pub use runtime::{
     RunInfo,
 };
 pub use session_manager::SessionManager;
-pub use spawn_helper::{create_agent_with_spawn_tool_async, register_spawn_tool};
 pub use spawn_tool::SpawnSubAgentTool;
 pub use subagent_registry::{CleanupStrategy, SubAgentOutcome, SubAgentRegistry, SubAgentRun};
 
@@ -166,6 +164,14 @@ pub enum AgentEvent {
         total_queued: usize,
         source: String,
     },
+    /// Sub-agent spawned (background task started)
+    SubAgentSpawned { run_id: String, task_label: String },
+    /// Sub-agent completed (background task finished)
+    SubAgentCompleted {
+        run_id: String,
+        success: bool,
+        error: Option<String>,
+    },
     /// Chat completed with final stats
     Done {
         total_usage: TokenUsage,
@@ -209,6 +215,10 @@ pub struct Agent<P: LLMProvider> {
     runtime: Option<Arc<AgentRuntime>>,
     /// Unique session key for this agent instance
     session_key: Option<String>,
+    /// Global event bus for broadcasting events to SSE clients
+    event_bus: Option<Arc<crate::api::event_bus::GlobalEventBus>>,
+    /// Run sequence counter for this agent instance
+    run_seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 use std::sync::Arc;
@@ -225,6 +235,8 @@ impl<P: LLMProvider> Agent<P> {
             runtime: None,
             session_key: None,
             skills_prompt: None,
+            event_bus: None,
+            run_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -244,6 +256,8 @@ impl<P: LLMProvider> Agent<P> {
             skills_prompt: None,
             runtime: None,
             session_key: None,
+            event_bus: None,
+            run_seq: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -304,6 +318,11 @@ impl<P: LLMProvider> Agent<P> {
     /// Set the session key for this agent instance
     pub fn set_session_key(&mut self, session_key: String) {
         self.session_key = Some(session_key);
+    }
+
+    /// Set the global event bus for broadcasting events to SSE clients
+    pub fn set_event_bus(&mut self, event_bus: Arc<crate::api::event_bus::GlobalEventBus>) {
+        self.event_bus = Some(event_bus);
     }
 
     /// Format a collection of queued messages into a single merged message
@@ -409,6 +428,7 @@ impl<P: LLMProvider> Agent<P> {
     {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
+        use std::sync::atomic::Ordering;
 
         // Register run with runtime (if configured)
         let _run_guard =
@@ -417,6 +437,24 @@ impl<P: LLMProvider> Agent<P> {
             } else {
                 None
             };
+
+        // Helper to emit events to both callback and event_bus
+        let event_bus = self.event_bus.clone();
+        let session_key = self.session_key.clone();
+        let run_seq_counter = self.run_seq.clone();
+        let mut emit_event = |event: AgentEvent| {
+            // Call the user callback
+            let fut = on_event(event.clone());
+
+            // Also broadcast to event_bus if configured
+            if let (Some(ref bus), Some(ref session_id)) = (&event_bus, &session_key) {
+                let run_id = session_id.clone(); // Use session_key as run_id for now
+                let run_seq = run_seq_counter.fetch_add(1, Ordering::SeqCst);
+                bus.emit(session_id.clone(), run_id, run_seq, event);
+            }
+
+            fut
+        };
 
         // Track new nodes created during this chat turn
         let mut new_node_ids: Vec<String> = Vec::new();
@@ -459,11 +497,11 @@ impl<P: LLMProvider> Agent<P> {
         while let Some(event) = handle.next().await {
             match event? {
                 LoopStep::Thinking(thought) => {
-                    on_event(AgentEvent::Thinking(thought)).await;
+                    emit_event(AgentEvent::Thinking(thought)).await;
                 }
                 LoopStep::Content(text) => {
                     response_content.push_str(&text);
-                    on_event(AgentEvent::Content(text)).await;
+                    emit_event(AgentEvent::Content(text)).await;
                 }
                 LoopStep::ToolCallsRequested {
                     tool_calls,
@@ -485,7 +523,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Emit tool calls event
-                    on_event(AgentEvent::ToolCallsRequested {
+                    emit_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
                     })
                     .await;
@@ -496,7 +534,7 @@ impl<P: LLMProvider> Agent<P> {
                         for call in &tool_calls {
                             if let Some(detection) = detector.check(call) {
                                 // Emit loop detection event
-                                on_event(AgentEvent::LoopDetected {
+                                emit_event(AgentEvent::LoopDetected {
                                     detection: detection.clone(),
                                 })
                                 .await;
@@ -551,7 +589,7 @@ impl<P: LLMProvider> Agent<P> {
                         };
 
                         // Emit tool result event
-                        on_event(AgentEvent::ToolResult {
+                        emit_event(AgentEvent::ToolResult {
                             tool_call_id: result.tool_call_id.clone(),
                             tool_name: call.name.clone(),
                             result: result.content.clone(),
@@ -625,11 +663,11 @@ impl<P: LLMProvider> Agent<P> {
         // 6. Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
             new_node_ids.push(node_id.clone());
-            on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
+            emit_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
         // 7. Emit done event with stats
-        on_event(AgentEvent::Done {
+        emit_event(AgentEvent::Done {
             total_usage,
             all_tool_calls,
             rounds,
@@ -665,7 +703,7 @@ impl<P: LLMProvider> Agent<P> {
             );
 
             // Emit event to notify about queued messages being processed
-            on_event(AgentEvent::QueuedMessagesReceived {
+            emit_event(AgentEvent::QueuedMessagesReceived {
                 count: total_queued,
             })
             .await;
@@ -697,7 +735,7 @@ impl<P: LLMProvider> Agent<P> {
                         );
 
                         // Emit event for this specific followup
-                        on_event(AgentEvent::FollowupProcessed {
+                        emit_event(AgentEvent::FollowupProcessed {
                             message_index: idx + 1,
                             total_queued,
                             source: source_str,
@@ -776,6 +814,25 @@ impl<P: LLMProvider> Agent<P> {
     {
         use crate::llm::{LoopAction, LoopStep, ToolResult};
         use std::collections::HashMap;
+        use std::sync::atomic::Ordering;
+
+        // Helper to emit events to both callback and event_bus
+        let event_bus = self.event_bus.clone();
+        let session_key = self.session_key.clone();
+        let run_seq_counter = self.run_seq.clone();
+        let mut emit_event = |event: AgentEvent| {
+            // Call the user callback
+            let fut = on_event(event.clone());
+
+            // Also broadcast to event_bus if configured
+            if let (Some(ref bus), Some(ref session_id)) = (&event_bus, &session_key) {
+                let run_id = session_id.clone(); // Use session_key as run_id for now
+                let run_seq = run_seq_counter.fetch_add(1, Ordering::SeqCst);
+                bus.emit(session_id.clone(), run_id, run_seq, event);
+            }
+
+            fut
+        };
 
         // Track new nodes created during this chat turn
         let mut new_node_ids: Vec<String> = Vec::new();
@@ -822,11 +879,11 @@ impl<P: LLMProvider> Agent<P> {
         while let Some(event) = handle.next().await {
             match event? {
                 LoopStep::Thinking(thought) => {
-                    on_event(AgentEvent::Thinking(thought)).await;
+                    emit_event(AgentEvent::Thinking(thought)).await;
                 }
                 LoopStep::Content(text) => {
                     response_content.push_str(&text);
-                    on_event(AgentEvent::Content(text)).await;
+                    emit_event(AgentEvent::Content(text)).await;
                 }
                 LoopStep::ToolCallsRequested {
                     tool_calls,
@@ -848,7 +905,7 @@ impl<P: LLMProvider> Agent<P> {
                     }
 
                     // Emit tool calls event
-                    on_event(AgentEvent::ToolCallsRequested {
+                    emit_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
                     })
                     .await;
@@ -859,7 +916,7 @@ impl<P: LLMProvider> Agent<P> {
                         for call in &tool_calls {
                             if let Some(detection) = detector.check(call) {
                                 // Emit loop detection event
-                                on_event(AgentEvent::LoopDetected {
+                                emit_event(AgentEvent::LoopDetected {
                                     detection: detection.clone(),
                                 })
                                 .await;
@@ -914,7 +971,7 @@ impl<P: LLMProvider> Agent<P> {
                         };
 
                         // Emit tool result event
-                        on_event(AgentEvent::ToolResult {
+                        emit_event(AgentEvent::ToolResult {
                             tool_call_id: result.tool_call_id.clone(),
                             tool_name: call.name.clone(),
                             result: result.content.clone(),
@@ -988,11 +1045,11 @@ impl<P: LLMProvider> Agent<P> {
         // Auto checkpoint if needed
         if let Some((node_id, strategy)) = self.auto_checkpoint_if_needed().await? {
             new_node_ids.push(node_id.clone());
-            on_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
+            emit_event(AgentEvent::CheckpointCreated { node_id, strategy }).await;
         }
 
         // Emit done event with stats
-        on_event(AgentEvent::Done {
+        emit_event(AgentEvent::Done {
             total_usage,
             all_tool_calls,
             rounds,

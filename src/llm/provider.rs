@@ -112,7 +112,7 @@ impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             temperature: 1.0,
-            max_tokens: 40960, // Increased from 4096 to support longer responses
+            max_tokens: 16384, // Safe default for OpenAI (gpt-4o/gpt-5 max: 16384), Anthropic (Claude max: 8192), Gemini (varies)
             top_p: None,
             top_k: None,
             enable_reasoning: false,

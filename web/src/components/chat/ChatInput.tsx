@@ -1,12 +1,16 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react";
-import { Send, Loader2, Globe } from "lucide-react";
+import { Send, Loader2, Globe, Bot } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 import { SkillPicker, SkillChip } from "./SkillPicker";
 import type { Skill, SkillError } from "../../types/backend";
 
 export interface ChatInputProps {
-  onSend: (message: string, selectedSkill?: Skill) => void;
+  onSend: (
+    message: string,
+    selectedSkill?: Skill,
+    useSubAgent?: boolean,
+  ) => void;
   disabled?: boolean;
   placeholder?: string;
   enableWebSearch?: boolean;
@@ -36,6 +40,7 @@ export function ChatInput({
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
+  const [useSubAgent, setUseSubAgent] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-resize textarea based on content
@@ -55,9 +60,10 @@ export function ChatInput({
   const handleSend = () => {
     const trimmed = message.trim();
     if (trimmed && !disabled) {
-      onSend(trimmed, selectedSkill ?? undefined);
+      onSend(trimmed, selectedSkill ?? undefined, useSubAgent);
       setMessage("");
       setSelectedSkill(null); // Clear skill after sending
+      setUseSubAgent(false); // Clear sub-agent flag
       // Reset textarea height
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -108,6 +114,21 @@ export function ChatInput({
                 <span>Web Search</span>
               </Button>
             )}
+            {/* Sub-Agent toggle button */}
+            <Button
+              variant={useSubAgent ? "default" : "outline"}
+              size="sm"
+              onClick={() => setUseSubAgent(!useSubAgent)}
+              disabled={disabled}
+              className={cn(
+                "gap-2 transition-all",
+                useSubAgent && "bg-yellow-500 text-black hover:bg-yellow-600",
+              )}
+              title="Run task in background sub-agent"
+            >
+              <Bot className="h-4 w-4" />
+              <span>Sub-Agent</span>
+            </Button>
             {showSkills && (
               <SkillPicker
                 skills={skills}

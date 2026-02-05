@@ -46,6 +46,7 @@ impl AppState {
         // Ensure data directories exist
         std::fs::create_dir_all("data")?;
         std::fs::create_dir_all("data/temp")?;
+        std::fs::create_dir_all("data/sub-agent-sessions")?;
 
         // Load configuration
         let config_resolver = Arc::new(ConfigResolver::new()?);
@@ -62,6 +63,15 @@ impl AppState {
         let store = Arc::new(
             crate::history::JSONLStore::new_with_sync_every("data".into(), sync_every_writes)
                 .await?,
+        );
+
+        // Initialize separate storage for sub-agent sessions
+        let subagent_store = Arc::new(
+            crate::history::JSONLStore::new_with_sync_every(
+                "data/sub-agent-sessions".into(),
+                sync_every_writes,
+            )
+            .await?,
         );
 
         // Run startup cleanup in background
@@ -113,6 +123,7 @@ impl AppState {
             Arc::clone(&registry),
             Arc::clone(&event_bus),
             Arc::clone(&store) as Arc<dyn TreeStore>,
+            Arc::clone(&subagent_store) as Arc<dyn TreeStore>,
             8, // max_concurrent sub-agents
         ));
 
@@ -1924,6 +1935,21 @@ mod sse {
                                 }),
                             }
                         }
+                        crate::agent::AgentEvent::SubAgentSpawned { run_id, task_label } => SseEventData {
+                            event_type: "subagent_spawned",
+                            data: serde_json::json!({
+                                "run_id": run_id,
+                                "task_label": task_label
+                            }),
+                        },
+                        crate::agent::AgentEvent::SubAgentCompleted { run_id, success, error } => SseEventData {
+                            event_type: "subagent_completed",
+                            data: serde_json::json!({
+                                "run_id": run_id,
+                                "success": success,
+                                "error": error
+                            }),
+                        },
                     }
                 }
             })
@@ -2079,6 +2105,21 @@ mod sse {
                                 }),
                             }
                         }
+                        crate::agent::AgentEvent::SubAgentSpawned { run_id, task_label } => SseEventData {
+                            event_type: "subagent_spawned",
+                            data: serde_json::json!({
+                                "run_id": run_id,
+                                "task_label": task_label
+                            }),
+                        },
+                        crate::agent::AgentEvent::SubAgentCompleted { run_id, success, error } => SseEventData {
+                            event_type: "subagent_completed",
+                            data: serde_json::json!({
+                                "run_id": run_id,
+                                "success": success,
+                                "error": error
+                            }),
+                        },
                     }
                 }
             })

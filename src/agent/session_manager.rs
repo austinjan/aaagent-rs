@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::history::{MemoryStore, Session, SessionConfig, TreeStore};
+use crate::history::{Session, SessionConfig, TreeStore};
 
 /// Manages session lifecycle and caching
 ///
