@@ -46,6 +46,7 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
     token_usage: msg.token_usage,
+    groundingMetadata: msg.groundingMetadata,
   };
 }
 
