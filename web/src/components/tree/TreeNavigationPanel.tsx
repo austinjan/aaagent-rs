@@ -3,12 +3,14 @@
 import { useState, useRef, useMemo } from "react";
 import { TreeVisualization } from "./TreeVisualization";
 import { NodeDetailsPanel } from "./NodeDetailsPanel";
+import { TreeStatsPanel } from "./TreeStatsPanel";
 import type { TreeNode } from "./treeLayout";
 
 export interface TreeNavigationPanelProps {
   nodes: TreeNode[];
   activeLeafId: string;
   selectedNodeId?: string | null;
+  sessionId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
   onBranchSwitch?: (nodeId: string) => void;
 }
@@ -17,10 +19,12 @@ export function TreeNavigationPanel({
   nodes,
   activeLeafId,
   selectedNodeId,
+  sessionId,
   onNodeSelect,
   onBranchSwitch,
 }: TreeNavigationPanelProps) {
   const [showInactive] = useState(true); // Always show inactive branches
+  const [showStats, setShowStats] = useState(true); // Show stats by default
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Find the selected node from nodes array
@@ -67,28 +71,49 @@ export function TreeNavigationPanel({
   };
 
   return (
-    <div className="tree-panel h-full flex bg-background">
-      {/* Tree Visualization */}
-      <div ref={containerRef} className="flex-1 overflow-auto bg-background">
-        <TreeVisualization
-          nodes={nodes}
-          activeLeafId={activeLeafId}
-          selectedNodeId={selectedNodeId}
-          showInactive={showInactive}
-          onNodeSelect={handleNodeSelect}
-          onNodeDoubleClick={handleNodeDoubleClick}
-        />
+    <div className="tree-panel h-full flex flex-col bg-background">
+      {/* Stats Toggle Button */}
+      <div className="p-2 border-b border-border bg-background flex justify-end">
+        <button
+          onClick={() => setShowStats(!showStats)}
+          className="px-3 py-1 text-sm rounded-lg border border-border hover:bg-base-200 transition-colors flex items-center gap-2"
+        >
+          <span>📊</span>
+          <span>{showStats ? "Hide Stats" : "Show Stats"}</span>
+        </button>
       </div>
 
-      {/* Node Details Panel */}
-      {selectedNode && (
-        <div className="w-96 flex-shrink-0">
-          <NodeDetailsPanel
-            node={selectedNode}
-            onClose={() => onNodeSelect?.("")}
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Tree Visualization */}
+        <div ref={containerRef} className="flex-1 overflow-auto bg-background">
+          {/* Stats Panel (Collapsible) */}
+          {showStats && sessionId && (
+            <div className="p-4">
+              <TreeStatsPanel sessionId={sessionId} />
+            </div>
+          )}
+
+          <TreeVisualization
+            nodes={nodes}
+            activeLeafId={activeLeafId}
+            selectedNodeId={selectedNodeId}
+            showInactive={showInactive}
+            onNodeSelect={handleNodeSelect}
+            onNodeDoubleClick={handleNodeDoubleClick}
           />
         </div>
-      )}
+
+        {/* Node Details Panel */}
+        {selectedNode && (
+          <div className="w-96 flex-shrink-0">
+            <NodeDetailsPanel
+              node={selectedNode}
+              onClose={() => onNodeSelect?.("")}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

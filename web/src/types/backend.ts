@@ -65,6 +65,7 @@ export interface Node {
   flags: NodeFlags;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  token_usage?: TokenUsage; // Token usage for this node (typically on Assistant messages)
   pruned_at?: number;
   metadata?: Record<string, unknown>;
   // Checkpoint data (included when node has a checkpoint)
@@ -102,6 +103,7 @@ export interface NodeData {
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  token_usage?: TokenUsage;
   created_at: number;
 }
 
@@ -130,7 +132,12 @@ export type AgentEvent =
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
-  total_tokens: number;
+  cached_tokens: number;
+}
+
+// Helper to calculate total tokens
+export function getTotalTokens(usage: TokenUsage): number {
+  return usage.input_tokens + usage.output_tokens;
 }
 
 // ============================================================================
@@ -283,6 +290,9 @@ export interface MessageData {
 
   isStreaming?: boolean;
 
+  // Token usage (typically for Assistant messages)
+  token_usage?: TokenUsage;
+
   // Checkpoint data (if this message has a checkpoint)
   hasCheckpoint?: boolean;
   checkpoint?: {
@@ -391,4 +401,50 @@ export interface SkillsResponse {
     details: SkillError[];
   };
   summary: string;
+}
+
+// ============================================================================
+// Collapse State Types
+// ============================================================================
+
+export interface CollapsedState {
+  collapsed_nodes: NodeId[];
+  collapsed_tool_groups: Record<NodeId, NodeId[]>; // assistant_id -> tool_result_ids
+}
+
+export interface CollapseNodeResponse {
+  success: boolean;
+  collapsed_nodes: NodeId[];
+  collapsed_tool_groups: Record<NodeId, NodeId[]>;
+}
+
+// ============================================================================
+// Tree Statistics Types
+// ============================================================================
+
+export interface TreeStatsResponse {
+  session_id: string;
+  token_usage: {
+    // Primary metric: current context window size (input tokens from latest response)
+    active_path_tokens: number;
+    // Breakdown metrics for transparency
+    active_path_chars: number; // Character count
+    path_output_tokens: number; // Sum of output tokens (content generated)
+    current_context_tokens: number | null; // Input tokens from latest response
+    char_estimate_tokens: number; // Rough estimate (chars / 4)
+    // Checkpoint-related metrics
+    last_checkpoint_id: string | null;
+    estimated_after_checkpoint: number;
+    potential_token_savings: number;
+    estimated_compression_ratio: number;
+  };
+  node_counts: {
+    total: number;
+    user: number;
+    assistant: number;
+    tool: number;
+    system: number;
+    checkpoint: number;
+    active_path: number;
+  };
 }

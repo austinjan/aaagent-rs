@@ -18,6 +18,9 @@ import type {
   ContextStringStrategy,
   ContextStringResponse,
   SkillsResponse,
+  TokenUsage,
+  CollapsedState,
+  CollapseNodeResponse,
 } from "../types/backend";
 
 const API_BASE = "/api";
@@ -321,6 +324,7 @@ export interface TreeNodeData {
     arguments: Record<string, unknown>;
   }>;
   tool_call_id?: string;
+  token_usage?: TokenUsage;
   created_at: number;
   children_count: number;
   has_checkpoint?: boolean;
@@ -343,6 +347,13 @@ export async function getSessionTree(
 ): Promise<SessionTreeResponse> {
   const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree`);
   return handleResponse<SessionTreeResponse>(response);
+}
+
+export async function getTreeStats(
+  sessionId: string,
+): Promise<import("../types/backend").TreeStatsResponse> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/tree-stats`);
+  return handleResponse<import("../types/backend").TreeStatsResponse>(response);
 }
 
 // ============================================================================
@@ -423,4 +434,70 @@ export async function getContextString(
 export async function getSkills(): Promise<SkillsResponse> {
   const response = await fetch(`${API_BASE}/skills`);
   return handleResponse<SkillsResponse>(response);
+}
+
+// ============================================================================
+// Node Collapse/Expand Operations
+// ============================================================================
+
+export async function collapseNode(
+  sessionId: string,
+  nodeId: string,
+): Promise<CollapseNodeResponse> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/nodes/${nodeId}/collapse`,
+    { method: "POST" },
+  );
+  return handleResponse<CollapseNodeResponse>(response);
+}
+
+export async function expandNode(
+  sessionId: string,
+  nodeId: string,
+): Promise<CollapseNodeResponse> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/nodes/${nodeId}/expand`,
+    { method: "POST" },
+  );
+  return handleResponse<CollapseNodeResponse>(response);
+}
+
+export async function collapseToolGroup(
+  sessionId: string,
+  assistantNodeId: string,
+): Promise<CollapseNodeResponse> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/nodes/${assistantNodeId}/collapse-tool-group`,
+    { method: "POST" },
+  );
+  return handleResponse<CollapseNodeResponse>(response);
+}
+
+export async function getCollapsedState(
+  sessionId: string,
+): Promise<CollapsedState> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/collapsed-state`,
+  );
+  return handleResponse<CollapsedState>(response);
+}
+
+export async function collapseAllTools(
+  sessionId: string,
+): Promise<CollapseNodeResponse> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/collapse-all-tools`,
+    { method: "POST" },
+  );
+  return handleResponse<CollapseNodeResponse>(response);
+}
+
+export async function expandAll(
+  sessionId: string,
+): Promise<CollapseNodeResponse> {
+  const response = await fetch(
+    `${API_BASE}/sessions/${sessionId}/expand-all`,
+    { method: "POST" },
+  );
+  return handleResponse<CollapseNodeResponse>(response);
 }

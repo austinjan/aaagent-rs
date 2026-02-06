@@ -53,6 +53,7 @@ function convertNodesToMessages(nodes: NodeData[]): MessageData[] {
       is_error: false,
       timestamp: new Date(node.created_at * 1000),
       isStreaming: false,
+      token_usage: node.token_usage, // Include token usage if present
     });
   }
 
@@ -90,6 +91,7 @@ function backendNodesToTreeNodes(
       checkpointSummary: node.checkpoint?.summary,
       tool_calls: node.tool_calls,
       tool_call_id: node.tool_call_id,
+      token_usage: node.token_usage,
     };
   });
 }
@@ -164,33 +166,45 @@ export function useChat(options: UseChatOptions = {}) {
         }
 
         case "tool_calls": {
-          // Add tool_calls to the last Assistant message
+          // Get content from event (may be empty if LLM didn't send content before tool calls)
+          const toolCallsContent = (event.content as string) || "";
+          const toolCalls = event.tool_calls as Array<{
+            id: string;
+            name: string;
+            arguments: Record<string, unknown>;
+          }>;
+
+          // Try to find last streaming Assistant message
           const lastMsgTools = currentMessages[currentMessages.length - 1];
+
           if (
             lastMsgTools?.isStreaming &&
             lastMsgTools.role === Role.Assistant
           ) {
+            // Update existing streaming Assistant message
             store.updateMessage(lastMsgTools.id, {
+              content: lastMsgTools.content + toolCallsContent,
               isStreaming: false,
-              tool_calls: event.tool_calls as Array<{
-                id: string;
-                name: string;
-                arguments: Record<string, unknown>;
-              }>,
+              tool_calls: toolCalls,
             });
             store.stopStreaming();
-          }
 
-          // Add tool calls to streaming state
-          if (lastMsgTools) {
-            store.addToolCalls(
-              lastMsgTools.id,
-              event.tool_calls as Array<{
-                id: string;
-                name: string;
-                arguments: Record<string, unknown>;
-              }>,
-            );
+            // Add tool calls to streaming state
+            store.addToolCalls(lastMsgTools.id, toolCalls);
+          } else {
+            // No streaming Assistant message found - create a new one
+            // This happens when LLM directly calls tools without sending content first
+            const newAssistantMsg: MessageData = {
+              id: `assistant-${Date.now()}`,
+              role: Role.Assistant,
+              content: toolCallsContent,
+              timestamp: new Date(),
+              isStreaming: false,
+              tool_calls: toolCalls,
+            };
+
+            store.addMessage(newAssistantMsg);
+            store.addToolCalls(newAssistantMsg.id, toolCalls);
           }
 
           // Don't create separate messages - tool_calls are now part of the assistant message
@@ -509,6 +523,7 @@ export function useChat(options: UseChatOptions = {}) {
           is_error: false,
           timestamp: new Date(node.created_at * 1000),
           isStreaming: false,
+          token_usage: node.token_usage, // Include token usage if present
           ...checkpointInfo,
         });
 

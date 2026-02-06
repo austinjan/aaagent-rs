@@ -10,7 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
+import { ChevronDown, GitBranch, Bookmark, Eye, EyeOff } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -53,6 +53,17 @@ export interface MessageCardProps {
 
   // For web search grounding (Gemini only)
   groundingMetadata?: GroundingMetadata;
+
+  // Token usage (typically for Assistant messages)
+  token_usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+  };
+
+  // Collapse state
+  isCollapsed?: boolean;
+  onToggleCollapse?: (id: string) => void;
 }
 
 export function MessageCard({
@@ -71,6 +82,9 @@ export function MessageCard({
   canCreateCheckpoint = false,
   onCreateCheckpoint,
   groundingMetadata,
+  token_usage,
+  isCollapsed = false,
+  onToggleCollapse,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -194,6 +208,27 @@ export function MessageCard({
                 <Bookmark className="h-3.5 w-3.5" />
               </Button>
             )}
+          {/* Collapse button - for all non-system messages, hidden during streaming */}
+          {onToggleCollapse &&
+            role !== "system" &&
+            !isStreaming && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse(id);
+                }}
+                title={isCollapsed ? "Expand" : "Collapse"}
+              >
+                {isCollapsed ? (
+                  <Eye className="h-3.5 w-3.5" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            )}
           {/* Branch button - only for user/assistant messages, hidden during streaming */}
           {onCreateBranch &&
             role !== "tool" &&
@@ -260,6 +295,22 @@ export function MessageCard({
             // Other messages: render as markdown
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           )}
+        </div>
+      )}
+
+      {/* Token usage (for Assistant messages) */}
+      {role === "assistant" && token_usage && !isStreaming && (
+        <div className="mt-3 pt-2 border-t border-border/50 text-xs text-muted-foreground flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <span className="font-medium">📊</span>
+            <span>
+              {(token_usage.input_tokens + token_usage.output_tokens).toLocaleString()} tokens
+            </span>
+          </span>
+          <span className="text-muted-foreground/70">
+            ({token_usage.input_tokens.toLocaleString()} in + {token_usage.output_tokens.toLocaleString()} out
+            {token_usage.cached_tokens > 0 && ` + ${token_usage.cached_tokens.toLocaleString()} cached`})
+          </span>
         </div>
       )}
 
