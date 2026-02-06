@@ -65,6 +65,7 @@ export interface Node {
   flags: NodeFlags;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  token_usage?: TokenUsage; // Token usage for this node (typically on Assistant messages)
   pruned_at?: number;
   metadata?: Record<string, unknown>;
   // Checkpoint data (included when node has a checkpoint)
@@ -130,7 +131,12 @@ export type AgentEvent =
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
-  total_tokens: number;
+  cached_tokens: number;
+}
+
+// Helper to calculate total tokens
+export function getTotalTokens(usage: TokenUsage): number {
+  return usage.input_tokens + usage.output_tokens;
 }
 
 // ============================================================================
@@ -282,6 +288,9 @@ export interface MessageData {
   is_error?: boolean;
 
   isStreaming?: boolean;
+
+  // Token usage (typically for Assistant messages)
+  token_usage?: TokenUsage;
 
   // Checkpoint data (if this message has a checkpoint)
   hasCheckpoint?: boolean;

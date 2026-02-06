@@ -118,7 +118,7 @@ ${buildTree(root.node_id)}
 
 export function TreeStatsPanel({ sessionId, onClose }: TreeStatsPanelProps) {
   const [stats, setStats] = useState<TreeStatsResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
@@ -126,11 +126,14 @@ export function TreeStatsPanel({ sessionId, onClose }: TreeStatsPanelProps) {
   useEffect(() => {
     if (!sessionId) {
       setStats(null);
+      setInitialLoad(true);
       return;
     }
 
-    const fetchStats = async () => {
-      setLoading(true);
+    const fetchStats = async (isInitial = false) => {
+      if (isInitial) {
+        setInitialLoad(true);
+      }
       setError(null);
       try {
         const data = await getTreeStats(sessionId);
@@ -139,18 +142,21 @@ export function TreeStatsPanel({ sessionId, onClose }: TreeStatsPanelProps) {
         console.error("Failed to fetch tree stats:", err);
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
-        setLoading(false);
+        if (isInitial) {
+          setInitialLoad(false);
+        }
       }
     };
 
-    fetchStats();
+    // Initial fetch
+    fetchStats(true);
 
-    // Refresh stats every 10 seconds
-    const interval = setInterval(fetchStats, 10000);
+    // Refresh stats every 10 seconds (background refresh, no loading state)
+    const interval = setInterval(() => fetchStats(false), 10000);
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  if (!sessionId || loading) {
+  if (!sessionId || initialLoad) {
     return (
       <div className="p-4 bg-base-200 rounded-lg">
         <div className="animate-pulse">

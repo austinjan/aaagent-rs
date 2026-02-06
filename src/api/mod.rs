@@ -1804,9 +1804,12 @@ mod sse {
                             event_type: "thinking",
                             data: serde_json::json!({ "text": text }),
                         },
-                        crate::agent::AgentEvent::ToolCallsRequested { tool_calls } => SseEventData {
+                        crate::agent::AgentEvent::ToolCallsRequested { tool_calls, content } => SseEventData {
                             event_type: "tool_calls",
-                            data: serde_json::json!({ "tool_calls": tool_calls }),
+                            data: serde_json::json!({
+                                "tool_calls": tool_calls,
+                                "content": content,
+                            }),
                         },
                         crate::agent::AgentEvent::ToolResult {
                             tool_call_id,

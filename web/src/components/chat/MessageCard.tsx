@@ -53,6 +53,13 @@ export interface MessageCardProps {
 
   // For web search grounding (Gemini only)
   groundingMetadata?: GroundingMetadata;
+
+  // Token usage (typically for Assistant messages)
+  token_usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+  };
 }
 
 export function MessageCard({
@@ -71,6 +78,7 @@ export function MessageCard({
   canCreateCheckpoint = false,
   onCreateCheckpoint,
   groundingMetadata,
+  token_usage,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -260,6 +268,22 @@ export function MessageCard({
             // Other messages: render as markdown
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           )}
+        </div>
+      )}
+
+      {/* Token usage (for Assistant messages) */}
+      {role === "assistant" && token_usage && !isStreaming && (
+        <div className="mt-3 pt-2 border-t border-border/50 text-xs text-muted-foreground flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <span className="font-medium">📊</span>
+            <span>
+              {(token_usage.input_tokens + token_usage.output_tokens).toLocaleString()} tokens
+            </span>
+          </span>
+          <span className="text-muted-foreground/70">
+            ({token_usage.input_tokens.toLocaleString()} in + {token_usage.output_tokens.toLocaleString()} out
+            {token_usage.cached_tokens > 0 && ` + ${token_usage.cached_tokens.toLocaleString()} cached`})
+          </span>
         </div>
       )}
 

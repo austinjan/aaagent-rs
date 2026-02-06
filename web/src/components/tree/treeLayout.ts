@@ -24,6 +24,13 @@ export interface TreeNode {
   // Tool-related fields
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+
+  // Token usage (typically for Assistant messages)
+  token_usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+  };
 }
 
 export interface PositionedNode extends TreeNode {
