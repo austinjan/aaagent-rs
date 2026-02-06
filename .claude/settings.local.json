@@ -27,7 +27,12 @@
       "Bash(jq:*)",
       "Bash(lsof:*)",
       "Bash(xargs:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(bat:*)",
+      "Bash(netstat:*)",
+      "Bash(npm run dev)",
+      "Bash(ls:*)",
+      "Bash(git worktree:*)"
     ]
   }
 }

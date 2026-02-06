@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::VecDeque;
 
 /// Action to take when a loop is detected
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LoopAction {
     /// Continue execution, ignore the loop
     Continue,
@@ -69,7 +69,7 @@ impl Default for LoopDetectorConfig {
 }
 
 /// Type of loop detected
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LoopType {
     /// Exact duplicate: same tool called with same arguments repeatedly
     ExactDuplicate {
@@ -89,7 +89,7 @@ pub enum LoopType {
 }
 
 /// Loop detection result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LoopDetection {
     /// Whether a loop was detected
     pub detected: bool,

@@ -1,0 +1,61 @@
+---
+id: aaagent-stateless-providers
+trigger: when implementing LLM providers or agent components
+confidence: 1.0
+domain: architecture
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Keep Providers Stateless, Sessions Stateful
+
+## Action
+
+**Critical architectural principle**:
+
+1. **Providers are stateless** - `LLMProvider` trait takes linear message history and returns responses
+2. **Sessions are stateful** - `Session` manages tree structure, branching, context optimization
+3. **Agent combines both** - Uses Session for tree operations, Provider for LLM calls
+
+```rust
+// Providers don't store history
+trait LLMProvider {
+    async fn chat(&self, messages: Vec<Message>) -> Result<Response>;
+}
+
+// Sessions manage the tree
+impl Session {
+    pub async fn add_user_message(&mut self, content: String) -> NodeId;
+    pub async fn get_context(&self) -> Vec<Message>;
+}
+
+// Agent orchestrates
+impl Agent {
+    pub async fn chat(&mut self, user_msg: String) -> Result<String> {
+        self.session.add_user_message(user_msg).await?;
+        let context = self.session.get_context().await?;
+        let response = self.provider.chat(context).await?;
+        self.session.add_assistant_message(response).await?;
+    }
+}
+```
+
+## Evidence
+
+- Documented in CLAUDE.md "Key Architectural Patterns"
+- Consistent across OpenAI, Anthropic, Gemini providers
+- History moved out of providers in Phase 6: "feat(phase6): Remove history management from LLM providers"
+
+## When to Apply
+
+- Implementing new LLM providers
+- Refactoring agent components
+- Adding new provider features
+- Designing Session operations
+
+## Benefits
+
+- Providers can be reused across sessions
+- Easy to swap providers
+- Clear separation of concerns
+- Enables tree-based history without provider changes

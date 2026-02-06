@@ -1,0 +1,57 @@
+---
+id: aaagent-file-cochange
+trigger: when implementing features that touch backend API or frontend chat UI
+confidence: 0.88
+domain: workflow
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Expect These Files to Change Together
+
+## Action
+
+When implementing features, expect these file groups to change together:
+
+### Backend API Changes (21 co-changes)
+```
+src/api/mod.rs          # Core API orchestration
+src/agent/mod.rs        # Agent implementation
+src/history/session.rs  # Session management
+src/llm/provider.rs     # Provider interface
+```
+
+### Frontend Chat UI (15+ co-changes)
+```
+web/src/pages/Chat.tsx                      # Main chat page
+web/src/hooks/useChat.ts                    # Chat logic hook
+web/src/components/chat/MessageCard.tsx     # Message rendering
+web/src/services/api.ts                     # API client
+web/src/types/backend.ts                    # Type definitions
+```
+
+### Tree Visualization (7+ co-changes)
+```
+web/src/components/tree/TreeNavigationPanel.tsx
+web/src/components/tree/TreeNode.tsx
+web/src/components/tree/treeLayout.ts
+```
+
+## Evidence
+
+- Analyzed file change frequency across 200 commits
+- Consistent co-change patterns observed
+- Example commit: "Add branching and checkpoint UI"
+  - Modified: session.rs, mod.rs (api), backend.ts, Chat.tsx, tree components
+
+## When to Apply
+
+- Planning feature implementation
+- Reviewing feature scope
+- Estimating change impact
+
+## Benefits
+
+- Anticipate which files need updates
+- Ensure consistent changes across layers
+- Catch missing updates early

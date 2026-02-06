@@ -1,0 +1,52 @@
+---
+id: aaagent-descriptive-commits
+trigger: when writing a commit message
+confidence: 0.82
+domain: git
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use Descriptive Commit Messages
+
+## Action
+
+Prefer highly descriptive commit messages over conventional commit prefixes:
+
+**PREFERRED** (82% of commits):
+```
+Add [feature name] and [related changes]
+Fix [specific issue] by [solution approach]
+Improve [component] and [enhancement]
+```
+
+**Examples from repo**:
+- "Add checkpoint creation UI and improve tree visualization"
+- "Fix minimap ID mismatch by sending full node data in SSE done event"
+- "Improve session persistence and UI rendering for chat and tree navigation"
+
+**ALTERNATIVE** (18% of commits):
+```
+feat: [feature description]
+fix: [bug description]
+docs: [documentation change]
+```
+
+## Evidence
+
+- Analyzed 200 commits
+- 82% use descriptive format without prefix
+- 18% use conventional commits (feat:, fix:, docs:, chore:)
+- Descriptive commits provide more context and detail
+
+## When to Apply
+
+- Writing any commit message
+- Especially for feature additions and bug fixes
+- When multiple components are affected in one commit
+
+## Related Patterns
+
+- Start with action verb (Add, Fix, Merge, Improve, Update)
+- Be specific about what changed and why
+- Reference affected components in the message

@@ -351,6 +351,28 @@ async fn run_agent_loop<P: LLMProvider>(
                             strategy
                         );
                     }
+                    AgentEvent::QueuedMessagesReceived { count } => {
+                        println!("\n>>> Event: QueuedMessagesReceived");
+                        log::info!("📬 Processing {} queued message(s)", count);
+                        println!("    📬 Processing {} queued message(s)", count);
+                    }
+                    AgentEvent::FollowupProcessed {
+                        message_index,
+                        total_queued,
+                        source,
+                    } => {
+                        println!("\n>>> Event: FollowupProcessed");
+                        log::info!(
+                            "📨 Processing followup message {}/{} from {}",
+                            message_index,
+                            total_queued,
+                            source
+                        );
+                        println!(
+                            "    📨 Followup {}/{} from {}",
+                            message_index, total_queued, source
+                        );
+                    }
                     AgentEvent::Done {
                         total_usage,
                         all_tool_calls,

@@ -22,6 +22,9 @@ import type {
   CollapsedState,
   CollapseNodeResponse,
 } from "../types/backend";
+import type { SessionMetrics as SessionMetricsType } from "../types/backend";
+
+export type { SessionMetricsType as SessionMetrics };
 
 const API_BASE = "/api";
 
@@ -266,6 +269,15 @@ export interface CreateBranchResponse {
   error?: string;
 }
 
+/**
+ * Switch active branch to a specific node.
+ * Next message will be appended as a CHILD of this node (continue conversation).
+ *
+ * Use case: "Branch After" / "Continue from here"
+ * - User selects a message in history
+ * - Wants to continue conversation from that point
+ * - Next message becomes a child of the selected node
+ */
 export async function switchBranch(
   sessionId: string,
   nodeId: string,
@@ -281,6 +293,15 @@ export async function switchBranch(
   return handleResponse<SwitchBranchResponse>(response);
 }
 
+/**
+ * Create a branch from a specific node.
+ * Next message will be appended as a SIBLING of this node (alternative version).
+ *
+ * Use case: "Branch Alternative" / "Create alternative"
+ * - User selects a message they want to create an alternative for
+ * - Next message becomes a sibling of the selected node (same parent)
+ * - Useful for retrying a response or exploring different approaches
+ */
 export async function createBranch(
   sessionId: string,
   fromNodeId: string,
@@ -349,6 +370,13 @@ export async function getSessionTree(
   return handleResponse<SessionTreeResponse>(response);
 }
 
+export async function getSessionMetrics(
+  sessionId: string,
+): Promise<SessionMetricsType> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/metrics`);
+  return handleResponse<SessionMetricsType>(response);
+}
+
 export async function getTreeStats(
   sessionId: string,
 ): Promise<import("../types/backend").TreeStatsResponse> {
@@ -365,6 +393,13 @@ export function getStreamUrl(sessionId: string, streamId: string): string {
   const isDev = import.meta.env.DEV;
   const baseUrl = isDev ? "http://localhost:3000" : "";
   return `${baseUrl}/api/sessions/${sessionId}/stream/${streamId}`;
+}
+
+export function getSessionEventsUrl(sessionId: string): string {
+  // EventSource requires absolute URLs in development mode (Vite proxy doesn't work with EventSource)
+  const isDev = import.meta.env.DEV;
+  const baseUrl = isDev ? "http://localhost:3000" : "";
+  return `${baseUrl}/api/sessions/${sessionId}/events`;
 }
 
 // ============================================================================

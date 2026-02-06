@@ -5,14 +5,14 @@ import remarkGfm from "remark-gfm";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolCallCard } from "./ToolCallCard";
 import { GroundingSources, type GroundingMetadata } from "./GroundingSources";
+import { MessageToolbar } from "./MessageToolbar";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown, GitBranch, Bookmark, Eye, EyeOff } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
-import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 export interface ToolCall {
@@ -39,8 +39,9 @@ export interface MessageCardProps {
   isSelected?: boolean;
   onSelect?: (id: string) => void;
 
-  // Branch creation
-  onCreateBranch?: (id: string) => void;
+  // Branch creation (two modes)
+  onBranchAfter?: (id: string) => void;
+  onBranchAlternative?: (id: string) => void;
 
   // Checkpoint creation (only for creating new checkpoints)
   canCreateCheckpoint?: boolean;
@@ -53,6 +54,10 @@ export interface MessageCardProps {
 
   // For web search grounding (Gemini only)
   groundingMetadata?: GroundingMetadata;
+
+  // For sub-agent identification
+  subAgentRunId?: string;
+  subAgentLabel?: string;
 
   // Token usage (typically for Assistant messages)
   token_usage?: {
@@ -78,10 +83,13 @@ export function MessageCard({
   isStreaming = false,
   isSelected = false,
   onSelect,
-  onCreateBranch,
+  onBranchAfter,
+  onBranchAlternative,
   canCreateCheckpoint = false,
   onCreateCheckpoint,
   groundingMetadata,
+  subAgentRunId,
+  subAgentLabel,
   token_usage,
   isCollapsed = false,
   onToggleCollapse,
@@ -172,6 +180,28 @@ export function MessageCard({
           >
             {roleLabels[role]}
           </span>
+          {subAgentRunId && (
+            <span
+              className="badge badge-sm bg-[#E8C236] text-black border-none gap-1"
+              title={`Sub-agent: ${subAgentLabel || subAgentRunId}`}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-3 w-3"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2z"
+                />
+              </svg>
+              {subAgentLabel || "Sub-Agent"}
+            </span>
+          )}
           {tool_call_id && (
             <span className="text-xs text-muted-foreground font-mono">
               {tool_call_id}
@@ -190,64 +220,15 @@ export function MessageCard({
               {formatTime(timestamp)}
             </span>
           )}
-          {/* Checkpoint button - only for assistant messages, not during streaming */}
-          {canCreateCheckpoint &&
-            onCreateCheckpoint &&
-            role === "assistant" &&
-            !isStreaming && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity text-[hsl(var(--role-checkpoint))]"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateCheckpoint(id);
-                }}
-                title="Create checkpoint"
-              >
-                <Bookmark className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          {/* Collapse button - for all non-system messages, hidden during streaming */}
-          {onToggleCollapse &&
-            role !== "system" &&
-            !isStreaming && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleCollapse(id);
-                }}
-                title={isCollapsed ? "Expand" : "Collapse"}
-              >
-                {isCollapsed ? (
-                  <Eye className="h-3.5 w-3.5" />
-                ) : (
-                  <EyeOff className="h-3.5 w-3.5" />
-                )}
-              </Button>
-            )}
-          {/* Branch button - only for user/assistant messages, hidden during streaming */}
-          {onCreateBranch &&
-            role !== "tool" &&
-            role !== "system" &&
-            !isStreaming && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  console.log("Branch button clicked, id:", id);
-                  onCreateBranch(id);
-                }}
-                title="Create branch (Ctrl+B)"
-              >
-                <GitBranch className="h-3.5 w-3.5" />
-              </Button>
-            )}
+          <MessageToolbar
+            nodeId={id}
+            role={role}
+            isStreaming={isStreaming}
+            canCreateCheckpoint={canCreateCheckpoint}
+            onCreateCheckpoint={onCreateCheckpoint}
+            onBranchAfter={onBranchAfter}
+            onBranchAlternative={onBranchAlternative}
+          />
         </div>
       </div>
 

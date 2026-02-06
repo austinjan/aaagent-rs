@@ -13,6 +13,12 @@ export interface TreeNavigationPanelProps {
   sessionId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
   onBranchSwitch?: (nodeId: string) => void;
+
+  // Toolbar actions
+  canCreateCheckpoint?: boolean;
+  onCreateCheckpoint?: (nodeId: string) => void;
+  onBranchAfter?: (nodeId: string) => void;
+  onBranchAlternative?: (nodeId: string) => void;
 }
 
 export function TreeNavigationPanel({
@@ -22,6 +28,10 @@ export function TreeNavigationPanel({
   sessionId,
   onNodeSelect,
   onBranchSwitch,
+  canCreateCheckpoint = false,
+  onCreateCheckpoint,
+  onBranchAfter,
+  onBranchAlternative,
 }: TreeNavigationPanelProps) {
   const [showInactive] = useState(true); // Always show inactive branches
   const [showStats, setShowStats] = useState(true); // Show stats by default
@@ -110,6 +120,10 @@ export function TreeNavigationPanel({
             <NodeDetailsPanel
               node={selectedNode}
               onClose={() => onNodeSelect?.("")}
+              canCreateCheckpoint={canCreateCheckpoint}
+              onCreateCheckpoint={onCreateCheckpoint}
+              onBranchAfter={onBranchAfter}
+              onBranchAlternative={onBranchAlternative}
             />
           </div>
         )}

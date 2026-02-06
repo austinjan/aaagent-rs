@@ -1,0 +1,65 @@
+---
+id: aaagent-feature-plan-workflow
+trigger: when implementing a new feature
+confidence: 0.85
+domain: workflow
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Follow Feature Plan Workflow
+
+## Action
+
+When implementing features, follow this workflow:
+
+### 1. Create Feature Plan
+```
+doc/plan/{feature-name}.md
+```
+
+Write detailed plan with:
+- Requirements
+- Architecture decisions
+- Implementation steps
+- Risks and considerations
+
+### 2. Backend Implementation
+Modify in this order:
+- `src/api/mod.rs` (API endpoints)
+- `src/agent/mod.rs` or `src/llm/` (core logic)
+- `src/history/` (if storage needed)
+
+### 3. Frontend Integration
+Update in sequence:
+- `web/src/types/backend.ts` (type definitions)
+- `web/src/services/api.ts` (API client)
+- `web/src/hooks/use*.ts` (custom hook)
+- `web/src/components/` or `web/src/pages/` (UI components)
+
+### 4. Archive Plan
+```
+mv doc/plan/{feature-name}.md doc/plan/archived/
+```
+
+## Evidence
+
+- 10+ plan documents in `doc/plan/archived/`
+- Commit pattern: "archived finished plan"
+- Examples:
+  - "Archive completed chat-ui-sse-streaming plan document"
+  - "Add managing-feature-plans skill with plan template and archiving script"
+
+## When to Apply
+
+- Implementing complex features
+- Adding new subsystems
+- Major refactoring work
+
+## Related Files
+
+High-frequency co-changes:
+- `src/api/mod.rs` (21 changes)
+- `web/src/pages/Chat.tsx` (15 changes)
+- `web/src/hooks/useChat.ts` (10 changes)
+- `web/src/types/backend.ts` (8 changes)

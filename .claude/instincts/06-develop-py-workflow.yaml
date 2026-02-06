@@ -1,0 +1,54 @@
+---
+id: aaagent-develop-script
+trigger: when making backend or frontend changes during development
+confidence: 0.9
+domain: tooling
+source: local-repo-analysis
+created: 2026-02-05
+---
+
+# Use develop.py for Development Workflow
+
+## Action
+
+Use the Python development script for efficient iteration:
+
+```bash
+# Start both frontend dev server (5173) + backend (3000)
+python develop.py start
+
+# Rebuild/restart backend only (keeps frontend running hot reload)
+python develop.py restart
+
+# Stop both
+python develop.py stop
+```
+
+**When to use each command**:
+
+- **`start`** - Beginning of development session
+- **`restart`** - After backend (Rust) changes only
+- **`stop`** - End of development session
+
+**No restart needed for**:
+- Frontend changes (Vite auto-reloads)
+- CSS/styling changes
+- TypeScript/React component edits
+
+## Evidence
+
+- Fixed in commit: "Fix develop.py to use correct binary name (aaagent-serve)"
+- Backend runs with `--features dev-server` for CORS
+- Frontend runs on port 5173, backend on 3000
+
+## When to Apply
+
+- During active development
+- Testing backend changes
+- Iterating on features
+
+## Benefits
+
+- No need to manage two terminals
+- Automatic CORS configuration
+- Fast backend restart without frontend rebuild

@@ -43,6 +43,14 @@ impl ToolRegistry {
         self
     }
 
+    /// Merge another ToolRegistry into this one
+    pub fn merge(mut self, other: &ToolRegistry) -> Self {
+        for (name, tool) in &other.tools {
+            self.tools.insert(name.clone(), Arc::clone(tool));
+        }
+        self
+    }
+
     /// Register all built-in tools from the tools module
     pub fn register_all_builtin(mut self) -> Self {
         for tool in crate::tools::all_tools() {
