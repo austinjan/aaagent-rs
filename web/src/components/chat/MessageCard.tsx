@@ -10,7 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../ui/collapsible";
-import { ChevronDown, GitBranch, Bookmark } from "lucide-react";
+import { ChevronDown, GitBranch, Bookmark, Eye, EyeOff } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -60,6 +60,10 @@ export interface MessageCardProps {
     output_tokens: number;
     cached_tokens: number;
   };
+
+  // Collapse state
+  isCollapsed?: boolean;
+  onToggleCollapse?: (id: string) => void;
 }
 
 export function MessageCard({
@@ -79,6 +83,8 @@ export function MessageCard({
   onCreateCheckpoint,
   groundingMetadata,
   token_usage,
+  isCollapsed = false,
+  onToggleCollapse,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);
@@ -200,6 +206,27 @@ export function MessageCard({
                 title="Create checkpoint"
               >
                 <Bookmark className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          {/* Collapse button - for all non-system messages, hidden during streaming */}
+          {onToggleCollapse &&
+            role !== "system" &&
+            !isStreaming && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 opacity-50 hover:opacity-100 transition-opacity"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCollapse(id);
+                }}
+                title={isCollapsed ? "Expand" : "Collapse"}
+              >
+                {isCollapsed ? (
+                  <Eye className="h-3.5 w-3.5" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5" />
+                )}
               </Button>
             )}
           {/* Branch button - only for user/assistant messages, hidden during streaming */}

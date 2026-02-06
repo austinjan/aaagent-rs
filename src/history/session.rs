@@ -961,6 +961,220 @@ impl Session {
         self.stats.add_token_usage(usage);
     }
 
+    // =========================================================================
+    // Collapse/Expand Methods (persisted in session metadata)
+    // =========================================================================
+
+    /// Collapse a single node (hide it in the timeline)
+    pub fn collapse_node(&mut self, node_id: NodeId) -> Result<()> {
+        let mut collapsed: Vec<NodeId> = self
+            .get_metadata("collapsed_nodes")
+            .unwrap_or_default();
+        if !collapsed.contains(&node_id) {
+            collapsed.push(node_id);
+        }
+        self.set_metadata("collapsed_nodes", &collapsed)?;
+        Ok(())
+    }
+
+    /// Expand a single node (show it in the timeline)
+    pub fn expand_node(&mut self, node_id: &NodeId) -> Result<()> {
+        let mut collapsed: Vec<NodeId> = self
+            .get_metadata("collapsed_nodes")
+            .unwrap_or_default();
+        collapsed.retain(|id| id != node_id);
+        self.set_metadata("collapsed_nodes", &collapsed)?;
+        Ok(())
+    }
+
+    /// Check if a node is collapsed
+    pub fn is_node_collapsed(&self, node_id: &NodeId) -> bool {
+        let collapsed: Vec<NodeId> = self
+            .get_metadata("collapsed_nodes")
+            .unwrap_or_default();
+        collapsed.contains(node_id)
+    }
+
+    /// Get all collapsed node IDs
+    pub fn get_collapsed_nodes(&self) -> Vec<NodeId> {
+        self.get_metadata("collapsed_nodes").unwrap_or_default()
+    }
+
+    /// Get tool group mappings (assistant_id -> tool_result_ids)
+    pub fn get_collapsed_tool_groups(&self) -> HashMap<NodeId, Vec<NodeId>> {
+        self.get_metadata("collapsed_tool_groups").unwrap_or_default()
+    }
+
+    /// Get tool result node IDs for an assistant message with tool_calls.
+    ///
+    /// Finds all child nodes of the assistant node that have role=Tool.
+    pub async fn get_tool_result_ids(&self, assistant_node_id: &NodeId) -> Result<Vec<NodeId>> {
+        let store = self.store()?;
+        let children = store
+            .get_children_in_session(self.session_id.clone(), assistant_node_id.clone())
+            .await?;
+
+        let tool_ids: Vec<NodeId> = children
+            .into_iter()
+            .filter(|n| n.role.as_ref() == Some(&Role::Tool))
+            .map(|n| n.node_id)
+            .collect();
+
+        Ok(tool_ids)
+    }
+
+    /// Collapse a tool group: the assistant node + all its tool result children.
+    ///
+    /// Returns the list of all collapsed node IDs (assistant + tool results).
+    /// Uses batch mutation to avoid repeated serialization.
+    pub async fn collapse_tool_group(&mut self, assistant_node_id: NodeId) -> Result<Vec<NodeId>> {
+        let tool_result_ids = self.get_tool_result_ids(&assistant_node_id).await?;
+
+        // Batch-add all IDs to collapsed_nodes in one read/write
+        let mut collapsed: Vec<NodeId> = self
+            .get_metadata("collapsed_nodes")
+            .unwrap_or_default();
+
+        for id in std::iter::once(&assistant_node_id).chain(tool_result_ids.iter()) {
+            if !collapsed.contains(id) {
+                collapsed.push(id.clone());
+            }
+        }
+        self.set_metadata("collapsed_nodes", &collapsed)?;
+
+        // Store the tool group mapping
+        let mut groups: HashMap<NodeId, Vec<NodeId>> = self.get_collapsed_tool_groups();
+        groups.insert(assistant_node_id.clone(), tool_result_ids.clone());
+        self.set_metadata("collapsed_tool_groups", &groups)?;
+
+        let mut all_collapsed = vec![assistant_node_id];
+        all_collapsed.extend(tool_result_ids);
+        Ok(all_collapsed)
+    }
+
+    /// Expand a tool group: the assistant node + all its tool result children.
+    /// Uses batch mutation to avoid repeated serialization.
+    pub async fn expand_tool_group(&mut self, assistant_node_id: &NodeId) -> Result<()> {
+        // Get tool IDs from the group mapping
+        let mut groups: HashMap<NodeId, Vec<NodeId>> = self.get_collapsed_tool_groups();
+        let tool_ids = groups.remove(assistant_node_id).unwrap_or_default();
+
+        // Batch-remove all IDs from collapsed_nodes in one read/write
+        let mut collapsed: Vec<NodeId> = self
+            .get_metadata("collapsed_nodes")
+            .unwrap_or_default();
+
+        let ids_to_remove: std::collections::HashSet<&NodeId> =
+            std::iter::once(assistant_node_id).chain(tool_ids.iter()).collect();
+        collapsed.retain(|id| !ids_to_remove.contains(id));
+
+        self.set_metadata("collapsed_nodes", &collapsed)?;
+        self.set_metadata("collapsed_tool_groups", &groups)?;
+
+        Ok(())
+    }
+
+    /// Expand all collapsed nodes (clear all collapse state).
+    pub fn expand_all(&mut self) -> Result<()> {
+        self.set_metadata("collapsed_nodes", &Vec::<NodeId>::new())?;
+        self.set_metadata("collapsed_tool_groups", &HashMap::<NodeId, Vec<NodeId>>::new())?;
+        Ok(())
+    }
+
+    /// Get full collapse state for UI synchronization.
+    pub fn get_collapse_state(&self) -> (Vec<NodeId>, HashMap<NodeId, Vec<NodeId>>) {
+        let collapsed_nodes = self.get_collapsed_nodes();
+        let collapsed_tool_groups = self.get_collapsed_tool_groups();
+        (collapsed_nodes, collapsed_tool_groups)
+    }
+
+    /// Auto-collapse tool group if the node is an assistant message with tool calls.
+    ///
+    /// Called after tool results are added. Checks if this tool result's parent
+    /// assistant node has tool_calls, and if all expected tool results are in,
+    /// auto-collapses the group.
+    pub async fn auto_collapse_tool_group(&mut self, tool_node_id: &NodeId) -> Result<()> {
+        let store = self.store()?.clone();
+
+        // Get the tool node to find its parent
+        let tool_node = store
+            .get_node_in_session(self.session_id.clone(), tool_node_id.clone())
+            .await?
+            .ok_or_else(|| anyhow!("Node {} not found", tool_node_id))?;
+
+        let parent_id = match tool_node.parent_id {
+            Some(ref pid) => pid.clone(),
+            None => return Ok(()), // No parent, nothing to do
+        };
+
+        // Get the parent node
+        let parent_node = store
+            .get_node_in_session(self.session_id.clone(), parent_id.clone())
+            .await?
+            .ok_or_else(|| anyhow!("Parent node {} not found", parent_id))?;
+
+        // Only auto-collapse if parent is an assistant with tool_calls
+        if parent_node.role.as_ref() != Some(&Role::Assistant) {
+            return Ok(());
+        }
+
+        let expected_count = match &parent_node.tool_calls {
+            Some(tcs) if !tcs.is_empty() => tcs.len(),
+            _ => return Ok(()),
+        };
+
+        // Count current tool result children
+        let tool_result_ids = self.get_tool_result_ids(&parent_id).await?;
+
+        // Only auto-collapse when all tool results have arrived
+        if tool_result_ids.len() >= expected_count {
+            // Check if not already collapsed
+            if !self.is_node_collapsed(&parent_id) {
+                self.collapse_tool_group(parent_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Auto-collapse all uncollapsed tool groups along the active path.
+    ///
+    /// Walks from active leaf to root, finds assistant messages with tool_calls
+    /// that aren't already collapsed, and collapses them.
+    pub async fn auto_collapse_all_tool_groups(&mut self) -> Result<()> {
+        let store = self.store()?.clone();
+
+        // Get path from active leaf to root
+        let path_nodes = store
+            .get_path_to_root_internal(self.active_leaf_id.clone())
+            .await?;
+
+        // Find assistant nodes with tool_calls that aren't already collapsed
+        let already_collapsed = self.get_collapsed_nodes();
+        let mut nodes_to_collapse: Vec<NodeId> = Vec::new();
+
+        for node in &path_nodes {
+            let has_tool_calls = node
+                .tool_calls
+                .as_ref()
+                .map_or(false, |tc| !tc.is_empty());
+
+            if node.role.as_ref() == Some(&Role::Assistant)
+                && has_tool_calls
+                && !already_collapsed.contains(&node.node_id)
+            {
+                nodes_to_collapse.push(node.node_id.clone());
+            }
+        }
+
+        // Collapse each tool group
+        for assistant_id in nodes_to_collapse {
+            self.collapse_tool_group(assistant_id).await?;
+        }
+
+        Ok(())
+    }
+
     /// Get path range between two nodes
     ///
     /// Returns all nodes from `from_node` to `to_node` (inclusive).
@@ -1446,6 +1660,242 @@ mod tests {
         assert_eq!(range[0].content, "B");
         assert_eq!(range[1].content, "C");
         assert_eq!(range[2].content, "D");
+    }
+
+    #[tokio::test]
+    async fn test_collapse_expand_node() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        let node_id = session
+            .append_message(Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        // Initially not collapsed
+        assert!(!session.is_node_collapsed(&node_id));
+        assert!(session.get_collapsed_nodes().is_empty());
+
+        // Collapse
+        session.collapse_node(node_id.clone()).unwrap();
+        assert!(session.is_node_collapsed(&node_id));
+        assert_eq!(session.get_collapsed_nodes().len(), 1);
+
+        // Collapse again (idempotent)
+        session.collapse_node(node_id.clone()).unwrap();
+        assert_eq!(session.get_collapsed_nodes().len(), 1);
+
+        // Expand
+        session.expand_node(&node_id).unwrap();
+        assert!(!session.is_node_collapsed(&node_id));
+        assert!(session.get_collapsed_nodes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_collapse_tool_group() {
+        use crate::llm::ToolCall;
+
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // User message
+        session
+            .append_message(Message {
+                role: Role::User,
+                content: "Search for info".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        // Assistant message with tool calls
+        let assistant_id = session
+            .append_message(Message {
+                role: Role::Assistant,
+                content: "Let me search.".to_string(),
+                tool_call_id: None,
+                tool_calls: Some(vec![
+                    ToolCall {
+                        id: "tc1".to_string(),
+                        name: "search".to_string(),
+                        arguments: serde_json::json!({}),
+                    },
+                    ToolCall {
+                        id: "tc2".to_string(),
+                        name: "read".to_string(),
+                        arguments: serde_json::json!({}),
+                    },
+                ]),
+            })
+            .await
+            .unwrap();
+
+        // Tool result 1
+        let _tool1_id = session
+            .append_message_to(
+                assistant_id.clone(),
+                Message {
+                    role: Role::Tool,
+                    content: "Search result".to_string(),
+                    tool_call_id: Some("tc1".to_string()),
+                    tool_calls: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Tool result 2
+        let _tool2_id = session
+            .append_message_to(
+                assistant_id.clone(),
+                Message {
+                    role: Role::Tool,
+                    content: "Read result".to_string(),
+                    tool_call_id: Some("tc2".to_string()),
+                    tool_calls: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Get tool result IDs
+        let tool_ids = session.get_tool_result_ids(&assistant_id).await.unwrap();
+        assert_eq!(tool_ids.len(), 2);
+
+        // Collapse tool group
+        let collapsed = session
+            .collapse_tool_group(assistant_id.clone())
+            .await
+            .unwrap();
+        assert_eq!(collapsed.len(), 3); // assistant + 2 tool results
+
+        // Verify all are collapsed
+        assert!(session.is_node_collapsed(&assistant_id));
+        for tid in &tool_ids {
+            assert!(session.is_node_collapsed(tid));
+        }
+
+        // Verify tool group mapping
+        let groups = session.get_collapsed_tool_groups();
+        assert!(groups.contains_key(&assistant_id));
+        assert_eq!(groups[&assistant_id].len(), 2);
+
+        // Expand tool group
+        session.expand_tool_group(&assistant_id).await.unwrap();
+        assert!(!session.is_node_collapsed(&assistant_id));
+        for tid in &tool_ids {
+            assert!(!session.is_node_collapsed(tid));
+        }
+
+        // Tool group mapping should be removed
+        let groups = session.get_collapsed_tool_groups();
+        assert!(!groups.contains_key(&assistant_id));
+    }
+
+    #[tokio::test]
+    async fn test_auto_collapse_tool_group() {
+        use crate::llm::ToolCall;
+
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        // User message
+        session
+            .append_message(Message {
+                role: Role::User,
+                content: "Hello".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        // Assistant message with 1 tool call
+        let assistant_id = session
+            .append_message(Message {
+                role: Role::Assistant,
+                content: "Let me check.".to_string(),
+                tool_call_id: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc1".to_string(),
+                    name: "search".to_string(),
+                    arguments: serde_json::json!({}),
+                }]),
+            })
+            .await
+            .unwrap();
+
+        // Not collapsed yet (no tool results)
+        assert!(!session.is_node_collapsed(&assistant_id));
+
+        // Add tool result
+        let tool_id = session
+            .append_message_to(
+                assistant_id.clone(),
+                Message {
+                    role: Role::Tool,
+                    content: "Result".to_string(),
+                    tool_call_id: Some("tc1".to_string()),
+                    tool_calls: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Auto-collapse when tool result arrives
+        session
+            .auto_collapse_tool_group(&tool_id)
+            .await
+            .unwrap();
+
+        // Should now be collapsed
+        assert!(session.is_node_collapsed(&assistant_id));
+        assert!(session.is_node_collapsed(&tool_id));
+    }
+
+    #[tokio::test]
+    async fn test_get_collapse_state() {
+        let store = Arc::new(MemoryStore::new());
+        let config = SessionConfig::default();
+        let mut session = Session::new(store.clone(), config).await.unwrap();
+
+        let node1 = session
+            .append_message(Message {
+                role: Role::User,
+                content: "A".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        let node2 = session
+            .append_message(Message {
+                role: Role::Assistant,
+                content: "B".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            })
+            .await
+            .unwrap();
+
+        session.collapse_node(node1.clone()).unwrap();
+        session.collapse_node(node2.clone()).unwrap();
+
+        let (collapsed_nodes, collapsed_groups) = session.get_collapse_state();
+        assert_eq!(collapsed_nodes.len(), 2);
+        assert!(collapsed_nodes.contains(&node1));
+        assert!(collapsed_nodes.contains(&node2));
+        assert!(collapsed_groups.is_empty());
     }
 
     #[tokio::test]

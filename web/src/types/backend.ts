@@ -103,6 +103,7 @@ export interface NodeData {
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  token_usage?: TokenUsage;
   created_at: number;
 }
 
@@ -403,14 +404,35 @@ export interface SkillsResponse {
 }
 
 // ============================================================================
+// Collapse State Types
+// ============================================================================
+
+export interface CollapsedState {
+  collapsed_nodes: NodeId[];
+  collapsed_tool_groups: Record<NodeId, NodeId[]>; // assistant_id -> tool_result_ids
+}
+
+export interface CollapseNodeResponse {
+  success: boolean;
+  collapsed_nodes: NodeId[];
+  collapsed_tool_groups: Record<NodeId, NodeId[]>;
+}
+
+// ============================================================================
 // Tree Statistics Types
 // ============================================================================
 
 export interface TreeStatsResponse {
   session_id: string;
   token_usage: {
+    // Primary metric: current context window size (input tokens from latest response)
     active_path_tokens: number;
-    active_path_chars: number;
+    // Breakdown metrics for transparency
+    active_path_chars: number; // Character count
+    path_output_tokens: number; // Sum of output tokens (content generated)
+    current_context_tokens: number | null; // Input tokens from latest response
+    char_estimate_tokens: number; // Rough estimate (chars / 4)
+    // Checkpoint-related metrics
     last_checkpoint_id: string | null;
     estimated_after_checkpoint: number;
     potential_token_savings: number;

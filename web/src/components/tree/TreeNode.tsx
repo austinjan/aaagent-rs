@@ -18,14 +18,93 @@ const NODE_COLORS: Record<string, string> = {
   checkpoint: "hsl(var(--role-checkpoint))",
 };
 
+// Format role counts for collapsed group label
+function formatGroupRoles(roles: Record<string, number>): string {
+  const ROLE_LABELS: Record<string, string> = {
+    user: "user",
+    assistant: "assistant",
+    tool: "tool",
+    system: "system",
+  };
+  return Object.entries(roles)
+    .map(([role, count]) => `${count} ${ROLE_LABELS[role] || role}`)
+    .join(", ");
+}
+
 export function TreeNode({
   node,
   isSelected,
   onSelect,
   onDoubleClick,
 }: TreeNodeProps) {
+  const handleClick = () => {
+    onSelect?.(node.id);
+  };
+
+  const handleDoubleClick = () => {
+    onDoubleClick?.(node.id);
+  };
+
+  // Collapsed group node - compact rendering
+  if (node.collapsedGroupInfo) {
+    const { count, roles } = node.collapsedGroupInfo;
+    const groupOpacity = 0.35;
+    const groupSize = 8;
+    const strokeColor = "hsl(var(--muted-foreground))";
+
+    return (
+      <g
+        className="node-tree collapsed-group"
+        transform={`translate(${node.x},${node.y})`}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+        style={{ cursor: "pointer", transition: "all 0.2s ease" }}
+      >
+        {/* Dashed circle indicator */}
+        <circle
+          r={groupSize}
+          fill="hsl(var(--background))"
+          stroke={strokeColor}
+          strokeWidth={2}
+          strokeDasharray="4 3"
+          opacity={groupOpacity}
+        />
+
+        {/* Three dots inside to indicate "more" */}
+        <circle cx={-3} cy={0} r={1.5} fill={strokeColor} opacity={groupOpacity} />
+        <circle cx={0} cy={0} r={1.5} fill={strokeColor} opacity={groupOpacity} />
+        <circle cx={3} cy={0} r={1.5} fill={strokeColor} opacity={groupOpacity} />
+
+        {/* Group label */}
+        <text
+          x={groupSize + 12}
+          y={-4}
+          fontSize="10"
+          fontWeight="500"
+          fill={strokeColor}
+          opacity={groupOpacity}
+          style={{ userSelect: "none" }}
+        >
+          {count} collapsed
+        </text>
+        <text
+          x={groupSize + 12}
+          y={8}
+          fontSize="9"
+          fill="hsl(var(--muted-foreground))"
+          opacity={groupOpacity * 0.7}
+          style={{ userSelect: "none" }}
+        >
+          {formatGroupRoles(roles)}
+        </text>
+
+        <title>{`${count} messages collapsed (${formatGroupRoles(roles)})`}</title>
+      </g>
+    );
+  }
+
+  // Normal node rendering
   const checkpointColor = NODE_COLORS.checkpoint;
-  // Checkpoint nodes use gold color, others use role color
   const strokeColor = node.hasCheckpoint
     ? checkpointColor
     : NODE_COLORS[node.role] || NODE_COLORS.system;
@@ -37,14 +116,6 @@ export function TreeNode({
   // In-context nodes are fully visible, others are dimmed
   const opacity = node.inContext ? 1.0 : node.isActive ? 0.5 : 0.2;
 
-  const handleClick = () => {
-    onSelect?.(node.id);
-  };
-
-  const handleDoubleClick = () => {
-    onDoubleClick?.(node.id);
-  };
-
   // Check if this assistant node has tool calls
   const hasToolCalls = node.role === "assistant" && node.tool_calls && node.tool_calls.length > 0;
 
@@ -52,16 +123,12 @@ export function TreeNode({
   const getCenterFill = () => {
     if (node.status === "error") return "hsl(var(--destructive))";
     if (node.status === "loading") return strokeColor;
-    // Checkpoint nodes are always filled with gold
     if (node.hasCheckpoint) return checkpointColor;
-    // Assistant nodes with tool calls get tool color (orange) inner fill
     if (hasToolCalls) return NODE_COLORS.tool;
-    // In-context nodes get a filled center
     if (node.inContext) return strokeColor;
     return "transparent";
   };
 
-  // Rich tooltip with role, timestamp, and content preview
   const getRoleLabel = () => {
     const labels: Record<string, string> = {
       user: "👤 User",
@@ -87,7 +154,6 @@ export function TreeNode({
 
   const tooltipText = getTooltipContent();
 
-  // Format timestamp
   const getTimeText = () => {
     if (!node.timestamp) return "";
     const date = new Date(node.timestamp);
@@ -96,7 +162,6 @@ export function TreeNode({
     return `${hours}:${minutes}`;
   };
 
-  // Get content preview (first line or 30 chars)
   const getContentPreview = () => {
     if (node.hasCheckpoint && node.checkpointSummary) {
       return node.checkpointSummary.slice(0, 30);

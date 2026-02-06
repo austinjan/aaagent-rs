@@ -189,6 +189,31 @@ fn api_routes() -> Router<AppState> {
             "/sessions/:session_id/tree-stats",
             get(sessions::get_tree_stats),
         )
+        // Node collapse/expand
+        .route(
+            "/sessions/:session_id/nodes/:node_id/collapse",
+            post(sessions::collapse_node),
+        )
+        .route(
+            "/sessions/:session_id/nodes/:node_id/expand",
+            post(sessions::expand_node),
+        )
+        .route(
+            "/sessions/:session_id/nodes/:node_id/collapse-tool-group",
+            post(sessions::collapse_tool_group),
+        )
+        .route(
+            "/sessions/:session_id/collapsed-state",
+            get(sessions::get_collapsed_state),
+        )
+        .route(
+            "/sessions/:session_id/collapse-all-tools",
+            post(sessions::collapse_all_tools),
+        )
+        .route(
+            "/sessions/:session_id/expand-all",
+            post(sessions::expand_all),
+        )
         // Context as markdown string
         .route(
             "/sessions/:session_id/context-string",
@@ -755,11 +780,20 @@ mod sessions {
 
             // If agent failed, send error to frontend
             match result {
-                Ok(updated_session) => {
+                Ok(mut updated_session) => {
                     crate::logger::log(format!(
                         "Agent chat completed successfully for stream: {}",
                         stream_id_clone
                     ));
+
+                    // Auto-collapse tool groups for any new assistant messages with tool calls
+                    updated_session.set_store(store_for_task.clone());
+                    if let Err(e) = updated_session.auto_collapse_all_tool_groups().await {
+                        crate::logger::log(format!(
+                            "Warning: Auto-collapse failed: {}",
+                            e
+                        ));
+                    }
 
                     // Save updated session back to storage
                     if let Err(e) = store_for_task.update_session(&updated_session).await {
@@ -1497,6 +1531,7 @@ mod sessions {
                     "content": &node.content,
                     "tool_calls": &node.tool_calls,
                     "tool_call_id": &node.tool_call_id,
+                    "token_usage": &node.token_usage,
                     "created_at": node.created_at,
                     "children_count": children_count.get(&node.node_id).unwrap_or(&0),
                     "has_checkpoint": has_checkpoint,
@@ -1578,12 +1613,41 @@ mod sessions {
         // Reverse to get root-to-leaf order
         active_path_nodes.reverse();
 
-        // === 2. Calculate token usage (rough estimate: ~4 chars per token) ===
+        // === 2. Calculate token usage ===
+        // Three different token metrics:
+        // 1. Path content size: Sum of OUTPUT tokens (new content generated per node)
+        // 2. Current context size: INPUT tokens from latest response (full context at that point)
+        // 3. Character estimate: Rough approximation (chars / 4)
+
         let active_path_chars: usize = active_path_nodes
             .iter()
             .map(|n| n.content.len())
             .sum();
-        let active_path_tokens = (active_path_chars as f64 / 4.0).ceil() as usize;
+
+        // Sum output tokens (content generated along the path)
+        let path_output_tokens: u32 = active_path_nodes
+            .iter()
+            .filter_map(|n| n.token_usage.as_ref())
+            .map(|u| u.output_tokens)
+            .sum();
+
+        // Get input tokens from the most recent node with token_usage
+        // This represents the current context window size
+        let current_context_tokens: Option<u32> = active_path_nodes
+            .iter()
+            .rev()
+            .filter_map(|n| n.token_usage.as_ref())
+            .map(|u| u.input_tokens)
+            .next();
+
+        // Primary metric: Use current context size if available, else path outputs, else estimate
+        let active_path_tokens = if let Some(ctx) = current_context_tokens {
+            ctx as usize
+        } else if path_output_tokens > 0 {
+            path_output_tokens as usize
+        } else {
+            (active_path_chars as f64 / 4.0).ceil() as usize
+        };
 
         // Estimate tokens if we create a checkpoint now
         // Assume checkpoint summary would be ~15% of original (typical compression ratio ~6.7)
@@ -1617,6 +1681,9 @@ mod sessions {
             "token_usage": {
                 "active_path_tokens": active_path_tokens,
                 "active_path_chars": active_path_chars,
+                "path_output_tokens": path_output_tokens,
+                "current_context_tokens": current_context_tokens,
+                "char_estimate_tokens": (active_path_chars as f64 / 4.0).ceil() as usize,
                 "last_checkpoint_id": last_checkpoint_id,
                 "estimated_after_checkpoint": estimated_summary_tokens,
                 "potential_token_savings": potential_savings,
@@ -1631,6 +1698,181 @@ mod sessions {
                 "checkpoint": checkpoint_count,
                 "active_path": active_path_nodes.len(),
             },
+        })))
+    }
+    // ===== Node Collapse/Expand Operations =====
+
+    pub async fn collapse_node(
+        Path((session_id, node_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.collapse_node(node_id)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Persist
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "success": true,
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
+        })))
+    }
+
+    pub async fn expand_node(
+        Path((session_id, node_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.expand_node(&node_id)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Persist
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "success": true,
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
+        })))
+    }
+
+    pub async fn collapse_tool_group(
+        Path((session_id, node_id)): Path<(String, String)>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.set_store(state.store.clone());
+
+        session
+            .collapse_tool_group(node_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Persist
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "success": true,
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
+        })))
+    }
+
+    pub async fn get_collapsed_state(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
+        })))
+    }
+
+    /// Collapse all tool groups in the session (assistant + tool result nodes).
+    pub async fn collapse_all_tools(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session.set_store(state.store.clone());
+
+        session
+            .auto_collapse_all_tool_groups()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Persist
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "success": true,
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
+        })))
+    }
+
+    /// Expand all collapsed nodes in the session.
+    pub async fn expand_all(
+        Path(session_id): Path<String>,
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        let mut session = state
+            .store
+            .get_session(session_id.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("Session {} not found", session_id)))?;
+
+        session
+            .expand_all()
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        // Persist
+        state
+            .store
+            .update_session(&session)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let (collapsed_nodes, collapsed_tool_groups) = session.get_collapse_state();
+        Ok(Json(json!({
+            "success": true,
+            "collapsed_nodes": collapsed_nodes,
+            "collapsed_tool_groups": collapsed_tool_groups,
         })))
     }
 }
