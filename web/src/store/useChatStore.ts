@@ -11,6 +11,7 @@ import type {
   CheckpointMessage,
   ToolCall,
   ToolResultData,
+  CollapsedState,
 } from "../types/backend";
 
 // ============================================================================
@@ -59,6 +60,11 @@ export interface UIState {
   expandedToolPairs: Set<string>;
   expandedToolCalls: Set<string>;
   expandedCheckpoints: Set<string>;
+
+  // Collapse state (synced with backend)
+  collapsedNodes: Set<NodeId>;
+  collapsedToolGroups: Map<NodeId, NodeId[]>;
+
   scrollPosition: number;
   visibleRange: { start: number; end: number };
   loadedChunks: Set<string>;
@@ -130,6 +136,11 @@ export interface ChatStore {
   // ===== BRANCH OPERATIONS =====
   setActiveLeaf: (nodeId: NodeId) => void;
 
+  // ===== COLLAPSE ACTIONS =====
+  setCollapsedState: (state: CollapsedState) => void;
+  toggleNodeCollapse: (nodeId: NodeId) => void;
+  isNodeCollapsed: (nodeId: NodeId) => boolean;
+
   // ===== UTILITY ACTIONS =====
   setError: (error: Error | null) => void;
   setLoading: (isLoading: boolean) => void;
@@ -156,6 +167,8 @@ const initialState = {
     expandedToolPairs: new Set(),
     expandedCheckpoints: new Set(),
     expandedToolCalls: new Set(),
+    collapsedNodes: new Set(),
+    collapsedToolGroups: new Map(),
     scrollPosition: 0,
     visibleRange: { start: 0, end: 50 },
     loadedChunks: new Set(),
@@ -557,6 +570,46 @@ export const useChatStore = create<ChatStore>()(
         validateAfter(get, "setActiveLeaf");
       },
 
+      // ===== COLLAPSE ACTIONS =====
+
+      setCollapsedState: (collapseState) => {
+        set(
+          (state) => ({
+            ui: {
+              ...state.ui,
+              collapsedNodes: new Set(collapseState.collapsed_nodes),
+              collapsedToolGroups: new Map(
+                Object.entries(collapseState.collapsed_tool_groups),
+              ),
+            },
+          }),
+          false,
+          "setCollapsedState",
+        );
+        validateAfter(get, "setCollapsedState");
+      },
+
+      toggleNodeCollapse: (nodeId) => {
+        set(
+          (state) => {
+            const collapsed = new Set(state.ui.collapsedNodes);
+            if (collapsed.has(nodeId)) {
+              collapsed.delete(nodeId);
+            } else {
+              collapsed.add(nodeId);
+            }
+            return { ui: { ...state.ui, collapsedNodes: collapsed } };
+          },
+          false,
+          "toggleNodeCollapse",
+        );
+        validateAfter(get, "toggleNodeCollapse");
+      },
+
+      isNodeCollapsed: (nodeId) => {
+        return get().ui.collapsedNodes.has(nodeId);
+      },
+
       // ===== UTILITY ACTIONS =====
 
       setError: (error) => set({ error }, false, "setError"),
@@ -576,6 +629,8 @@ export const useChatStore = create<ChatStore>()(
               expandedToolPairs: new Set<string>(),
               expandedCheckpoints: new Set<string>(),
               expandedToolCalls: new Set<string>(),
+              collapsedNodes: new Set<string>(),
+              collapsedToolGroups: new Map<string, string[]>(),
               scrollPosition: 0,
               visibleRange: { start: 0, end: 50 },
               loadedChunks: new Set<string>(),
@@ -615,5 +670,9 @@ export const selectIsStreaming = (state: ChatStore) =>
 export const selectToolPairGroups = (state: ChatStore) =>
   state.streaming.toolPairGroups;
 export const selectCheckpoints = (state: ChatStore) => state.checkpoints;
+export const selectCollapsedNodes = (state: ChatStore) =>
+  state.ui.collapsedNodes;
+export const selectCollapsedToolGroups = (state: ChatStore) =>
+  state.ui.collapsedToolGroups;
 export const selectError = (state: ChatStore) => state.error;
 export const selectIsLoading = (state: ChatStore) => state.isLoading;

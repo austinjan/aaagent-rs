@@ -24,6 +24,23 @@ export interface TreeNode {
   // Tool-related fields
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+
+  // Token usage (typically for Assistant messages)
+  token_usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+  };
+
+  // Collapse state
+  isCollapsed?: boolean;
+
+  // User/auto collapse state (from backend, for timeline collapse)
+  // Separate from isCollapsed which is used for inactive branch hiding in tree view
+  isUserCollapsed?: boolean;
+
+  // Set on synthetic group nodes that replace chains of collapsed nodes
+  collapsedGroupInfo?: CollapsedGroupInfo;
 }
 
 export interface PositionedNode extends TreeNode {
@@ -32,9 +49,20 @@ export interface PositionedNode extends TreeNode {
   depth: number;
   isActive: boolean;
   isCollapsed?: boolean;
+  isUserCollapsed?: boolean;
+  collapsedGroupInfo?: CollapsedGroupInfo;
   // Inherited from TreeNode but explicitly listed for clarity
   inContext?: boolean;
   checkpointSummary?: string;
+}
+
+/**
+ * Info about a collapsed group (replaces multiple consecutive collapsed nodes)
+ */
+export interface CollapsedGroupInfo {
+  count: number;
+  roles: Record<string, number>;
+  nodeIds: string[];
 }
 
 export interface TreeConfig {
@@ -195,4 +223,106 @@ export function collapseInactiveBranches(
     }
     return node;
   });
+}
+
+/**
+ * Group consecutive chains of isUserCollapsed nodes into single summary nodes.
+ *
+ * In the aaagent tree, the active path is a linear chain (each message appended
+ * to active_leaf), so consecutive collapsed nodes form parent→child chains.
+ * This function replaces each chain with a single synthetic "group" node,
+ * reducing vertical space in the tree visualization.
+ *
+ * Must be called BEFORE layoutTree() so the layout operates on the reduced set.
+ */
+export function groupCollapsedNodes(nodes: TreeNode[]): TreeNode[] {
+  if (nodes.length === 0) return nodes;
+
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const childrenMap = buildChildrenMap(nodes);
+  const root = nodes.find((n) => n.parent_id === null);
+  if (!root) return nodes;
+
+  const result: TreeNode[] = [];
+  const processed = new Set<string>();
+
+  // Collect a linear chain of consecutive collapsed nodes starting from startNode
+  function collectCollapsedChain(startNode: TreeNode): TreeNode[] {
+    const chain: TreeNode[] = [startNode];
+    let current = startNode;
+
+    while (true) {
+      const children = childrenMap.get(current.id) || [];
+      // Continue chain only if exactly one child and it's also user-collapsed
+      if (children.length === 1 && children[0].isUserCollapsed) {
+        chain.push(children[0]);
+        current = children[0];
+      } else {
+        break;
+      }
+    }
+
+    return chain;
+  }
+
+  function visit(node: TreeNode, parentIdOverride?: string) {
+    if (processed.has(node.id)) return;
+
+    const effectiveParentId = parentIdOverride ?? node.parent_id;
+
+    if (node.isUserCollapsed) {
+      // Collect the full chain of consecutive collapsed nodes
+      const chain = collectCollapsedChain(node);
+      for (const n of chain) {
+        processed.add(n.id);
+      }
+
+      // Count roles in the chain
+      const roles: Record<string, number> = {};
+      for (const n of chain) {
+        roles[n.role] = (roles[n.role] || 0) + 1;
+      }
+
+      // Create a synthetic group summary node
+      const groupId = `collapsed-group-${chain[0].id}`;
+      const summaryNode: TreeNode = {
+        id: groupId,
+        parent_id: effectiveParentId,
+        role: "system",
+        content: `${chain.length} collapsed`,
+        seq: chain[0].seq,
+        isUserCollapsed: true,
+        collapsedGroupInfo: {
+          count: chain.length,
+          roles,
+          nodeIds: chain.map((n) => n.id),
+        },
+      };
+      result.push(summaryNode);
+
+      // Process children of the last node in the chain, reparenting to group node
+      const lastNode = chain[chain.length - 1];
+      const lastChildren = childrenMap.get(lastNode.id) || [];
+      for (const child of lastChildren) {
+        visit(child, groupId);
+      }
+    } else {
+      // Normal node - keep it, potentially with reparented parent
+      const nodeToAdd =
+        effectiveParentId !== node.parent_id
+          ? { ...node, parent_id: effectiveParentId }
+          : node;
+      result.push(nodeToAdd);
+      processed.add(node.id);
+
+      // Process children
+      const children = childrenMap.get(node.id) || [];
+      for (const child of children) {
+        visit(child);
+      }
+    }
+  }
+
+  visit(root);
+  return result;
 }

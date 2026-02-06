@@ -144,7 +144,11 @@ pub enum AgentEvent {
     /// Thinking/reasoning content (Claude, o1, etc.)
     Thinking(String),
     /// Tool calls requested by the LLM
-    ToolCallsRequested { tool_calls: Vec<ToolCall> },
+    ToolCallsRequested {
+        tool_calls: Vec<ToolCall>,
+        /// Any content before tool calls (may be empty)
+        content: String,
+    },
     /// Tool result received after execution
     ToolResult {
         tool_call_id: String,
@@ -522,9 +526,10 @@ impl<P: LLMProvider> Agent<P> {
                         response_content.push_str(&content);
                     }
 
-                    // Emit tool calls event
+                    // Emit tool calls event (include content for frontend to display)
                     emit_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
+                        content: content.clone(),
                     })
                     .await;
 
@@ -646,16 +651,19 @@ impl<P: LLMProvider> Agent<P> {
             }
         }
 
-        // 5. Add assistant response to tree
+        // 5. Add assistant response to tree with token usage
         if !response_content.is_empty() {
             let final_node_id = self
                 .session
-                .append_message(Message {
-                    role: Role::Assistant,
-                    content: response_content.clone(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                })
+                .append_message_with_usage(
+                    Message {
+                        role: Role::Assistant,
+                        content: response_content.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                    Some(total_usage.clone()),
+                )
                 .await?;
             new_node_ids.push(final_node_id);
         }
@@ -904,9 +912,10 @@ impl<P: LLMProvider> Agent<P> {
                         response_content.push_str(&content);
                     }
 
-                    // Emit tool calls event
+                    // Emit tool calls event (include content for frontend to display)
                     emit_event(AgentEvent::ToolCallsRequested {
                         tool_calls: tool_calls.clone(),
+                        content: content.clone(),
                     })
                     .await;
 
@@ -1028,16 +1037,19 @@ impl<P: LLMProvider> Agent<P> {
             }
         }
 
-        // Add assistant response to tree
+        // Add assistant response to tree with token usage
         if !response_content.is_empty() {
             let final_node_id = self
                 .session
-                .append_message(Message {
-                    role: Role::Assistant,
-                    content: response_content.clone(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                })
+                .append_message_with_usage(
+                    Message {
+                        role: Role::Assistant,
+                        content: response_content.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    },
+                    Some(total_usage.clone()),
+                )
                 .await?;
             new_node_ids.push(final_node_id);
         }

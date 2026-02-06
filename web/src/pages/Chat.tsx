@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatContainer } from "../components/chat/ChatContainer";
 import { ChatInput } from "../components/chat/ChatInput";
 import type { SessionConfig } from "../components/chat/SessionConfigPanel";
@@ -10,7 +10,11 @@ import {
 } from "../components/session";
 import { SessionMetricsIndicator } from "../components/SessionMetrics";
 import { useChat, useSkills, useSubAgentSSE } from "../hooks";
-import { useChatStore, selectSelectedNodeId } from "../store/useChatStore";
+import {
+  useChatStore,
+  selectSelectedNodeId,
+  selectCollapsedNodes,
+} from "../store/useChatStore";
 import {
   getConfig,
   switchBranch,
@@ -22,6 +26,11 @@ import {
   updateSessionTags,
   updateConfig,
   listSessions,
+  getCollapsedState,
+  collapseNode as apiCollapseNode,
+  expandNode as apiExpandNode,
+  collapseAllTools as apiCollapseAllTools,
+  expandAll as apiExpandAll,
 } from "../services/api";
 import type { MessageCardProps } from "../components/chat/MessageCard";
 import type { MessageData, Skill } from "../types/backend";
@@ -49,6 +58,8 @@ function toMessageCardProps(msg: MessageData): MessageCardProps {
     is_error: msg.is_error,
     timestamp: msg.timestamp,
     isStreaming: msg.isStreaming,
+    token_usage: msg.token_usage,
+    groundingMetadata: msg.groundingMetadata,
   };
 }
 
@@ -85,6 +96,10 @@ export function Chat() {
   // Get selection from Zustand store
   const selectedMessageId = useChatStore(selectSelectedNodeId);
   const selectNode = useChatStore((state) => state.selectNode);
+
+  // Collapse state
+  const collapsedNodes = useChatStore(selectCollapsedNodes);
+  const setCollapsedState = useChatStore((state) => state.setCollapsedState);
 
   // Session list refresh trigger
   const [sessionListRefresh, setSessionListRefresh] = useState(0);
@@ -208,7 +223,7 @@ export function Chat() {
     };
   }, [initializeSession, loadHistory]);
 
-  // Load config and session info from backend when session is ready
+  // Load config, session info, and collapse state from backend when session is ready
   useEffect(() => {
     if (sessionId) {
       getConfig(sessionId)
@@ -230,8 +245,32 @@ export function Chat() {
         .catch((err) => {
           console.error("Failed to load session info:", err);
         });
+
+      // Load collapse state
+      getCollapsedState(sessionId)
+        .then((state) => {
+          setCollapsedState(state);
+        })
+        .catch((err) => {
+          console.error("Failed to load collapse state:", err);
+        });
     }
-  }, [sessionId]);
+  }, [sessionId, setCollapsedState]);
+
+  // Reload collapse state after streaming completes (picks up auto-collapsed tool groups)
+  const prevIsLoading = useRef(isLoading);
+  useEffect(() => {
+    if (prevIsLoading.current && !isLoading && sessionId) {
+      getCollapsedState(sessionId)
+        .then((state) => {
+          setCollapsedState(state);
+        })
+        .catch((err) => {
+          console.error("Failed to reload collapse state:", err);
+        });
+    }
+    prevIsLoading.current = isLoading;
+  }, [isLoading, sessionId, setCollapsedState]);
 
   // Handle web search toggle
   const handleWebSearchToggle = async (enabled: boolean) => {
@@ -491,6 +530,78 @@ ${content}`;
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedMessageId, handleBranchAfter, handleBranchAlternative]);
 
+  // Collapse/expand handler
+  const handleToggleCollapse = useCallback(
+    async (nodeId: string) => {
+      if (!sessionId) return;
+      try {
+        const isCurrentlyCollapsed = collapsedNodes.has(nodeId);
+        if (isCurrentlyCollapsed) {
+          const response = await apiExpandNode(sessionId, nodeId);
+          setCollapsedState({
+            collapsed_nodes: response.collapsed_nodes,
+            collapsed_tool_groups: response.collapsed_tool_groups,
+          });
+        } else {
+          const response = await apiCollapseNode(sessionId, nodeId);
+          setCollapsedState({
+            collapsed_nodes: response.collapsed_nodes,
+            collapsed_tool_groups: response.collapsed_tool_groups,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to toggle collapse:", err);
+      }
+    },
+    [sessionId, collapsedNodes, setCollapsedState],
+  );
+
+  // Batch expand handler - expands multiple nodes sequentially, then syncs final state
+  const handleExpandGroup = useCallback(
+    async (nodeIds: string[]) => {
+      if (!sessionId || nodeIds.length === 0) return;
+      try {
+        for (const id of nodeIds) {
+          await apiExpandNode(sessionId, id);
+        }
+        // Reload final state once after all expansions
+        const finalState = await getCollapsedState(sessionId);
+        setCollapsedState(finalState);
+      } catch (err) {
+        console.error("Failed to expand group:", err);
+      }
+    },
+    [sessionId, setCollapsedState],
+  );
+
+  // Collapse all tool groups in one click
+  const handleCollapseAllTools = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const response = await apiCollapseAllTools(sessionId);
+      setCollapsedState({
+        collapsed_nodes: response.collapsed_nodes,
+        collapsed_tool_groups: response.collapsed_tool_groups,
+      });
+    } catch (err) {
+      console.error("Failed to collapse all tools:", err);
+    }
+  }, [sessionId, setCollapsedState]);
+
+  // Expand all collapsed nodes in one click
+  const handleExpandAll = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const response = await apiExpandAll(sessionId);
+      setCollapsedState({
+        collapsed_nodes: response.collapsed_nodes,
+        collapsed_tool_groups: response.collapsed_tool_groups,
+      });
+    } catch (err) {
+      console.error("Failed to expand all:", err);
+    }
+  }, [sessionId, setCollapsedState]);
+
   // Checkpoint creation handlers
   const handleOpenCheckpointModal = useCallback((nodeId: string) => {
     setCheckpointTargetNodeId(nodeId);
@@ -530,6 +641,17 @@ ${content}`;
     );
     return Math.round(totalChars / 4);
   }, [messages]);
+
+  // Inject user collapse state into tree nodes (isUserCollapsed for visual dimming,
+  // separate from isCollapsed which is used for inactive branch hiding)
+  const treeNodesWithCollapse = useMemo(
+    () =>
+      treeNodes.map((node) => ({
+        ...node,
+        isUserCollapsed: collapsedNodes.has(node.id),
+      })),
+    [treeNodes, collapsedNodes],
+  );
 
   // Convert messages to MessageCardProps with branch and checkpoint callbacks
   const messageCards = messages.map((msg) => ({
@@ -623,6 +745,11 @@ ${content}`;
                 messages={messageCards}
                 selectedMessageId={selectedMessageId || undefined}
                 onSelectMessage={handleSelectMessage}
+                onToggleCollapse={handleToggleCollapse}
+                onExpandGroup={handleExpandGroup}
+                onCollapseAllTools={handleCollapseAllTools}
+                onExpandAll={handleExpandAll}
+                hasCollapsedNodes={collapsedNodes.size > 0}
                 isLoading={isLoading}
               />
 
@@ -643,9 +770,10 @@ ${content}`;
           ) : (
             /* Tree View */
             <TreeNavigationPanel
-              nodes={treeNodes}
+              nodes={treeNodesWithCollapse}
               activeLeafId={activeLeafId || ""}
               selectedNodeId={selectedMessageId}
+              sessionId={sessionId}
               onNodeSelect={handleSelectMessage}
               onBranchSwitch={handleBranchSwitch}
               canCreateCheckpoint={true}

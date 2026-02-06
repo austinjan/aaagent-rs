@@ -44,11 +44,6 @@ export function SkillPicker({
     setSearchQuery("");
   };
 
-  // Unused for now - kept for future "clear skill" functionality
-  // const handleClearSkill = () => {
-  //   onSelectSkill(null);
-  // };
-
   const errorCount = errors.length;
 
   return (

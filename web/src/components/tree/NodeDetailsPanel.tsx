@@ -291,6 +291,43 @@ export function NodeDetailsPanel({
           </div>
         )}
 
+        {/* Token Usage (for assistant nodes) */}
+        {node.role === "assistant" && node.token_usage && (
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Token Usage
+            </label>
+            <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-md">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                    Total
+                  </span>
+                  <span className="text-sm font-bold text-blue-900 dark:text-blue-100">
+                    {(node.token_usage.input_tokens + node.token_usage.output_tokens).toLocaleString()} tokens
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-muted-foreground">Input</span>
+                  <span>{node.token_usage.input_tokens.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-muted-foreground">Output</span>
+                  <span>{node.token_usage.output_tokens.toLocaleString()}</span>
+                </div>
+                {node.token_usage.cached_tokens > 0 && (
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-muted-foreground">Cached</span>
+                    <span className="text-green-600 dark:text-green-400">
+                      {node.token_usage.cached_tokens.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Content */}
         <div>
           <div className="flex items-center justify-between mb-1">

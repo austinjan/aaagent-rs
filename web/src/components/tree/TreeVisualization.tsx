@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import {
   layoutTree,
   collapseInactiveBranches,
+  groupCollapsedNodes,
   DEFAULT_CONFIG,
 } from "./treeLayout";
 import type { TreeNode, PositionedNode, TreeConfig } from "./treeLayout";
@@ -31,11 +32,17 @@ export function TreeVisualization({
 }: TreeVisualizationProps) {
   const config = { ...DEFAULT_CONFIG, ...configOverride };
 
+  // Group consecutive collapsed nodes before layout to save vertical space
+  const groupedNodes = useMemo(
+    () => groupCollapsedNodes(nodes),
+    [nodes],
+  );
+
   // Layout tree with memoization
   const positioned = useMemo(() => {
-    if (nodes.length === 0) return [];
+    if (groupedNodes.length === 0) return [];
 
-    let layout = layoutTree(nodes, activeLeafId, config);
+    let layout = layoutTree(groupedNodes, activeLeafId, config);
 
     // Collapse inactive branches if showInactive is false
     // Pass hideAll=true to hide all inactive nodes, not just deep ones
@@ -44,9 +51,11 @@ export function TreeVisualization({
     }
 
     return layout;
-  }, [nodes, activeLeafId, showInactive, config]);
+  }, [groupedNodes, activeLeafId, showInactive, config]);
 
   // Build edges from positioned nodes
+  // Note: isCollapsed = inactive branch hiding (filter out entirely)
+  //       isUserCollapsed = backend/timeline collapse (still show, just dimmed)
   const edges = useMemo(() => {
     const result: Array<{
       parent: PositionedNode;
@@ -56,6 +65,7 @@ export function TreeVisualization({
     const nodeMap = new Map(positioned.map((n) => [n.id, n]));
 
     for (const node of positioned) {
+      // Skip edges for inactive-branch collapsed nodes, but keep edges for user-collapsed nodes
       if (node.parent_id && !node.isCollapsed) {
         const parent = nodeMap.get(node.parent_id);
         if (parent) {
@@ -77,7 +87,7 @@ export function TreeVisualization({
   const width = maxX + config.branchSpacing + padding * 2;
   const height = maxY + config.nodeSpacing + padding * 2;
 
-  // Filter out collapsed nodes
+  // Filter out inactive-branch collapsed nodes, but keep user-collapsed nodes (they render dimmed)
   const visibleNodes = positioned.filter((n) => !n.isCollapsed);
 
   if (nodes.length === 0) {
