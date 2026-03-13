@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { getSessionConfig, updateSessionConfig } from "@/lib/api";
 import type { SessionConfig } from "@/lib/api";
-import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE, getProviderForModel } from "@/lib/constants";
+import { useProvidersStatus } from "@/hooks/useProvidersStatus";
 import {
   Select,
   SelectContent,
@@ -57,6 +58,11 @@ export function ConfigPanel({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const { status: providersStatus, loaded: providersLoaded } = useProvidersStatus();
+
+  // Check if the currently selected model's provider has an API key
+  const selectedProvider = getProviderForModel(config.provider.model);
+  const isSelectedProviderAvailable = providersLoaded ? providersStatus[selectedProvider] : true;
 
   useEffect(() => {
     if (!sessionId) {
@@ -140,6 +146,13 @@ export function ConfigPanel({
         <CardTitle className="text-foreground">Session Config</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {providersLoaded && !isSelectedProviderAvailable && (
+          <div className="text-sm text-yellow-400 border border-yellow-400/30 rounded px-3 py-2">
+            No API key configured for <strong>{selectedProvider}</strong>. Set{" "}
+            <code className="text-xs">{selectedProvider.toUpperCase()}_API_KEY</code>{" "}
+            environment variable or configure in config.yaml.
+          </div>
+        )}
         {error && (
           <div className="text-sm text-red-400">{error}</div>
         )}
@@ -174,11 +187,21 @@ export function ConfigPanel({
                     <SelectValue placeholder="Select a model..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {SUPPORTED_MODELS.map((model) => (
-                      <SelectItem key={model.value} value={model.value}>
-                        {model.label}
-                      </SelectItem>
-                    ))}
+                    {SUPPORTED_MODELS.map((model) => {
+                      const available = !providersLoaded || providersStatus[model.provider];
+                      return (
+                        <SelectItem
+                          key={model.value}
+                          value={model.value}
+                          disabled={!available}
+                        >
+                          <span className={available ? "" : "text-muted-foreground"}>
+                            {model.label}
+                            {!available && " (no API key)"}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
                     <SelectItem value={CUSTOM_MODEL_VALUE}>Custom Model...</SelectItem>
                   </SelectContent>
                 </Select>

@@ -97,3 +97,17 @@ export async function healthCheck(): Promise<{ status: string; message: string; 
   const response = await fetch(`${API_BASE}/health`);
   return response.json();
 }
+
+/**
+ * Provider availability status - which providers have API keys configured
+ */
+export interface ProvidersStatus {
+  openai: boolean;
+  anthropic: boolean;
+  google: boolean;
+}
+
+export async function getProvidersStatus(): Promise<ProvidersStatus> {
+  const response = await fetch(`${API_BASE}/providers/status`);
+  return response.json();
+}

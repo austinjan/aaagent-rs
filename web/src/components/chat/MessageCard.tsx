@@ -91,8 +91,8 @@ export function MessageCard({
   subAgentRunId,
   subAgentLabel,
   token_usage,
-  isCollapsed = false,
-  onToggleCollapse,
+  isCollapsed: _isCollapsed = false,
+  onToggleCollapse: _onToggleCollapse,
 }: MessageCardProps) {
   const toggleToolCalls = useChatStore((state) => state.toggleToolCalls);
   const expandedToolCalls = useChatStore((state) => state.ui.expandedToolCalls);

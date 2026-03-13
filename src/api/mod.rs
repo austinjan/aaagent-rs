@@ -191,6 +191,7 @@ fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/skills", get(list_skills))
+        .route("/providers/status", get(providers_status))
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route("/sessions/:session_id", get(sessions::get_session))
@@ -299,6 +300,16 @@ async fn health() -> Json<Value> {
         "status": "ok",
         "message": "aaagent-rs chat UI backend is running",
         "version": env!("CARGO_PKG_VERSION")
+    }))
+}
+
+// Provider availability endpoint - reports which providers have API keys configured
+async fn providers_status(State(state): State<AppState>) -> Json<Value> {
+    let cm = state.config_resolver.config_manager();
+    Json(json!({
+        "openai": cm.has_api_key("openai"),
+        "anthropic": cm.has_api_key("anthropic"),
+        "google": cm.has_api_key("google"),
     }))
 }
 

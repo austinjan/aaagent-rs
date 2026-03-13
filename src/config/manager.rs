@@ -366,6 +366,11 @@ impl ConfigManager {
         load_api_key(provider, key_ref, self.secrets.as_ref())
     }
 
+    /// Check if an API key is available for a provider (without exposing it)
+    pub fn has_api_key(&self, provider: &str) -> bool {
+        self.get_api_key(provider).is_ok()
+    }
+
     pub fn map_creativity(&self, model: &str, creativity: f32) -> f32 {
         self.config
             .temperature_profiles

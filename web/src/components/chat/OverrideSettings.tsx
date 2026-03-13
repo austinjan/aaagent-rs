@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { useProvidersStatus } from "@/hooks/useProvidersStatus";
 
 export interface ChatOverrides extends Record<string, unknown> {
   model?: string;
@@ -31,6 +32,8 @@ export function OverrideSettings({
   onChange,
   disabled,
 }: OverrideSettingsProps) {
+  const { status: providersStatus, loaded: providersLoaded } = useProvidersStatus();
+
   const updateOverride = <K extends keyof ChatOverrides>(
     key: K,
     value: ChatOverrides[K],
@@ -95,11 +98,21 @@ export function OverrideSettings({
             <SelectValue placeholder="Select a model..." />
           </SelectTrigger>
           <SelectContent>
-            {SUPPORTED_MODELS.map((model) => (
-              <SelectItem key={model.value} value={model.value}>
-                {model.label}
-              </SelectItem>
-            ))}
+            {SUPPORTED_MODELS.map((model) => {
+              const available = !providersLoaded || providersStatus[model.provider];
+              return (
+                <SelectItem
+                  key={model.value}
+                  value={model.value}
+                  disabled={!available}
+                >
+                  <span className={available ? "" : "text-muted-foreground"}>
+                    {model.label}
+                    {!available && " (no API key)"}
+                  </span>
+                </SelectItem>
+              );
+            })}
             <SelectItem value={CUSTOM_MODEL_VALUE}>Custom Model...</SelectItem>
           </SelectContent>
         </Select>
