@@ -192,6 +192,7 @@ fn api_routes() -> Router<AppState> {
         .route("/health", get(health))
         .route("/skills", get(list_skills))
         .route("/providers/status", get(providers_status))
+        .route("/models", get(list_models))
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
         .route(
@@ -315,6 +316,24 @@ async fn providers_status(State(state): State<AppState>) -> Json<Value> {
         "anthropic": cm.has_api_key("anthropic"),
         "google": cm.has_api_key("google"),
     }))
+}
+
+async fn list_models(State(state): State<AppState>) -> Json<Value> {
+    let cm = state.config_resolver.config_manager();
+    let models: Vec<Value> = cm.available_models().into_iter().map(|name| {
+        let provider = if name.starts_with("gpt-") || name.starts_with("o1-") || name.starts_with("o3-") {
+            "openai"
+        } else if name.starts_with("claude-") {
+            "anthropic"
+        } else if name.starts_with("gemini-") {
+            "google"
+        } else {
+            "unknown"
+        };
+        let available = cm.has_api_key(provider);
+        json!({ "value": name, "label": name, "provider": provider, "available": available })
+    }).collect();
+    Json(json!(models))
 }
 
 // List all skills (loaded + errors)

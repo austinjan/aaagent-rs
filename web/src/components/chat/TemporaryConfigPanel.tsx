@@ -18,8 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { type ChatOverrides } from "./OverrideSettings";
-import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
-import { useProvidersStatus } from "@/hooks/useProvidersStatus";
+import { CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { useModels } from "@/hooks/useModels";
 
 export interface TemporaryConfig {
   overrides: ChatOverrides;
@@ -38,7 +38,7 @@ export function TemporaryConfigPanel({
 }: TemporaryConfigPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const hasOverrides = Object.keys(config.overrides).length > 0;
-  const { status: providersStatus, loaded: providersLoaded } = useProvidersStatus();
+  const { availableModels, models } = useModels();
 
   const updateOverride = (key: keyof ChatOverrides, value: any) => {
     const newOverrides = { ...config.overrides };
@@ -57,7 +57,7 @@ export function TemporaryConfigPanel({
   // Determine if current model is in the supported list
   const isCustomModel =
     config.overrides.model &&
-    !SUPPORTED_MODELS.some((m) => m.value === config.overrides.model);
+    !models.some((m) => m.value === config.overrides.model);
   const selectValue = isCustomModel
     ? CUSTOM_MODEL_VALUE
     : config.overrides.model ?? "";
@@ -144,9 +144,7 @@ export function TemporaryConfigPanel({
                 <SelectValue placeholder="Select a model..." />
               </SelectTrigger>
               <SelectContent>
-                {SUPPORTED_MODELS.filter(
-                  (model) => !providersLoaded || providersStatus[model.provider],
-                ).map((model) => (
+                {availableModels.map((model) => (
                   <SelectItem key={model.value} value={model.value}>
                     {model.label}
                   </SelectItem>

@@ -111,3 +111,18 @@ export async function getProvidersStatus(): Promise<ProvidersStatus> {
   const response = await fetch(`${API_BASE}/providers/status`);
   return response.json();
 }
+
+/**
+ * Model info from backend (driven by config.yaml temperature_profiles)
+ */
+export interface ModelInfo {
+  value: string;
+  label: string;
+  provider: string;
+  available: boolean;
+}
+
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  const response = await fetch(`${API_BASE}/models`);
+  return response.json();
+}

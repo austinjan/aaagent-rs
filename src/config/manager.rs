@@ -390,6 +390,16 @@ impl ConfigManager {
         self.get_api_key(provider).is_ok()
     }
 
+    /// Get available models from temperature_profiles (excluding "default")
+    pub fn available_models(&self) -> Vec<String> {
+        let mut models: Vec<String> = self.config.temperature_profiles.profiles.keys()
+            .filter(|k| k.as_str() != "default")
+            .cloned()
+            .collect();
+        models.sort();
+        models
+    }
+
     /// Get the default model from config.yaml (if set)
     pub fn default_model(&self) -> Option<String> {
         self.config.default_model.clone()
