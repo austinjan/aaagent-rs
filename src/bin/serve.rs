@@ -33,13 +33,13 @@ async fn main() {
     let app = aaagent::api::create_router().await;
 
     // Start server
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cli.port));
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], cli.port));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind to address");
 
-    println!("Server running on http://{}", addr);
+    println!("Server running on http://0.0.0.0:{}", cli.port);
     println!("Open http://localhost:{} in your browser", cli.port);
 
     axum::serve(listener, app).await.expect("Server error");

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { TreeStatsResponse } from "../../types/backend";
 import { getTreeStats, getSessionTree } from "../../services/api";
+import { copyToClipboard } from "@/lib/clipboard";
 
 interface TreeStatsPanelProps {
   sessionId: string | null;
@@ -201,7 +202,7 @@ export function TreeStatsPanel({ sessionId, onClose }: TreeStatsPanelProps) {
 
     try {
       const markdown = await exportTreeAsMarkdown(sessionId, stats);
-      await navigator.clipboard.writeText(markdown);
+      await copyToClipboard(markdown);
       setExportSuccess(true);
       setTimeout(() => setExportSuccess(false), 2000);
     } catch (err) {

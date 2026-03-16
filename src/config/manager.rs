@@ -45,6 +45,19 @@ api_keys:
 #     file: secrets.yaml
 
 # =============================================================================
+# DEFAULT MODEL
+# =============================================================================
+# The model used when creating new sessions. Overrides the preset default.
+# Must match a provider that has an API key configured above.
+#
+# Examples:
+#   default_model: gpt-5-mini           # OpenAI (requires OPENAI_API_KEY)
+#   default_model: claude-sonnet-4-20250514  # Anthropic (requires ANTHROPIC_API_KEY)
+#   default_model: gemini-3-flash-preview    # Google (requires GEMINI_API_KEY)
+#
+# default_model: gpt-5-mini
+
+# =============================================================================
 # TEMPERATURE PROFILES
 # =============================================================================
 # Temperature profiles map creativity intent (0.0-1.0) to model-specific temperatures.
@@ -230,6 +243,12 @@ maintenance:
 pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_keys: Option<ApiKeyReferences>,
+
+    /// Default model for new sessions (overrides preset default)
+    /// e.g. "gemini-3-flash-preview", "claude-sonnet-4-20250514", "gpt-5-mini"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+
     pub temperature_profiles: TemperatureProfiles,
 
     /// System LLM profiles for internal tasks (auto-compact, etc.)
@@ -369,6 +388,11 @@ impl ConfigManager {
     /// Check if an API key is available for a provider (without exposing it)
     pub fn has_api_key(&self, provider: &str) -> bool {
         self.get_api_key(provider).is_ok()
+    }
+
+    /// Get the default model from config.yaml (if set)
+    pub fn default_model(&self) -> Option<String> {
+        self.config.default_model.clone()
     }
 
     pub fn map_creativity(&self, model: &str, creativity: f32) -> f32 {

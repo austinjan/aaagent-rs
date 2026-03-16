@@ -134,7 +134,8 @@ export type AgentEvent =
       rounds: number;
       new_node_ids?: string[];
       new_nodes?: NodeData[];
-    };
+    }
+  | { type: "error"; message: string };
 
 export interface TokenUsage {
   input_tokens: number;

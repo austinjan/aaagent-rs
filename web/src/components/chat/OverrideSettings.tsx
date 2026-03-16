@@ -98,21 +98,13 @@ export function OverrideSettings({
             <SelectValue placeholder="Select a model..." />
           </SelectTrigger>
           <SelectContent>
-            {SUPPORTED_MODELS.map((model) => {
-              const available = !providersLoaded || providersStatus[model.provider];
-              return (
-                <SelectItem
-                  key={model.value}
-                  value={model.value}
-                  disabled={!available}
-                >
-                  <span className={available ? "" : "text-muted-foreground"}>
-                    {model.label}
-                    {!available && " (no API key)"}
-                  </span>
-                </SelectItem>
-              );
-            })}
+            {SUPPORTED_MODELS.filter(
+              (model) => !providersLoaded || providersStatus[model.provider],
+            ).map((model) => (
+              <SelectItem key={model.value} value={model.value}>
+                {model.label}
+              </SelectItem>
+            ))}
             <SelectItem value={CUSTOM_MODEL_VALUE}>Custom Model...</SelectItem>
           </SelectContent>
         </Select>

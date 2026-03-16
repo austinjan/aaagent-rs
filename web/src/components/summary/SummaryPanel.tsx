@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { FileText, Loader2, Copy, Check, RefreshCw } from "lucide-react";
+import { copyToClipboard } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -34,7 +35,7 @@ export function SummaryPanel({ sessionId, leafId, className }: SummaryPanelProps
   const handleCopy = useCallback(async () => {
     if (!content) return;
     try {
-      await navigator.clipboard.writeText(content);
+      await copyToClipboard(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

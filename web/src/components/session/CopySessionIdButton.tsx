@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
+import { copyToClipboard } from "@/lib/clipboard";
 
 interface CopySessionIdButtonProps {
   sessionId: string;
@@ -12,7 +13,7 @@ export function CopySessionIdButton({ sessionId, variant = "ghost" }: CopySessio
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(sessionId);
+      await copyToClipboard(sessionId);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

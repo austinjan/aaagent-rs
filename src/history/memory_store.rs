@@ -419,6 +419,19 @@ impl TreeStore for MemoryStore {
         Ok(())
     }
 
+    async fn delete_session(&self, session_id: SessionId) -> Result<()> {
+        // Remove session
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(&session_id);
+        drop(sessions);
+
+        // Remove all nodes belonging to this session
+        let mut nodes = self.nodes.write().await;
+        nodes.retain(|_, node| node.session_id != session_id);
+
+        Ok(())
+    }
+
     async fn get_nodes_batch(&self, node_ids: Vec<NodeId>) -> Result<Vec<Node>> {
         let nodes = self.nodes.read().await;
         let mut result = Vec::new();

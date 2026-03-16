@@ -3,6 +3,7 @@ import { MessageSquare, Plus, Loader2, X } from "lucide-react";
 import {
   listSessions,
   archiveSession as archiveSessionApi,
+  clearArchivedSessions,
   type SessionFilters,
 } from "../../services/api";
 import type { SessionInfo } from "../../types/backend";
@@ -176,24 +177,45 @@ export function SessionListSidebar({
 
         {/* Show Archived Toggle */}
         <div className="mb-2">
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={activeFilters.include_archived || false}
-              onChange={(e) => {
-                const newFilters = {
-                  ...activeFilters,
-                  include_archived: e.target.checked,
-                };
-                setActiveFilters(newFilters);
-                loadSessions(newFilters);
-              }}
-              className="checkbox checkbox-sm checkbox-primary"
-            />
-            <span className="text-muted-foreground">
-              Show archived sessions
-            </span>
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={activeFilters.include_archived || false}
+                onChange={(e) => {
+                  const newFilters = {
+                    ...activeFilters,
+                    include_archived: e.target.checked,
+                  };
+                  setActiveFilters(newFilters);
+                  loadSessions(newFilters);
+                }}
+                className="checkbox checkbox-sm checkbox-primary"
+              />
+              <span className="text-muted-foreground">
+                Show archived sessions
+              </span>
+            </label>
+            {activeFilters.include_archived && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                onClick={async () => {
+                  if (!confirm("Permanently delete all archived sessions?")) return;
+                  try {
+                    await clearArchivedSessions();
+                    await loadSessions(activeFilters);
+                  } catch (err) {
+                    console.error("Failed to clear archived sessions:", err);
+                    alert("Failed to clear archived sessions.");
+                  }
+                }}
+              >
+                Clear all
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Active Filters */}

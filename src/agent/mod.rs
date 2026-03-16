@@ -184,6 +184,10 @@ pub enum AgentEvent {
         /// Node IDs created during this chat turn (for incremental tree updates)
         new_node_ids: Vec<String>,
     },
+    /// Agent encountered a fatal error
+    Error {
+        message: String,
+    },
 }
 
 /// Configuration for Agent chat behavior

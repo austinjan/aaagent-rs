@@ -27,41 +27,44 @@ pub fn create_provider(
     if model.starts_with("gpt-") || model.starts_with("o1-") || model.starts_with("o3-") {
         #[cfg(feature = "openai")]
         {
-            let api_key = config_manager.get_api_key("openai")?;
+            let api_key = config_manager.get_api_key("openai")
+                .map_err(|e| anyhow::anyhow!("Model '{}' requires OpenAI. {}", model, e))?;
             let provider = OpenAIProvider::create(model.clone(), api_key.expose_secret().clone())?;
             return Ok(ActiveProvider::OpenAI(provider));
         }
 
         #[cfg(not(feature = "openai"))]
-        bail!("OpenAI provider not enabled. Enable 'openai' feature.");
+        bail!("Model '{}' requires OpenAI provider, but 'openai' feature is not enabled.", model);
     }
 
     if model.starts_with("claude-") {
         #[cfg(feature = "anthropic")]
         {
-            let api_key = config_manager.get_api_key("anthropic")?;
+            let api_key = config_manager.get_api_key("anthropic")
+                .map_err(|e| anyhow::anyhow!("Model '{}' requires Anthropic. {}", model, e))?;
             let provider =
                 AnthropicProvider::create(model.clone(), api_key.expose_secret().clone())?;
             return Ok(ActiveProvider::Anthropic(provider));
         }
 
         #[cfg(not(feature = "anthropic"))]
-        bail!("Anthropic provider not enabled. Enable 'anthropic' feature.");
+        bail!("Model '{}' requires Anthropic provider, but 'anthropic' feature is not enabled.", model);
     }
 
     if model.starts_with("gemini-") {
         #[cfg(feature = "gemini")]
         {
-            let api_key = config_manager.get_api_key("google")?;
+            let api_key = config_manager.get_api_key("google")
+                .map_err(|e| anyhow::anyhow!("Model '{}' requires Google. {}", model, e))?;
             let provider = GeminiProvider::create(model.clone(), api_key.expose_secret().clone())?;
             return Ok(ActiveProvider::Gemini(provider));
         }
 
         #[cfg(not(feature = "gemini"))]
-        bail!("Gemini provider not enabled. Enable 'gemini' feature.");
+        bail!("Model '{}' requires Gemini provider, but 'gemini' feature is not enabled.", model);
     }
 
-    bail!("Unknown model: {}. Cannot determine provider.", model)
+    bail!("Unknown model: '{}'. Cannot determine provider.", model)
 }
 
 /// Create a quick provider for lightweight tasks (summaries, compaction)

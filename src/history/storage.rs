@@ -75,6 +75,9 @@ pub trait TreeStore: Send + Sync {
     /// Archive a session (sets archived flag to true)
     async fn archive_session(&self, session_id: SessionId) -> Result<()>;
 
+    /// Delete a session and all its data permanently
+    async fn delete_session(&self, session_id: SessionId) -> Result<()>;
+
     // Batch operations
 
     /// Get multiple nodes in a single operation

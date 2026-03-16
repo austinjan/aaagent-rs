@@ -1,6 +1,6 @@
 // API client for backend endpoints
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
+const API_BASE = import.meta.env.DEV ? `http://${window.location.hostname}:3000/api` : '/api';
 
 export interface SessionConfig {
   provider: {

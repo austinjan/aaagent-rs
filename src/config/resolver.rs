@@ -32,11 +32,15 @@ impl ConfigResolver {
             .get(preset_name)
             .context(format!("Unknown preset: {}", preset_name))?;
 
-        let temperature = self.config_manager.map_creativity(&preset.model, 0.5);
+        // Use default_model from config.yaml if set, otherwise use preset's model
+        let model = self.config_manager.default_model()
+            .unwrap_or_else(|| preset.model.clone());
+
+        let temperature = self.config_manager.map_creativity(&model, 0.5);
 
         Ok(SessionConfig {
             provider: ProviderConfig {
-                model: preset.model.clone(),
+                model,
                 temperature,
                 max_tokens: preset.max_tokens,
                 top_p: None,

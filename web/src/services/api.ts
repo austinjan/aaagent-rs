@@ -152,6 +152,18 @@ export async function archiveSession(
   return handleResponse<ArchiveSessionResponse>(response);
 }
 
+export interface ClearArchivedResponse {
+  success: boolean;
+  deleted_count: number;
+}
+
+export async function clearArchivedSessions(): Promise<ClearArchivedResponse> {
+  const response = await fetch(`${API_BASE}/sessions/archived`, {
+    method: "DELETE",
+  });
+  return handleResponse<ClearArchivedResponse>(response);
+}
+
 export interface RenameSessionRequest {
   name: string;
 }
@@ -391,14 +403,14 @@ export async function getTreeStats(
 export function getStreamUrl(sessionId: string, streamId: string): string {
   // EventSource requires absolute URLs in development mode (Vite proxy doesn't work with EventSource)
   const isDev = import.meta.env.DEV;
-  const baseUrl = isDev ? "http://localhost:3000" : "";
+  const baseUrl = isDev ? `http://${window.location.hostname}:3000` : "";
   return `${baseUrl}/api/sessions/${sessionId}/stream/${streamId}`;
 }
 
 export function getSessionEventsUrl(sessionId: string): string {
   // EventSource requires absolute URLs in development mode (Vite proxy doesn't work with EventSource)
   const isDev = import.meta.env.DEV;
-  const baseUrl = isDev ? "http://localhost:3000" : "";
+  const baseUrl = isDev ? `http://${window.location.hostname}:3000` : "";
   return `${baseUrl}/api/sessions/${sessionId}/events`;
 }
 
