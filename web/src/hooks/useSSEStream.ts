@@ -236,6 +236,21 @@ export function useSSEStream(
         });
       });
 
+      eventSource.addEventListener("error", (e: MessageEvent) => {
+        const data = JSON.parse(e.data);
+        onEventRef.current?.({ type: "error", message: data.message });
+
+        // Treat as terminal — stop reconnecting
+        isDoneRef.current = true;
+        setState((prev) => ({
+          ...prev,
+          isDone: true,
+          error: new Error(data.message),
+        }));
+        onErrorRef.current?.(new Error(data.message));
+        disconnect();
+      });
+
       eventSource.addEventListener("done", (e) => {
         const data = JSON.parse(e.data);
         onEventRef.current?.({

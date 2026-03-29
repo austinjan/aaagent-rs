@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const API_BASE = import.meta.env.DEV ? "http://localhost:3000/api" : "/api";
+const API_BASE = import.meta.env.DEV ? `http://${window.location.hostname}:3000/api` : "/api";
 
 export interface SSEEvent {
   type:
@@ -10,7 +10,8 @@ export interface SSEEvent {
     | "tool_result"
     | "loop_detected"
     | "checkpoint"
-    | "done";
+    | "done"
+    | "error";
   data: Record<string, unknown>;
 }
 
@@ -153,6 +154,25 @@ export function useSSE(
         }
       } catch (err) {
         console.error("Failed to parse checkpoint event:", err);
+      }
+    });
+
+    // Error event (fatal)
+    eventSource.addEventListener("error", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        const error = new Error(data.message || "Agent error");
+        setError(error);
+        if (onError) {
+          onError(error);
+        }
+        if (onEvent) {
+          onEvent({ type: "error", data });
+        }
+      } catch (err) {
+        console.error("Failed to parse error event:", err);
+      } finally {
+        close();
       }
     });
 

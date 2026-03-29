@@ -18,7 +18,8 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
-import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { useModels } from "@/hooks/useModels";
 import { SessionConfigPanel } from "../chat/SessionConfigPanel";
 import { TagEditor } from "./TagEditor";
 import type { SessionConfig } from "../chat/SessionConfigPanel";
@@ -61,6 +62,7 @@ export function SessionToolbar({
   const [editName, setEditName] = useState(sessionName || "");
   const [showRenameMenu, setShowRenameMenu] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const { availableModels } = useModels();
 
   const handleStartEdit = () => {
     setEditName(sessionName || "");
@@ -224,7 +226,7 @@ export function SessionToolbar({
               <SelectValue placeholder="Select a model..." />
             </SelectTrigger>
             <SelectContent>
-              {SUPPORTED_MODELS.map((model) => (
+              {availableModels.map((model) => (
                 <SelectItem key={model.value} value={model.value}>
                   {model.label}
                 </SelectItem>

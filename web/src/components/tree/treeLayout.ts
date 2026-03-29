@@ -238,7 +238,6 @@ export function collapseInactiveBranches(
 export function groupCollapsedNodes(nodes: TreeNode[]): TreeNode[] {
   if (nodes.length === 0) return nodes;
 
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   const childrenMap = buildChildrenMap(nodes);
   const root = nodes.find((n) => n.parent_id === null);
   if (!root) return nodes;

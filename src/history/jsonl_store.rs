@@ -695,6 +695,40 @@ impl TreeStore for JSONLStore {
         Ok(())
     }
 
+    async fn delete_session(&self, session_id: SessionId) -> Result<()> {
+        // Try to remove from active sessions directory
+        let meta_path = self.session_meta_path(&session_id);
+        if meta_path.exists() {
+            fs::remove_file(&meta_path).await.ok();
+        }
+        let nodes_path = self.nodes_jsonl_path(&session_id);
+        if nodes_path.exists() {
+            fs::remove_file(&nodes_path).await.ok();
+        }
+
+        // Try to remove from archived directory
+        let archived_dir = self.base_path.join("archived");
+        let archived_meta = archived_dir.join(format!("{}.meta.json", session_id));
+        if archived_meta.exists() {
+            fs::remove_file(&archived_meta).await.ok();
+        }
+        let archived_nodes = archived_dir.join(format!("{}.nodes.jsonl", session_id));
+        if archived_nodes.exists() {
+            fs::remove_file(&archived_nodes).await.ok();
+        }
+
+        // Remove from cache
+        let mut cache = self.cache.write().await;
+        cache.remove(&session_id);
+
+        crate::logger::log(format!(
+            "[JSONLStore] Deleted session {} permanently",
+            session_id
+        ));
+
+        Ok(())
+    }
+
     async fn get_nodes_batch(&self, node_ids: Vec<NodeId>) -> Result<Vec<Node>> {
         let mut result = Vec::new();
 

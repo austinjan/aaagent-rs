@@ -272,6 +272,18 @@ export function Chat() {
     prevIsLoading.current = isLoading;
   }, [isLoading, sessionId, setCollapsedState]);
 
+  // Handle config changes from toolbar (auto-save to backend)
+  const handleConfigChanged = useCallback(async (newConfig: SessionConfig) => {
+    setSessionConfig(newConfig);
+    if (sessionId) {
+      try {
+        await updateConfig(sessionId, newConfig);
+      } catch (err) {
+        console.error("Failed to save config:", err);
+      }
+    }
+  }, [sessionId]);
+
   // Handle web search toggle
   const handleWebSearchToggle = async (enabled: boolean) => {
     setEnableWebSearch(enabled);
@@ -721,7 +733,7 @@ ${content}`;
                 onAIRename={handleAIRenameSession}
                 onArchive={handleArchiveSession}
                 onViewChange={handleViewChange}
-                onConfigChanged={setSessionConfig}
+                onConfigChanged={handleConfigChanged}
                 onCreateBranch={
                   selectedMessageId
                     ? () => handleBranchAfter(selectedMessageId)

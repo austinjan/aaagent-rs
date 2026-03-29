@@ -336,6 +336,34 @@ export function useChat(options: UseChatOptions = {}) {
           break;
         }
 
+        case "error": {
+          // Agent encountered a fatal error — show it in the chat
+          const errorMsg: MessageData = {
+            id: `error-${Date.now()}`,
+            role: Role.Assistant,
+            content: `Error: ${event.message}`,
+            timestamp: new Date(),
+            isStreaming: false,
+            is_error: true,
+          };
+
+          // If the last message is a streaming assistant, replace it
+          const msgs = useChatStore.getState().messages;
+          const lastStreamingMsg = msgs[msgs.length - 1];
+          if (lastStreamingMsg?.role === Role.Assistant && lastStreamingMsg.isStreaming) {
+            store.updateMessage(lastStreamingMsg.id, {
+              content: `Error: ${event.message}`,
+              isStreaming: false,
+              is_error: true,
+            });
+          } else {
+            store.addMessage(errorMsg);
+          }
+          store.stopStreaming();
+          store.setLoading(false);
+          break;
+        }
+
         case "queued_messages": {
           // Show toast notification for queued messages
           console.log(`[Queue] Processing ${event.count} queued message(s)`);

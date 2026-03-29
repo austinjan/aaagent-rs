@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { getSessionConfig, updateSessionConfig } from "@/lib/api";
 import type { SessionConfig } from "@/lib/api";
-import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { useModels } from "@/hooks/useModels";
 import {
   Select,
   SelectContent,
@@ -57,6 +58,11 @@ export function ConfigPanel({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const { availableModels, models } = useModels();
+
+  // Check if the currently selected model is available
+  const selectedModelInfo = models.find((m) => m.value === config.provider.model);
+  const isSelectedProviderAvailable = selectedModelInfo ? selectedModelInfo.available : true;
 
   useEffect(() => {
     if (!sessionId) {
@@ -131,7 +137,7 @@ export function ConfigPanel({
 
   const isCustomModel =
     config.provider.model &&
-    !SUPPORTED_MODELS.some((m) => m.value === config.provider.model);
+    !models.some((m) => m.value === config.provider.model);
   const selectValue = isCustomModel ? CUSTOM_MODEL_VALUE : config.provider.model;
 
   return (
@@ -140,6 +146,11 @@ export function ConfigPanel({
         <CardTitle className="text-foreground">Session Config</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {!isSelectedProviderAvailable && selectedModelInfo && (
+          <div className="text-sm text-yellow-400 border border-yellow-400/30 rounded px-3 py-2">
+            No API key configured for <strong>{selectedModelInfo.provider}</strong>. Configure the API key in config.yaml or set the environment variable.
+          </div>
+        )}
         {error && (
           <div className="text-sm text-red-400">{error}</div>
         )}
@@ -174,7 +185,7 @@ export function ConfigPanel({
                     <SelectValue placeholder="Select a model..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {SUPPORTED_MODELS.map((model) => (
+                    {availableModels.map((model) => (
                       <SelectItem key={model.value} value={model.value}>
                         {model.label}
                       </SelectItem>

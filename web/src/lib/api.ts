@@ -1,6 +1,6 @@
 // API client for backend endpoints
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
+const API_BASE = import.meta.env.DEV ? `http://${window.location.hostname}:3000/api` : '/api';
 
 export interface SessionConfig {
   provider: {
@@ -95,5 +95,34 @@ export async function sendChatMessage(
  */
 export async function healthCheck(): Promise<{ status: string; message: string; version: string }> {
   const response = await fetch(`${API_BASE}/health`);
+  return response.json();
+}
+
+/**
+ * Provider availability status - which providers have API keys configured
+ */
+export interface ProvidersStatus {
+  openai: boolean;
+  anthropic: boolean;
+  google: boolean;
+}
+
+export async function getProvidersStatus(): Promise<ProvidersStatus> {
+  const response = await fetch(`${API_BASE}/providers/status`);
+  return response.json();
+}
+
+/**
+ * Model info from backend (driven by config.yaml temperature_profiles)
+ */
+export interface ModelInfo {
+  value: string;
+  label: string;
+  provider: string;
+  available: boolean;
+}
+
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  const response = await fetch(`${API_BASE}/models`);
   return response.json();
 }

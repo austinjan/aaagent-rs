@@ -191,8 +191,14 @@ fn api_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/skills", get(list_skills))
+        .route("/providers/status", get(providers_status))
+        .route("/models", get(list_models))
         .route("/sessions", get(sessions::list_sessions))
         .route("/sessions", post(sessions::create_session))
+        .route(
+            "/sessions/archived",
+            axum::routing::delete(sessions::clear_archived_sessions),
+        )
         .route("/sessions/:session_id", get(sessions::get_session))
         .route(
             "/sessions/:session_id/archive",
@@ -300,6 +306,34 @@ async fn health() -> Json<Value> {
         "message": "aaagent-rs chat UI backend is running",
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+// Provider availability endpoint - reports which providers have API keys configured
+async fn providers_status(State(state): State<AppState>) -> Json<Value> {
+    let cm = state.config_resolver.config_manager();
+    Json(json!({
+        "openai": cm.has_api_key("openai"),
+        "anthropic": cm.has_api_key("anthropic"),
+        "google": cm.has_api_key("google"),
+    }))
+}
+
+async fn list_models(State(state): State<AppState>) -> Json<Value> {
+    let cm = state.config_resolver.config_manager();
+    let models: Vec<Value> = cm.available_models().into_iter().map(|name| {
+        let provider = if name.starts_with("gpt-") || name.starts_with("o1-") || name.starts_with("o3-") {
+            "openai"
+        } else if name.starts_with("claude-") {
+            "anthropic"
+        } else if name.starts_with("gemini-") {
+            "google"
+        } else {
+            "unknown"
+        };
+        let available = cm.has_api_key(provider);
+        json!({ "value": name, "label": name, "provider": provider, "available": available })
+    }).collect();
+    Json(json!(models))
 }
 
 // List all skills (loaded + errors)
@@ -601,6 +635,36 @@ mod sessions {
         })))
     }
 
+    pub async fn clear_archived_sessions(
+        State(state): State<AppState>,
+    ) -> Result<Json<Value>, ApiError> {
+        crate::logger::log("Clear all archived sessions request".to_string());
+
+        let sessions = state
+            .store
+            .list_sessions()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let archived: Vec<_> = sessions.iter().filter(|s| s.archived).collect();
+        let count = archived.len();
+
+        for session in archived {
+            state
+                .store
+                .delete_session(session.session_id.clone())
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
+
+        crate::logger::log(format!("Cleared {} archived sessions", count));
+
+        Ok(Json(json!({
+            "success": true,
+            "deleted_count": count
+        })))
+    }
+
     #[derive(Debug, Deserialize)]
     pub struct RenameSessionRequest {
         name: String,
@@ -817,6 +881,11 @@ mod sessions {
             .and_then(|c| serde_json::from_value::<SessionConfig>(c.clone()).ok())
             .ok_or_else(|| ApiError::Internal("Session missing session_config".to_string()))?;
 
+        // Pre-flight: validate provider/API key before spawning background task
+        // This catches errors like missing API keys immediately instead of via SSE
+        provider_factory::create_provider(&session_config, state.config_resolver.config_manager())
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
         // Generate run ID for this agent execution
         let run_id = ulid::Ulid::new().to_string();
 
@@ -837,6 +906,9 @@ mod sessions {
         // Spawn background task to run Agent
         tokio::spawn(async move {
             crate::logger::log(format!("Starting agent chat for run: {}", run_id_for_task));
+
+            let event_bus_for_error = event_bus.clone();
+            let session_id_for_error = session_id_for_task.clone();
 
             let result = run_agent_chat(
                 stored_session,
@@ -888,6 +960,16 @@ mod sessions {
                         run_id_for_task, e
                     ));
                     crate::logger::log(format!("ERROR: Error details: {:?}", e));
+
+                    // Emit error event to SSE so frontend can display it
+                    event_bus_for_error.emit(
+                        session_id_for_error.clone(),
+                        run_id_for_task.clone(),
+                        0,
+                        crate::agent::AgentEvent::Error {
+                            message: e.to_string(),
+                        },
+                    );
                 }
             }
         });
@@ -2307,6 +2389,10 @@ mod sse {
                                 "error": error
                             }),
                         },
+                        crate::agent::AgentEvent::Error { message } => SseEventData {
+                            event_type: "error",
+                            data: serde_json::json!({ "message": message }),
+                        },
                     }
                 }
             })
@@ -2476,6 +2562,10 @@ mod sse {
                                 "success": success,
                                 "error": error
                             }),
+                        },
+                        crate::agent::AgentEvent::Error { message } => SseEventData {
+                            event_type: "error",
+                            data: serde_json::json!({ "message": message }),
                         },
                     }
                 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Clock, User, Bot, Wrench, AlertCircle, CheckCircle2, Copy, Check } from "lucide-react";
 import { Button } from "../ui/button";
+import { copyToClipboard } from "@/lib/clipboard";
 import { MessageToolbar } from "../chat/MessageToolbar";
 import type { TreeNode, ToolCall } from "./treeLayout";
 
@@ -78,7 +79,7 @@ export function NodeDetailsPanel({
 
   const handleCopyContent = async () => {
     try {
-      await navigator.clipboard.writeText(node.content);
+      await copyToClipboard(node.content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -88,7 +89,7 @@ export function NodeDetailsPanel({
 
   const handleCopyNodeId = async () => {
     try {
-      await navigator.clipboard.writeText(node.id);
+      await copyToClipboard(node.id);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

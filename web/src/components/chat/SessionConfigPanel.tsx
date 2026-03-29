@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/collapsible";
 import { Textarea } from "@/components/ui/textarea";
 import { updateConfig } from "@/services/api";
-import { SUPPORTED_MODELS, CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { CUSTOM_MODEL_VALUE } from "@/lib/constants";
+import { useModels } from "@/hooks/useModels";
 
 export interface SessionConfig {
   provider: {
@@ -60,6 +61,7 @@ export function SessionConfigPanel({
   const [localConfig, setLocalConfig] = useState(config);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const { availableModels, models } = useModels();
 
   useEffect(() => {
     setLocalConfig(config);
@@ -117,18 +119,35 @@ export function SessionConfigPanel({
 
   const isCustomModel =
     localConfig.provider.model &&
-    !SUPPORTED_MODELS.some((m) => m.value === localConfig.provider.model);
+    !models.some((m) => m.value === localConfig.provider.model);
   const selectValue = isCustomModel
     ? CUSTOM_MODEL_VALUE
     : localConfig.provider.model;
 
-  const handleModelSelectChange = (value: string) => {
+  const handleModelSelectChange = async (value: string) => {
     if (value === CUSTOM_MODEL_VALUE) {
       if (!isCustomModel) {
         updateProvider({ model: "" });
       }
     } else {
-      updateProvider({ model: value });
+      // Auto-save model change to session immediately
+      const nextConfig = {
+        ...localConfig,
+        provider: { ...localConfig.provider, model: value },
+      };
+      setLocalConfig(nextConfig);
+
+      if (sessionId) {
+        try {
+          const result = await updateConfig(sessionId, nextConfig);
+          onConfigChanged(result);
+          setHasChanges(false);
+        } catch (err) {
+          console.error("Failed to auto-save model:", err);
+          // Still update local state so user sees the change
+          setHasChanges(true);
+        }
+      }
     }
   };
 
@@ -167,7 +186,7 @@ export function SessionConfigPanel({
                   <SelectValue placeholder="Select a model..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {SUPPORTED_MODELS.map((model) => (
+                  {availableModels.map((model) => (
                     <SelectItem key={model.value} value={model.value}>
                       {model.label}
                     </SelectItem>
